@@ -1,4 +1,4 @@
-import { NewsSection, NewsStatus, Province } from "@prisma/client";
+import { NewsSection, NewsStatus, PollStatus, Province } from "@prisma/client";
 
 export function slugifyText(input: string): string {
   return input
@@ -57,6 +57,10 @@ export function isProvince(value: string): value is Province {
 
 export function isNewsStatus(value: string): value is NewsStatus {
   return (Object.values(NewsStatus) as string[]).includes(value);
+}
+
+export function isPollStatus(value: string): value is PollStatus {
+  return (Object.values(PollStatus) as string[]).includes(value);
 }
 
 export function parseGdeltDate(raw: string | undefined): string {

@@ -1,7 +1,7 @@
 import Image from "next/image";
 import { EngagementBar } from "@/components/EngagementBar";
-import { getHomeData } from "@/lib/api";
-import type { FeedItem, NewsSection } from "@/lib/types";
+import { getFeaturedPoll, getHomeData } from "@/lib/api";
+import type { FeedItem, NewsSection, PollItem } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -280,6 +280,7 @@ function DesktopHome({
   heroTitle,
   stream,
   radar,
+  featuredPoll,
   tickerItems,
   backofficeUrl,
   weatherLabel,
@@ -290,6 +291,7 @@ function DesktopHome({
   heroTitle: string;
   stream: FeedItem[];
   radar: FeedItem[];
+  featuredPoll: PollItem | null;
   tickerItems: string[];
   backofficeUrl: string;
   weatherLabel: string;
@@ -350,6 +352,12 @@ function DesktopHome({
             <UiIcon name="economy" className="nav-icon" />
             Economia
           </button>
+          {featuredPoll ? (
+            <a href={`/encuestas/${featuredPoll.slug}`} className="nav-poll-link">
+              <UiIcon name="trend" className="nav-icon" />
+              Encuestas
+            </a>
+          ) : null}
         </div>
       </nav>
 
@@ -406,6 +414,17 @@ function DesktopHome({
         </article>
       </section>
 
+      {featuredPoll ? (
+        <section className="container">
+          <article className="home-poll-cta">
+            <p>Encuesta en vivo</p>
+            <h3>{featuredPoll.question}</h3>
+            <span>{featuredPoll.metrics.totalVotes} votos acumulados</span>
+            <a href={`/encuestas/${featuredPoll.slug}`}>Abrir encuesta</a>
+          </article>
+        </section>
+      ) : null}
+
       <section className="container split-grid">
         <article className="radar">
           <div className="section-head">
@@ -459,7 +478,7 @@ function DesktopHome({
 }
 
 export default async function Home() {
-  const home = await getHomeData();
+  const [home, featuredPoll] = await Promise.all([getHomeData(), getFeaturedPoll()]);
   const backofficeUrl = process.env.NEXT_PUBLIC_BACKOFFICE_URL ?? "http://localhost:8080/backoffice";
 
   const internalItems = dedupe([
@@ -558,6 +577,20 @@ export default async function Home() {
                 </div>
               </section>
 
+              {featuredPoll ? (
+                <section className="mf-block">
+                  <div className="mf-block-head">
+                    <h2>Encuesta en Vivo</h2>
+                    <span>{featuredPoll.metrics.totalVotes} votos</span>
+                  </div>
+                  <article className="mf-poll-card">
+                    <p>{featuredPoll.hookLabel || "Encuesta Nacional"}</p>
+                    <h3>{featuredPoll.question}</h3>
+                    <a href={`/encuestas/${featuredPoll.slug}`}>Votar ahora</a>
+                  </article>
+                </section>
+              ) : null}
+
               {radar.length > 0 && (
                 <section className="mf-block">
                   <div className="mf-block-head">
@@ -615,6 +648,7 @@ export default async function Home() {
           heroTitle={heroTitle}
           stream={stream}
           radar={radar}
+          featuredPoll={featuredPoll}
           tickerItems={tickerItems}
           backofficeUrl={backofficeUrl}
           weatherLabel={`${home.social.weather.location} · ${home.social.weather.temperatureC ?? "--"} C`}

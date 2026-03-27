@@ -1,18 +1,28 @@
 import "dotenv/config";
 
+import crypto from "node:crypto";
 import cookieParser from "cookie-parser";
 import cors from "cors";
 import express, { type NextFunction, type Request, type Response } from "express";
 import helmet from "helmet";
 import morgan from "morgan";
-import { type Prisma, NewsStatus } from "@prisma/client";
+import { type Poll, type Prisma, NewsStatus, PollStatus } from "@prisma/client";
 import { adminApiGuard, backofficeGuard, extractAdminToken, signAdminToken, verifyAdminToken } from "./auth";
-import { backofficeShell, renderIaLab, renderLogin, renderNewsForm, renderNewsTable } from "./backofficeViews";
+import {
+  backofficeShell,
+  renderIaLab,
+  renderLogin,
+  renderNewsForm,
+  renderNewsTable,
+  renderPollForm,
+  renderPollTable,
+  type BackofficePollListItem,
+} from "./backofficeViews";
 import { buildHomePayload } from "./homePayload";
 import { ensureUniqueSlug, normalizeNewsInput } from "./newsInput";
 import { toFeedItem, dedupeByKey } from "./feed";
 import { getExternalNews } from "./externalNews";
-import { isNewsSection, isNewsStatus, isProvince, readString, readBoolean } from "./utils";
+import { asNullable, isNewsSection, isNewsStatus, isPollStatus, isProvince, readString, readBoolean } from "./utils";
 import { prisma } from "./prismaClient";
 import {
   applyEditorialSuggestions,
@@ -24,6 +34,13 @@ import {
 } from "./editorialAi";
 import { buildAiNewsContext } from "./newsContextWrapper";
 import { getHomeTheme, HOME_THEME_OPTIONS, normalizeHomeTheme, setHomeTheme } from "./siteSettings";
+import {
+  FIXED_CANDIDATE_OPTIONS,
+  buildPollSnapshot,
+  ensureUniquePollSlug,
+  normalizePollInput,
+  toPollPublicView,
+} from "./polls";
 const app = express();
 
 const PORT = Number(process.env.PORT ?? 8080);
@@ -34,6 +51,8 @@ const ADMIN_EMAIL = process.env.ADMIN_EMAIL ?? "admin@pulsopais.local";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "cambiar-este-password";
 const ADMIN_JWT_SECRET = process.env.ADMIN_JWT_SECRET ?? "pulso-pais-admin-secret";
 const ADMIN_COOKIE_NAME = process.env.ADMIN_COOKIE_NAME ?? "pulso_admin_session";
+const FRONTEND_PUBLIC_URL =
+  process.env.FRONTEND_PUBLIC_URL ?? process.env.NEXT_PUBLIC_FRONTEND_URL ?? process.env.VERCEL_URL ?? "http://localhost:3000";
 const CORS_ORIGINS = (process.env.CORS_ORIGINS ?? "*,http://localhost:3000,http://127.0.0.1:3000,https://*.vercel.app")
   .split(",")
   .map((origin) => origin.trim())
@@ -125,6 +144,127 @@ function buildEditorialAssistInput(raw: Record<string, unknown>) {
   };
 }
 
+const POLL_VOTE_COOKIE_PREFIX = "pulso_poll_vote_";
+const POLL_VOTE_SECRET = process.env.POLL_VOTE_SECRET ?? ADMIN_JWT_SECRET;
+
+function voteCookieName(slug: string): string {
+  return `${POLL_VOTE_COOKIE_PREFIX}${slug}`;
+}
+
+function isPollAvailableNow(poll: { status: PollStatus; startsAt: Date | string | null; endsAt: Date | string | null }): boolean {
+  if (poll.status !== PollStatus.PUBLISHED) {
+    return false;
+  }
+  const now = Date.now();
+  const startsAtMs = poll.startsAt ? new Date(poll.startsAt).getTime() : null;
+  const endsAtMs = poll.endsAt ? new Date(poll.endsAt).getTime() : null;
+  if (startsAtMs && startsAtMs > now) {
+    return false;
+  }
+  if (endsAtMs && endsAtMs < now) {
+    return false;
+  }
+  return true;
+}
+
+function buildVoterHash(request: Request, pollId: string): string {
+  const forwarded = request.headers["x-forwarded-for"];
+  const forwardedIp = Array.isArray(forwarded) ? forwarded[0] : forwarded;
+  const firstChunk = (forwardedIp || request.ip || request.socket.remoteAddress || "unknown").toString().split(",")[0];
+  const ip = (firstChunk ?? "unknown").trim();
+  const userAgent = request.headers["user-agent"] ?? "unknown";
+  const raw = `${pollId}|${ip}|${userAgent}|${POLL_VOTE_SECRET}`;
+  return crypto.createHash("sha256").update(raw).digest("hex");
+}
+
+async function getPollVoteCountMap(pollId: string): Promise<Map<string, number>> {
+  const grouped = await prisma.pollVote.groupBy({
+    by: ["optionId"],
+    where: { pollId },
+    _count: { _all: true },
+  });
+
+  return new Map(grouped.map((entry) => [entry.optionId, entry._count._all]));
+}
+
+async function buildPollPublicPayloadBySlug(slug: string) {
+  const poll = await prisma.poll.findUnique({
+    where: { slug },
+    include: {
+      options: {
+        orderBy: { sortOrder: "asc" },
+      },
+    },
+  });
+
+  if (!poll) {
+    return null;
+  }
+
+  const voteMap = await getPollVoteCountMap(poll.id);
+  const snapshot = buildPollSnapshot(poll.options, voteMap);
+  return toPollPublicView(poll, snapshot);
+}
+
+async function buildBackofficePollRows(): Promise<BackofficePollListItem[]> {
+  const polls = await prisma.poll.findMany({
+    orderBy: [{ isFeatured: "desc" }, { updatedAt: "desc" }],
+    include: {
+      options: {
+        orderBy: { sortOrder: "asc" },
+      },
+    },
+    take: 300,
+  });
+
+  if (polls.length === 0) {
+    return [];
+  }
+
+  const voteCounts = await prisma.pollVote.groupBy({
+    by: ["pollId", "optionId"],
+    where: {
+      pollId: { in: polls.map((poll) => poll.id) },
+    },
+    _count: { _all: true },
+  });
+
+  const pollVoteMap = new Map<string, Map<string, number>>();
+  for (const entry of voteCounts) {
+    const existing = pollVoteMap.get(entry.pollId) ?? new Map<string, number>();
+    existing.set(entry.optionId, entry._count._all);
+    pollVoteMap.set(entry.pollId, existing);
+  }
+
+  return polls.map((poll) => {
+    const snapshot = buildPollSnapshot(poll.options, pollVoteMap.get(poll.id) ?? new Map<string, number>());
+    return {
+      id: poll.id,
+      title: poll.title,
+      slug: poll.slug,
+      publicUrl: pollPublicUrl(poll.slug),
+      question: poll.question,
+      status: poll.status,
+      isFeatured: poll.isFeatured,
+      publishedAt: poll.publishedAt,
+      updatedAt: poll.updatedAt,
+      totalVotes: snapshot.totalVotes,
+      leaderLabel: snapshot.leader?.label ?? null,
+    };
+  });
+}
+
+function normalizedFrontendBaseUrl(): string {
+  if (FRONTEND_PUBLIC_URL.startsWith("http://") || FRONTEND_PUBLIC_URL.startsWith("https://")) {
+    return FRONTEND_PUBLIC_URL;
+  }
+  return `https://${FRONTEND_PUBLIC_URL}`;
+}
+
+function pollPublicUrl(slug: string): string {
+  return `${normalizedFrontendBaseUrl().replace(/\/+$/, "")}/encuestas/${slug}`;
+}
+
 app.set("trust proxy", 1);
 const apiCors = cors({
   origin(origin, callback) {
@@ -205,6 +345,179 @@ app.get("/api/news", async (request, response, next) => {
   }
 });
 
+app.get("/api/polls", async (request, response, next) => {
+  try {
+    const statusQuery = readString(request.query.status).toUpperCase();
+    const featuredOnly = readBoolean(request.query.featured);
+    const limitQuery = Number(request.query.limit ?? 12);
+    const limit = Number.isFinite(limitQuery) ? Math.max(1, Math.min(50, limitQuery)) : 12;
+    const now = new Date();
+
+    const where: Prisma.PollWhereInput = {};
+    if (statusQuery && isPollStatus(statusQuery)) {
+      where.status = statusQuery;
+    } else {
+      where.status = PollStatus.PUBLISHED;
+    }
+    if (featuredOnly) {
+      where.isFeatured = true;
+    }
+    if (where.status === PollStatus.PUBLISHED) {
+      where.AND = [
+        {
+          OR: [{ startsAt: null }, { startsAt: { lte: now } }],
+        },
+        {
+          OR: [{ endsAt: null }, { endsAt: { gte: now } }],
+        },
+      ];
+    }
+
+    const polls = await prisma.poll.findMany({
+      where,
+      orderBy: [{ isFeatured: "desc" }, { publishedAt: "desc" }, { createdAt: "desc" }],
+      take: limit,
+      include: {
+        options: {
+          orderBy: { sortOrder: "asc" },
+        },
+      },
+    });
+
+    if (polls.length === 0) {
+      response.json({ items: [] });
+      return;
+    }
+
+    const grouped = await prisma.pollVote.groupBy({
+      by: ["pollId", "optionId"],
+      where: {
+        pollId: { in: polls.map((poll) => poll.id) },
+      },
+      _count: { _all: true },
+    });
+
+    const voteMapsByPoll = new Map<string, Map<string, number>>();
+    for (const entry of grouped) {
+      const map = voteMapsByPoll.get(entry.pollId) ?? new Map<string, number>();
+      map.set(entry.optionId, entry._count._all);
+      voteMapsByPoll.set(entry.pollId, map);
+    }
+
+    response.json({
+      items: polls.map((poll) => toPollPublicView(poll, buildPollSnapshot(poll.options, voteMapsByPoll.get(poll.id) ?? new Map()))),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/polls/:slug", async (request, response, next) => {
+  try {
+    const slug = readString(request.params.slug);
+    if (!slug) {
+      response.status(400).json({ error: "Slug de encuesta invalido." });
+      return;
+    }
+
+    const payload = await buildPollPublicPayloadBySlug(slug);
+    if (!payload) {
+      response.status(404).json({ error: "Encuesta no encontrada." });
+      return;
+    }
+
+    if (!isPollAvailableNow(payload)) {
+      response.status(404).json({ error: "Encuesta no disponible." });
+      return;
+    }
+
+    const selectedCookie = readString(request.cookies[voteCookieName(slug)]);
+    const selectedOptionId = payload.metrics.options.some((option) => option.id === selectedCookie) ? selectedCookie : null;
+    response.json({ item: payload, selectedOptionId });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/polls/:slug/vote", async (request, response, next) => {
+  try {
+    const slug = readString(request.params.slug);
+    if (!slug) {
+      response.status(400).json({ error: "Slug de encuesta invalido." });
+      return;
+    }
+
+    const optionId = readString(request.body.optionId);
+    if (!optionId) {
+      response.status(400).json({ error: "Selecciona una opcion para votar." });
+      return;
+    }
+
+    const poll = await prisma.poll.findUnique({
+      where: { slug },
+      include: {
+        options: {
+          orderBy: { sortOrder: "asc" },
+        },
+      },
+    });
+
+    if (!poll || !isPollAvailableNow(poll)) {
+      response.status(404).json({ error: "Encuesta no disponible para votar." });
+      return;
+    }
+
+    const targetOption = poll.options.find((option) => option.id === optionId);
+    if (!targetOption) {
+      response.status(400).json({ error: "Opcion de voto invalida." });
+      return;
+    }
+
+    const voterHash = buildVoterHash(request, poll.id);
+    const existingVote = await prisma.pollVote.findUnique({
+      where: { pollId_voterHash: { pollId: poll.id, voterHash } },
+      select: { optionId: true },
+    });
+
+    if (!existingVote) {
+      await prisma.pollVote.create({
+        data: {
+          pollId: poll.id,
+          optionId: targetOption.id,
+          voterHash,
+          sourceRef: asNullable(readString(request.body.sourceRef)),
+        },
+      });
+    }
+
+    response.cookie(voteCookieName(slug), existingVote?.optionId ?? targetOption.id, {
+      httpOnly: false,
+      sameSite: "lax",
+      secure: IS_PRODUCTION,
+      maxAge: 365 * 24 * 60 * 60 * 1000,
+    });
+
+    const payload = await buildPollPublicPayloadBySlug(slug);
+    if (!payload) {
+      response.status(404).json({ error: "No se pudo reconstruir la encuesta." });
+      return;
+    }
+
+    const selectedOptionId = existingVote?.optionId ?? targetOption.id;
+    response.json({
+      item: payload,
+      selectedOptionId,
+      alreadyVoted: Boolean(existingVote),
+    });
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && (error as { code?: string }).code === "P2002") {
+      response.status(409).json({ error: "Ya registraste un voto para esta encuesta." });
+      return;
+    }
+    next(error);
+  }
+});
+
 app.post("/api/admin/login", (request, response) => {
   const email = readString(request.body.email).toLowerCase();
   const password = readString(request.body.password);
@@ -229,6 +542,191 @@ app.post("/api/admin/login", (request, response) => {
 });
 
 const apiGuard = adminApiGuard(ADMIN_JWT_SECRET, ADMIN_COOKIE_NAME);
+
+app.get("/api/admin/polls", apiGuard, async (_request, response, next) => {
+  try {
+    const polls = await prisma.poll.findMany({
+      orderBy: [{ isFeatured: "desc" }, { updatedAt: "desc" }],
+      include: {
+        options: {
+          orderBy: { sortOrder: "asc" },
+        },
+      },
+      take: 200,
+    });
+
+    if (polls.length === 0) {
+      response.json({ items: [] });
+      return;
+    }
+
+    const grouped = await prisma.pollVote.groupBy({
+      by: ["pollId", "optionId"],
+      where: {
+        pollId: { in: polls.map((poll) => poll.id) },
+      },
+      _count: { _all: true },
+    });
+
+    const maps = new Map<string, Map<string, number>>();
+    for (const entry of grouped) {
+      const map = maps.get(entry.pollId) ?? new Map<string, number>();
+      map.set(entry.optionId, entry._count._all);
+      maps.set(entry.pollId, map);
+    }
+
+    response.json({
+      items: polls.map((poll) => toPollPublicView(poll, buildPollSnapshot(poll.options, maps.get(poll.id) ?? new Map()))),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/polls", apiGuard, async (request, response, next) => {
+  try {
+    const normalized = normalizePollInput(request.body as Record<string, unknown>);
+    const uniqueSlug = await ensureUniquePollSlug(prisma, normalized.slug);
+
+    if (normalized.isFeatured) {
+      await prisma.poll.updateMany({
+        data: { isFeatured: false },
+        where: { isFeatured: true },
+      });
+    }
+
+    const created = await prisma.poll.create({
+      data: {
+        slug: uniqueSlug,
+        title: normalized.title,
+        question: normalized.question,
+        hookLabel: normalized.hookLabel,
+        footerCta: normalized.footerCta,
+        description: normalized.description,
+        interviewUrl: normalized.interviewUrl,
+        coverImageUrl: normalized.coverImageUrl,
+        status: normalized.status,
+        isFeatured: normalized.isFeatured,
+        startsAt: normalized.startsAt,
+        endsAt: normalized.endsAt,
+        publishedAt: normalized.publishedAt,
+        options: {
+          create: normalized.options,
+        },
+      },
+      include: {
+        options: {
+          orderBy: { sortOrder: "asc" },
+        },
+      },
+    });
+
+    response.status(201).json({ item: toPollPublicView(created, buildPollSnapshot(created.options, new Map())) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/admin/polls/:id", apiGuard, async (request, response, next) => {
+  try {
+    const id = readString(request.params.id);
+    if (!id) {
+      response.status(400).json({ error: "ID invalido" });
+      return;
+    }
+
+    const normalized = normalizePollInput(request.body as Record<string, unknown>);
+    const uniqueSlug = await ensureUniquePollSlug(prisma, normalized.slug, id);
+
+    if (normalized.isFeatured) {
+      await prisma.poll.updateMany({
+        data: { isFeatured: false },
+        where: { isFeatured: true, id: { not: id } },
+      });
+    }
+
+    await prisma.poll.update({
+      where: { id },
+      data: {
+        slug: uniqueSlug,
+        title: normalized.title,
+        question: normalized.question,
+        hookLabel: normalized.hookLabel,
+        footerCta: normalized.footerCta,
+        description: normalized.description,
+        interviewUrl: normalized.interviewUrl,
+        coverImageUrl: normalized.coverImageUrl,
+        status: normalized.status,
+        isFeatured: normalized.isFeatured,
+        startsAt: normalized.startsAt,
+        endsAt: normalized.endsAt,
+        publishedAt: normalized.publishedAt,
+      },
+    });
+
+    const existingOptions = await prisma.pollOption.findMany({
+      where: { pollId: id },
+      orderBy: { sortOrder: "asc" },
+    });
+
+    for (const option of normalized.options) {
+      const current = existingOptions.find((candidate) => candidate.sortOrder === option.sortOrder);
+      if (current) {
+        await prisma.pollOption.update({
+          where: { id: current.id },
+          data: {
+            label: option.label,
+            colorHex: option.colorHex,
+            emoji: option.emoji,
+          },
+        });
+      } else {
+        await prisma.pollOption.create({
+          data: {
+            pollId: id,
+            label: option.label,
+            sortOrder: option.sortOrder,
+            colorHex: option.colorHex,
+            emoji: option.emoji,
+          },
+        });
+      }
+    }
+
+    const updated = await prisma.poll.findUnique({
+      where: { id },
+      include: {
+        options: {
+          orderBy: { sortOrder: "asc" },
+        },
+      },
+    });
+
+    if (!updated) {
+      response.status(404).json({ error: "Encuesta no encontrada." });
+      return;
+    }
+
+    const voteMap = await getPollVoteCountMap(updated.id);
+    response.json({ item: toPollPublicView(updated, buildPollSnapshot(updated.options, voteMap)) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/admin/polls/:id", apiGuard, async (request, response, next) => {
+  try {
+    const id = readString(request.params.id);
+    if (!id) {
+      response.status(400).json({ error: "ID invalido" });
+      return;
+    }
+    await prisma.poll.delete({ where: { id } });
+    response.status(204).send();
+  } catch (error) {
+    next(error);
+  }
+});
 
 app.get("/api/admin/settings/theme", apiGuard, async (_request, response, next) => {
   try {
@@ -529,12 +1027,13 @@ app.get("/backoffice/ai/health", boGuard, async (_request, response, next) => {
 
 app.get("/backoffice", boGuard, async (request, response, next) => {
   try {
-    const [news, homeTheme] = await Promise.all([
+    const [news, homeTheme, pollRows] = await Promise.all([
       prisma.news.findMany({
         orderBy: [{ updatedAt: "desc" }],
         take: 300,
       }),
       getHomeTheme(prisma),
+      buildBackofficePollRows(),
     ]);
 
     const themeOptions = HOME_THEME_OPTIONS.map(
@@ -547,16 +1046,30 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
     const drafts = news.filter((item) => item.status === NewsStatus.DRAFT).length;
     const aiReject = news.filter((item) => item.aiDecision === "REJECT").length;
     const aiReview = news.filter((item) => item.aiDecision === "REVIEW").length;
+    const pollPublished = pollRows.filter((item) => item.status === PollStatus.PUBLISHED).length;
+    const pollVotes = pollRows.reduce((acc, item) => acc + item.totalVotes, 0);
 
     const body = `<div class="grid">
       <div class="card">
         <h2 style="margin:0 0 12px; font-size:22px;">Modos y Estado Editorial</h2>
-        <div style="display:grid; gap:10px; grid-template-columns:repeat(5,minmax(0,1fr));">
+        <div style="display:grid; gap:10px; grid-template-columns:repeat(7,minmax(0,1fr));">
           <div style="border:1px solid #2d2d2d; border-radius:10px; padding:10px; background:#121212;"><p style="margin:0; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:#a5a5a5;">Total</p><strong style="font-size:28px; font-family:inherit;">${total}</strong></div>
           <div style="border:1px solid #27513a; border-radius:10px; padding:10px; background:#102017;"><p style="margin:0; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:#9ddcb7;">Publicadas</p><strong style="font-size:28px; font-family:inherit;">${published}</strong></div>
           <div style="border:1px solid #4a4a4a; border-radius:10px; padding:10px; background:#181818;"><p style="margin:0; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:#cfcfcf;">Draft</p><strong style="font-size:28px; font-family:inherit;">${drafts}</strong></div>
           <div style="border:1px solid #6a5524; border-radius:10px; padding:10px; background:#211a0f;"><p style="margin:0; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:#f3dc9f;">IA Review</p><strong style="font-size:28px; font-family:inherit;">${aiReview}</strong></div>
           <div style="border:1px solid #773232; border-radius:10px; padding:10px; background:#2b1515;"><p style="margin:0; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:#f2b3b3;">IA Reject</p><strong style="font-size:28px; font-family:inherit;">${aiReject}</strong></div>
+          <div style="border:1px solid #4b3c1f; border-radius:10px; padding:10px; background:#1f180d;"><p style="margin:0; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:#e8cc84;">Encuestas live</p><strong style="font-size:28px; font-family:inherit;">${pollPublished}</strong></div>
+          <div style="border:1px solid #2f4e67; border-radius:10px; padding:10px; background:#101a22;"><p style="margin:0; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:#94cdf7;">Votos totales</p><strong style="font-size:28px; font-family:inherit;">${pollVotes}</strong></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="split-title" style="margin-bottom:8px;">
+          <h3>Modulo de Encuestas</h3>
+          <a class="button primary" href="/backoffice/polls/new">Nueva Encuesta</a>
+        </div>
+        <p style="margin:0 0 12px; color:#a9a9a9; line-height:1.5;">Crea encuestas digitales para compartir en Instagram, mide conversion a voto y visualiza lider por candidato con actualizacion en vivo.</p>
+        <div class="actions">
+          <a class="button" href="/backoffice/polls">Gestionar encuestas</a>
         </div>
       </div>
       <div class="card">
@@ -601,6 +1114,217 @@ app.get("/backoffice/news/new", boGuard, (_request, response) => {
 
 app.get("/backoffice/ia-lab", boGuard, (_request, response) => {
   response.send(renderIaLab());
+});
+
+app.get("/backoffice/polls", boGuard, async (request, response, next) => {
+  try {
+    const rows = await buildBackofficePollRows();
+    const body = `<div class="grid">
+      ${renderPollTable(rows)}
+    </div>`;
+    response.send(backofficeShell("Encuestas", body, readString(request.query.ok)));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/backoffice/polls/new", boGuard, (_request, response) => {
+  response.send(
+    renderPollForm({
+      mode: "create",
+      action: "/backoffice/polls",
+      candidates: FIXED_CANDIDATE_OPTIONS,
+    }),
+  );
+});
+
+app.post("/backoffice/polls", boGuard, async (request, response, next) => {
+  try {
+    const normalized = normalizePollInput(request.body as Record<string, unknown>);
+    const uniqueSlug = await ensureUniquePollSlug(prisma, normalized.slug);
+
+    if (normalized.isFeatured) {
+      await prisma.poll.updateMany({
+        data: { isFeatured: false },
+        where: { isFeatured: true },
+      });
+    }
+
+    await prisma.poll.create({
+      data: {
+        slug: uniqueSlug,
+        title: normalized.title,
+        question: normalized.question,
+        hookLabel: normalized.hookLabel,
+        footerCta: normalized.footerCta,
+        description: normalized.description,
+        interviewUrl: normalized.interviewUrl,
+        coverImageUrl: normalized.coverImageUrl,
+        status: normalized.status,
+        isFeatured: normalized.isFeatured,
+        startsAt: normalized.startsAt,
+        endsAt: normalized.endsAt,
+        publishedAt: normalized.publishedAt,
+        options: {
+          create: normalized.options,
+        },
+      },
+    });
+
+    response.redirect(`/backoffice/polls?ok=${encodeURIComponent("Encuesta creada")}`);
+  } catch (error) {
+    if (error instanceof Error) {
+      response.status(400).send(
+        renderPollForm({
+          mode: "create",
+          action: "/backoffice/polls",
+          candidates: FIXED_CANDIDATE_OPTIONS,
+          error: error.message,
+          data: request.body as Partial<Poll>,
+        }),
+      );
+      return;
+    }
+    next(error);
+  }
+});
+
+app.get("/backoffice/polls/:id/edit", boGuard, async (request, response, next) => {
+  try {
+    const id = readString(request.params.id);
+    if (!id) {
+      response.status(400).send(backofficeShell("Error", `<div class="card">ID invalido.</div>`));
+      return;
+    }
+
+    const poll = await prisma.poll.findUnique({
+      where: { id },
+      include: {
+        options: {
+          orderBy: { sortOrder: "asc" },
+        },
+      },
+    });
+    if (!poll) {
+      response.status(404).send(backofficeShell("No encontrado", `<div class="card">No se encontro la encuesta solicitada.</div>`));
+      return;
+    }
+
+    const voteMap = await getPollVoteCountMap(poll.id);
+    const snapshot = buildPollSnapshot(poll.options, voteMap);
+    response.send(
+      renderPollForm({
+        mode: "edit",
+        action: `/backoffice/polls/${poll.id}`,
+        data: poll,
+        candidates: FIXED_CANDIDATE_OPTIONS,
+        totalVotes: snapshot.totalVotes,
+        leaderLabel: snapshot.leader?.label ?? null,
+        publicUrl: pollPublicUrl(poll.slug),
+      }),
+    );
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/backoffice/polls/:id", boGuard, async (request, response, next) => {
+  try {
+    const id = readString(request.params.id);
+    if (!id) {
+      response.status(400).send(backofficeShell("Error", `<div class="card">ID invalido.</div>`));
+      return;
+    }
+
+    const normalized = normalizePollInput(request.body as Record<string, unknown>);
+    const uniqueSlug = await ensureUniquePollSlug(prisma, normalized.slug, id);
+
+    if (normalized.isFeatured) {
+      await prisma.poll.updateMany({
+        data: { isFeatured: false },
+        where: { isFeatured: true, id: { not: id } },
+      });
+    }
+
+    await prisma.poll.update({
+      where: { id },
+      data: {
+        slug: uniqueSlug,
+        title: normalized.title,
+        question: normalized.question,
+        hookLabel: normalized.hookLabel,
+        footerCta: normalized.footerCta,
+        description: normalized.description,
+        interviewUrl: normalized.interviewUrl,
+        coverImageUrl: normalized.coverImageUrl,
+        status: normalized.status,
+        isFeatured: normalized.isFeatured,
+        startsAt: normalized.startsAt,
+        endsAt: normalized.endsAt,
+        publishedAt: normalized.publishedAt,
+      },
+    });
+
+    const existingOptions = await prisma.pollOption.findMany({
+      where: { pollId: id },
+      orderBy: { sortOrder: "asc" },
+    });
+    for (const option of normalized.options) {
+      const current = existingOptions.find((candidate) => candidate.sortOrder === option.sortOrder);
+      if (current) {
+        await prisma.pollOption.update({
+          where: { id: current.id },
+          data: {
+            label: option.label,
+            colorHex: option.colorHex,
+            emoji: option.emoji,
+          },
+        });
+      } else {
+        await prisma.pollOption.create({
+          data: {
+            pollId: id,
+            label: option.label,
+            sortOrder: option.sortOrder,
+            colorHex: option.colorHex,
+            emoji: option.emoji,
+          },
+        });
+      }
+    }
+
+    response.redirect(`/backoffice/polls?ok=${encodeURIComponent("Encuesta actualizada")}`);
+  } catch (error) {
+    if (error instanceof Error) {
+      const id = readString(request.params.id);
+      response.status(400).send(
+        renderPollForm({
+          mode: "edit",
+          action: `/backoffice/polls/${id}`,
+          candidates: FIXED_CANDIDATE_OPTIONS,
+          data: request.body as Partial<Poll>,
+          error: error.message,
+        }),
+      );
+      return;
+    }
+    next(error);
+  }
+});
+
+app.post("/backoffice/polls/:id/delete", boGuard, async (request, response, next) => {
+  try {
+    const id = readString(request.params.id);
+    if (!id) {
+      response.status(400).send(backofficeShell("Error", `<div class="card">ID invalido.</div>`));
+      return;
+    }
+
+    await prisma.poll.delete({ where: { id } });
+    response.redirect(`/backoffice/polls?ok=${encodeURIComponent("Encuesta eliminada")}`);
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.post("/backoffice/news", boGuard, async (request, response, next) => {

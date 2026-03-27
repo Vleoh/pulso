@@ -1,5 +1,5 @@
 import { fallbackHomeData } from "./fallback";
-import type { HomePayload } from "./types";
+import type { HomePayload, PollItem } from "./types";
 
 const API_URL =
   process.env.API_INTERNAL_URL ??
@@ -24,5 +24,49 @@ export async function getHomeData(): Promise<HomePayload> {
     return payload;
   } catch {
     return fallbackHomeData;
+  }
+}
+
+type PollBySlugResponse = {
+  item: PollItem;
+  selectedOptionId: string | null;
+};
+
+export async function getFeaturedPoll(): Promise<PollItem | null> {
+  try {
+    const response = await fetch(`${API_URL}/api/polls?featured=true&limit=1`, {
+      cache: "no-store",
+      headers: {
+        accept: "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const payload = (await response.json()) as { items?: PollItem[] };
+    return Array.isArray(payload.items) && payload.items.length > 0 ? payload.items[0] : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function getPollBySlug(slug: string): Promise<PollBySlugResponse | null> {
+  try {
+    const response = await fetch(`${API_URL}/api/polls/${encodeURIComponent(slug)}`, {
+      cache: "no-store",
+      headers: {
+        accept: "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    return (await response.json()) as PollBySlugResponse;
+  } catch {
+    return null;
   }
 }

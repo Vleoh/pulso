@@ -14,6 +14,13 @@ enum NewsStatus {
   @@schema("pulso")
 }
 
+enum PollStatus {
+  DRAFT
+  PUBLISHED
+
+  @@schema("pulso")
+}
+
 enum NewsSection {
   NACION
   PROVINCIAS
@@ -110,5 +117,62 @@ model SiteSetting {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@schema("pulso")
+}
+
+model Poll {
+  id           String      @id @default(cuid())
+  slug         String      @unique
+  title        String
+  question     String
+  hookLabel    String      @default("Encuesta Nacional")
+  footerCta    String      @default("Vota y explica por que")
+  description  String?
+  interviewUrl String?
+  coverImageUrl String?
+  status       PollStatus  @default(DRAFT)
+  isFeatured   Boolean     @default(false)
+  startsAt     DateTime?
+  endsAt       DateTime?
+  publishedAt  DateTime?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+  options      PollOption[]
+  votes        PollVote[]
+
+  @@index([status, publishedAt])
+  @@index([isFeatured, publishedAt])
+  @@schema("pulso")
+}
+
+model PollOption {
+  id        String   @id @default(cuid())
+  pollId    String
+  label     String
+  sortOrder Int
+  colorHex  String?
+  emoji     String?
+  createdAt DateTime @default(now())
+  poll      Poll     @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  votes     PollVote[]
+
+  @@unique([pollId, sortOrder])
+  @@index([pollId])
+  @@schema("pulso")
+}
+
+model PollVote {
+  id        String     @id @default(cuid())
+  pollId    String
+  optionId  String
+  voterHash String
+  sourceRef String?
+  createdAt DateTime   @default(now())
+  poll      Poll       @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  option    PollOption @relation(fields: [optionId], references: [id], onDelete: Cascade)
+
+  @@unique([pollId, voterHash])
+  @@index([pollId, createdAt])
+  @@index([optionId])
   @@schema("pulso")
 }

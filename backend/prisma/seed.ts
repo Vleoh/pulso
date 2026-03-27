@@ -1,5 +1,6 @@
-import { NewsSection, NewsStatus, Province } from "@prisma/client";
+import { NewsSection, NewsStatus, PollStatus, Province } from "@prisma/client";
 import { prisma } from "../src/prismaClient";
+import { FIXED_CANDIDATE_OPTIONS } from "../src/polls";
 
 const now = new Date();
 
@@ -122,6 +123,64 @@ async function main(): Promise<void> {
       where: { slug: news.slug },
       update: news,
       create: news,
+    });
+  }
+
+  const poll = await prisma.poll.upsert({
+    where: { slug: "confiarias-pais-2027" },
+    update: {
+      title: "Encuesta Nacional 2027",
+      question: "¿A quien le confiarias el pais en 2027?",
+      hookLabel: "Resultados en vivo",
+      footerCta: "Vota y explica por que",
+      description: "Encuesta digital de Pulso Pais para medir confianza politica de la comunidad.",
+      status: PollStatus.PUBLISHED,
+      isFeatured: true,
+      publishedAt: new Date(),
+      interviewUrl: "https://www.instagram.com/",
+    },
+    create: {
+      slug: "confiarias-pais-2027",
+      title: "Encuesta Nacional 2027",
+      question: "¿A quien le confiarias el pais en 2027?",
+      hookLabel: "Resultados en vivo",
+      footerCta: "Vota y explica por que",
+      description: "Encuesta digital de Pulso Pais para medir confianza politica de la comunidad.",
+      status: PollStatus.PUBLISHED,
+      isFeatured: true,
+      publishedAt: new Date(),
+      interviewUrl: "https://www.instagram.com/",
+    },
+  });
+
+  await prisma.pollOption.deleteMany({ where: { pollId: poll.id } });
+  await prisma.pollOption.createMany({
+    data: FIXED_CANDIDATE_OPTIONS.map((candidate, index) => ({
+      pollId: poll.id,
+      label: candidate.label,
+      sortOrder: index + 1,
+      colorHex: candidate.colorHex,
+      emoji: candidate.emoji,
+    })),
+  });
+
+  const options = await prisma.pollOption.findMany({
+    where: { pollId: poll.id },
+    orderBy: { sortOrder: "asc" },
+  });
+
+  const seedVotesPerOption = [35, 16, 14, 11, 9, 7, 6, 4, 3, 2];
+  await prisma.pollVote.deleteMany({ where: { pollId: poll.id } });
+  for (const option of options) {
+    const total = seedVotesPerOption[option.sortOrder - 1] ?? 1;
+    const payload = Array.from({ length: total }, (_unused, voteIndex) => ({
+      pollId: poll.id,
+      optionId: option.id,
+      voterHash: `seed-${option.sortOrder}-${voteIndex + 1}`,
+      sourceRef: "seed",
+    }));
+    await prisma.pollVote.createMany({
+      data: payload,
     });
   }
 }

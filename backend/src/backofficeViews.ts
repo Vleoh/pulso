@@ -1,4 +1,4 @@
-import { type News, NewsStatus, type Province } from "@prisma/client";
+import { type News, NewsStatus, type Poll, PollStatus, type Province } from "@prisma/client";
 import { PROVINCE_OPTIONS, SECTION_OPTIONS, provinceLabel, sectionLabel } from "./catalog";
 import { escapeHtml } from "./utils";
 
@@ -135,6 +135,7 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
       <nav class="side-nav">
         <a href="/backoffice"><span>Panel</span></a>
         <a href="/backoffice/news/new"><span>Nueva Nota</span></a>
+        <a href="/backoffice/polls"><span>Encuestas</span></a>
         <a href="/backoffice#theme-control"><span>Temas</span></a>
         <a href="/backoffice/ia-lab"><span>IA Lab</span></a>
         <a href="/backoffice/ai/context" target="_blank" rel="noreferrer"><span>Wrapper IA</span></a>
@@ -155,6 +156,7 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
           <div class="actions">
             <a class="button" href="/backoffice">Panel</a>
             <a class="button" href="/backoffice/news/new">Nueva Nota</a>
+            <a class="button" href="/backoffice/polls">Encuestas</a>
             <a class="button" href="/backoffice/logout">Cerrar Sesion</a>
           </div>
         </header>
@@ -1072,6 +1074,225 @@ export function renderNewsForm(params: {
             checkAiHealth();
           })();
         </script>
+      </div>
+    </div>`,
+  );
+}
+
+export type BackofficePollListItem = {
+  id: string;
+  title: string;
+  slug: string;
+  publicUrl: string;
+  question: string;
+  status: PollStatus;
+  isFeatured: boolean;
+  publishedAt: Date | null;
+  updatedAt: Date;
+  totalVotes: number;
+  leaderLabel: string | null;
+};
+
+export function renderPollTable(items: BackofficePollListItem[]): string {
+  if (items.length === 0) {
+    return `<div class="card"><p>No hay encuestas creadas. Usa "Nueva Encuesta" para publicar la primera.</p></div>`;
+  }
+
+  const rows = items
+    .map((item) => {
+      const published = item.publishedAt
+        ? new Date(item.publishedAt).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" })
+        : "-";
+      const updated = new Date(item.updatedAt).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" });
+      const searchIndex = escapeHtml(`${item.title} ${item.slug} ${item.question} ${item.status}`.toLowerCase());
+      const statusClass = item.status === PollStatus.PUBLISHED ? "live" : "draft";
+      const leader = item.leaderLabel ? escapeHtml(item.leaderLabel) : "-";
+
+      return `<tr data-poll-row data-status="${item.status}" data-search="${searchIndex}">
+        <td>
+          <div class="title">${escapeHtml(item.title)}</div>
+          <div class="meta">
+            <span class="pill ${statusClass}">${item.status}</span>
+            ${item.isFeatured ? `<span class="pill gold">Destacada</span>` : ""}
+          </div>
+        </td>
+        <td>${escapeHtml(item.slug)}</td>
+        <td>${escapeHtml(String(item.totalVotes))}</td>
+        <td>${leader}</td>
+        <td>${escapeHtml(published)}</td>
+        <td>${escapeHtml(updated)}</td>
+        <td>
+          <div class="inline-actions">
+            <a class="button" href="/backoffice/polls/${item.id}/edit">Editar</a>
+            <a class="button" target="_blank" rel="noreferrer" href="${escapeHtml(item.publicUrl)}">Abrir</a>
+            <form method="post" action="/backoffice/polls/${item.id}/delete" onsubmit="return confirm('Eliminar encuesta? Esta accion no se puede deshacer.');">
+              <button class="danger" type="submit">Eliminar</button>
+            </form>
+          </div>
+        </td>
+      </tr>`;
+    })
+    .join("\n");
+
+  return `<div class="card">
+    <div class="split-title" style="margin-bottom:10px;">
+      <h3>Encuestas y metricas</h3>
+      <a class="button primary" href="/backoffice/polls/new">Nueva Encuesta</a>
+    </div>
+    <div class="table-tools">
+      <input id="pollFilterInput" placeholder="Buscar por titulo, slug o pregunta..." />
+      <select id="pollStatusFilter">
+        <option value="">Todos los estados</option>
+        <option value="PUBLISHED">Publicadas</option>
+        <option value="DRAFT">Draft</option>
+      </select>
+      <span class="table-count" id="pollRowCount">${items.length} items</span>
+    </div>
+    <table class="news-table">
+      <thead>
+        <tr>
+          <th>Titulo</th>
+          <th>Slug</th>
+          <th>Votos</th>
+          <th>Lider</th>
+          <th>Publicada</th>
+          <th>Actualizada</th>
+          <th>Acciones</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <script>
+      (function () {
+        const rows = Array.from(document.querySelectorAll("[data-poll-row]"));
+        const input = document.getElementById("pollFilterInput");
+        const statusFilter = document.getElementById("pollStatusFilter");
+        const count = document.getElementById("pollRowCount");
+        if (!rows.length || !input || !statusFilter || !count) {
+          return;
+        }
+
+        function refresh() {
+          const query = (input.value || "").toLowerCase().trim();
+          const status = statusFilter.value || "";
+          let visible = 0;
+          rows.forEach(function (row) {
+            const rowQuery = (row.getAttribute("data-search") || "").toLowerCase();
+            const rowStatus = row.getAttribute("data-status") || "";
+            const matchQuery = !query || rowQuery.includes(query);
+            const matchStatus = !status || status === rowStatus;
+            const show = matchQuery && matchStatus;
+            row.style.display = show ? "" : "none";
+            if (show) {
+              visible += 1;
+            }
+          });
+          count.textContent = visible + " items visibles";
+        }
+
+        input.addEventListener("input", refresh);
+        statusFilter.addEventListener("change", refresh);
+      })();
+    </script>
+  </div>`;
+}
+
+export function renderPollForm(params: {
+  mode: "create" | "edit";
+  action: string;
+  data?: Partial<Poll>;
+  candidates: ReadonlyArray<{ label: string; colorHex: string; emoji: string }>;
+  publicUrl?: string | null;
+  totalVotes?: number;
+  leaderLabel?: string | null;
+  error?: string;
+}): string {
+  const { mode, action, data, candidates, publicUrl, totalVotes = 0, leaderLabel = null, error } = params;
+  const getValue = (value: unknown): string => {
+    if (value === null || value === undefined) {
+      return "";
+    }
+    return escapeHtml(String(value));
+  };
+
+  const status = data?.status ?? PollStatus.DRAFT;
+  const statusOptions = [PollStatus.DRAFT, PollStatus.PUBLISHED]
+    .map((option) => `<option value="${option}" ${status === option ? "selected" : ""}>${option}</option>`)
+    .join("");
+
+  const candidateRows = candidates
+    .map(
+      (candidate, index) => `<article style="border:1px solid #2a2a2a; border-radius:10px; background:#111111; padding:10px; display:flex; align-items:center; gap:10px;">
+        <span style="display:inline-grid; place-items:center; width:24px; height:24px; border-radius:999px; background:${escapeHtml(candidate.colorHex)}; color:#111; font-weight:700; font-size:11px;">${index + 1}</span>
+        <strong style="font-size:14px; line-height:1.2;">${escapeHtml(candidate.label)}</strong>
+        <span style="margin-left:auto; color:#c7c7c7; font-size:15px;">${escapeHtml(candidate.emoji)}</span>
+      </article>`,
+    )
+    .join("");
+
+  return backofficeShell(
+    mode === "create" ? "Nueva encuesta" : "Editar encuesta",
+    `<div class="grid">
+      <div class="card">
+        ${error ? `<div class="error">${escapeHtml(error)}</div>` : ""}
+        <div class="split-title" style="margin-bottom:8px;">
+          <h3>${mode === "create" ? "Nueva encuesta digital" : "Editar encuesta digital"}</h3>
+          <span class="mini-tag">Opinion de la comunidad</span>
+        </div>
+        <p class="muted" style="margin-bottom:14px;">Modulo pensado para links de Instagram, entrevistas y seguimiento de conversion a voto. Las 10 opciones se mantienen en orden fijo para consistencia historica.</p>
+        <form method="post" action="${action}">
+          <div class="cms-layout">
+            <section class="editor-stack">
+              <div class="editor-card">
+                <div class="field"><label for="title">Titulo interno</label><input id="title" name="title" required minlength="8" value="${getValue(data?.title)}" /></div>
+                <div class="field"><label for="slug">Slug publico</label><input id="slug" name="slug" placeholder="confiarias-pais-2027" value="${getValue(data?.slug)}" /></div>
+                <div class="field"><label for="question">Pregunta principal</label><input id="question" name="question" required minlength="12" value="${getValue(data?.question)}" /></div>
+                <div class="cols-2">
+                  <div class="field"><label for="hookLabel">Etiqueta superior</label><input id="hookLabel" name="hookLabel" value="${getValue(data?.hookLabel ?? "Encuesta Nacional")}" /></div>
+                  <div class="field"><label for="footerCta">CTA inferior</label><input id="footerCta" name="footerCta" value="${getValue(data?.footerCta ?? "Vota y explica por que")}" /></div>
+                </div>
+                <div class="field"><label for="description">Contexto corto</label><textarea id="description" name="description" rows="3">${getValue(data?.description)}</textarea></div>
+              </div>
+
+              <div class="editor-card">
+                <div class="split-title"><h3>Opciones fijas</h3><span class="mini-tag">orden bloqueado</span></div>
+                <div style="display:grid; gap:8px;">${candidateRows}</div>
+              </div>
+            </section>
+
+            <aside class="editor-stack">
+              <div class="editor-card">
+                <div class="field"><label for="interviewUrl">Link entrevista (Instagram o similar)</label><input id="interviewUrl" name="interviewUrl" type="url" value="${getValue(data?.interviewUrl)}" /></div>
+                <div class="field"><label for="coverImageUrl">Imagen portada (opcional)</label><input id="coverImageUrl" name="coverImageUrl" type="url" value="${getValue(data?.coverImageUrl)}" /></div>
+              </div>
+
+              <div class="editor-card">
+                <div class="cols-2">
+                  <div class="field"><label for="status">Estado</label><select id="status" name="status">${statusOptions}</select></div>
+                  <div class="field"><label for="publishedAt">Publicar en</label><input id="publishedAt" type="datetime-local" name="publishedAt" value="${getValue(isoLocalDate(data?.publishedAt ? new Date(data.publishedAt) : null))}" /></div>
+                </div>
+                <div class="cols-2">
+                  <div class="field"><label for="startsAt">Inicio</label><input id="startsAt" type="datetime-local" name="startsAt" value="${getValue(isoLocalDate(data?.startsAt ? new Date(data.startsAt) : null))}" /></div>
+                  <div class="field"><label for="endsAt">Cierre</label><input id="endsAt" type="datetime-local" name="endsAt" value="${getValue(isoLocalDate(data?.endsAt ? new Date(data.endsAt) : null))}" /></div>
+                </div>
+                <label style="display:flex; align-items:center; gap:8px; font-size:13px; color:#f0f0f0;"><input type="checkbox" name="isFeatured" ${data?.isFeatured ? "checked" : ""} /> Destacar en portada de encuestas</label>
+              </div>
+
+              <div class="editor-card">
+                <p style="margin:0; color:#d8d8d8; font-size:13px; line-height:1.5;">Metricas actuales: <strong>${escapeHtml(String(totalVotes))}</strong> votos${leaderLabel ? ` | Lider: <strong>${escapeHtml(leaderLabel)}</strong>` : ""}</p>
+                ${
+                  publicUrl
+                    ? `<a class="button" href="${escapeHtml(publicUrl)}" target="_blank" rel="noreferrer">Abrir encuesta publica</a>`
+                    : `<p class="muted">Se habilita URL publica despues de crear.</p>`
+                }
+                <div class="actions">
+                  <button class="primary" type="submit">${mode === "create" ? "Crear encuesta" : "Guardar cambios"}</button>
+                  <a class="button" href="/backoffice/polls">Volver</a>
+                </div>
+              </div>
+            </aside>
+          </div>
+        </form>
       </div>
     </div>`,
   );

@@ -41,6 +41,12 @@ Arquitectura:
   - `REJECT`: bloquea publicacion.
   - `REVIEW`: si venia `PUBLISHED`, baja automaticamente a `DRAFT`.
   - Usa lineamientos de `pulso-pais-linea-editorial` (archivo cargado en `backend/editorial/pulso-pais-linea-editorial.txt`).
+- Modulo de encuestas (publico + backoffice + metricas):
+  - Backoffice: crear/editar/eliminar encuestas en `/backoffice/polls`.
+  - Encuesta publica en `/encuestas/:slug` (ideal para link de Instagram).
+  - Opciones fijas (10 candidatos) en orden bloqueado para comparabilidad historica.
+  - Voto con proteccion anti-duplicado por hash de visitante e identificador por cookie.
+  - Resultados en vivo + grafico tipo pie con animacion y sonido de voto.
 
 ## Endpoints principales
 
@@ -48,6 +54,13 @@ Arquitectura:
 - `GET /api/home`
 - `GET /api/news`
 - `POST /api/admin/login`
+- `GET /api/polls`
+- `GET /api/polls/:slug`
+- `POST /api/polls/:slug/vote`
+- `GET /api/admin/polls`
+- `POST /api/admin/polls`
+- `PUT /api/admin/polls/:id`
+- `DELETE /api/admin/polls/:id`
 - `GET /api/admin/ai/context`
 - `POST /api/admin/ai/assist`
 - `POST /api/admin/ai/review`
@@ -141,6 +154,10 @@ IA editorial:
 - `AI_MODEL=qwen3`
 - `AI_TIMEOUT_MS=20000`
 - `EDITORIAL_GUIDELINES_PATH=./editorial/pulso-pais-linea-editorial.txt`
+
+Encuestas:
+
+- `POLL_VOTE_SECRET=...` (recomendado en produccion para hash de voto)
 
 ## Deploy backend en Render
 

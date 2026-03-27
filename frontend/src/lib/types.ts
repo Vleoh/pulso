@@ -104,3 +104,39 @@ export type HomePayload = {
     }>;
   };
 };
+
+export type PollStatus = "DRAFT" | "PUBLISHED";
+
+export type PollOptionResult = {
+  id: string;
+  label: string;
+  sortOrder: number;
+  colorHex: string;
+  emoji: string | null;
+  votes: number;
+  pct: number;
+};
+
+export type PollItem = {
+  id: string;
+  slug: string;
+  title: string;
+  question: string;
+  hookLabel: string;
+  footerCta: string;
+  description: string | null;
+  interviewUrl: string | null;
+  coverImageUrl: string | null;
+  startsAt: string | null;
+  endsAt: string | null;
+  publishedAt: string | null;
+  status: PollStatus;
+  isFeatured: boolean;
+  createdAt: string;
+  updatedAt: string;
+  metrics: {
+    totalVotes: number;
+    options: PollOptionResult[];
+    leader: PollOptionResult | null;
+  };
+};
