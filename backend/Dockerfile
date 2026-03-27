@@ -17,4 +17,4 @@ ENV NODE_ENV=production
 
 EXPOSE 8080
 
-CMD ["sh", "-c", "npx prisma migrate deploy || npx prisma db push; node dist/index.js"]
+CMD ["sh", "-c", "npx prisma db push --skip-generate && node dist/index.js"]

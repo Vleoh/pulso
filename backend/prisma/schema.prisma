@@ -4,11 +4,14 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+  schemas  = ["pulso"]
 }
 
 enum NewsStatus {
   DRAFT
   PUBLISHED
+
+  @@schema("pulso")
 }
 
 enum NewsSection {
@@ -22,12 +25,16 @@ enum NewsSection {
   ECONOMIA
   INTERNACIONALES
   DISTRITOS
+
+  @@schema("pulso")
 }
 
 enum AiDecision {
   ALLOW
   REVIEW
   REJECT
+
+  @@schema("pulso")
 }
 
 enum Province {
@@ -55,6 +62,8 @@ enum Province {
   SANTIAGO_DEL_ESTERO
   TIERRA_DEL_FUEGO
   TUCUMAN
+
+  @@schema("pulso")
 }
 
 model News {
@@ -92,6 +101,7 @@ model News {
   @@index([section, publishedAt])
   @@index([province, publishedAt])
   @@index([aiDecision, publishedAt])
+  @@schema("pulso")
 }
 
 model SiteSetting {
@@ -99,4 +109,6 @@ model SiteSetting {
   value     String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@schema("pulso")
 }
