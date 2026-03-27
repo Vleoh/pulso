@@ -1,0 +1,102 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum NewsStatus {
+  DRAFT
+  PUBLISHED
+}
+
+enum NewsSection {
+  NACION
+  PROVINCIAS
+  MUNICIPIOS
+  OPINION
+  ENTREVISTAS
+  PUBLINOTAS
+  RADAR_ELECTORAL
+  ECONOMIA
+  INTERNACIONALES
+  DISTRITOS
+}
+
+enum AiDecision {
+  ALLOW
+  REVIEW
+  REJECT
+}
+
+enum Province {
+  CABA
+  BUENOS_AIRES
+  CATAMARCA
+  CHACO
+  CHUBUT
+  CORDOBA
+  CORRIENTES
+  ENTRE_RIOS
+  FORMOSA
+  JUJUY
+  LA_PAMPA
+  LA_RIOJA
+  MENDOZA
+  MISIONES
+  NEUQUEN
+  RIO_NEGRO
+  SALTA
+  SAN_JUAN
+  SAN_LUIS
+  SANTA_CRUZ
+  SANTA_FE
+  SANTIAGO_DEL_ESTERO
+  TIERRA_DEL_FUEGO
+  TUCUMAN
+}
+
+model News {
+  id          String     @id @default(cuid())
+  slug        String     @unique
+  title       String
+  kicker      String?
+  excerpt     String?
+  body        String?
+  imageUrl    String?
+  sourceName  String?
+  sourceUrl   String?
+  authorName  String?
+  section     NewsSection
+  province    Province?
+  tags        String[]
+  isSponsored Boolean    @default(false)
+  isFeatured  Boolean    @default(false)
+  isHero      Boolean    @default(false)
+  isInterview Boolean    @default(false)
+  isOpinion   Boolean    @default(false)
+  isRadar     Boolean    @default(false)
+  status      NewsStatus @default(DRAFT)
+  aiDecision  AiDecision @default(REVIEW)
+  aiReason    String?
+  aiScore     Int?
+  aiWarnings  String[]
+  aiModel     String?
+  aiEvaluatedAt DateTime?
+  publishedAt DateTime?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  @@index([status, publishedAt])
+  @@index([section, publishedAt])
+  @@index([province, publishedAt])
+  @@index([aiDecision, publishedAt])
+}
+
+model SiteSetting {
+  key       String   @id
+  value     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}

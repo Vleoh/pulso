@@ -1,0 +1,53 @@
+import { type News, NewsSection } from "@prisma/client";
+import type { FeedItem } from "./types";
+
+export function guessSectionFromText(text: string): NewsSection {
+  const normalized = text.toLowerCase();
+  if (normalized.includes("eleccion") || normalized.includes("encuesta") || normalized.includes("candidato")) {
+    return NewsSection.RADAR_ELECTORAL;
+  }
+  if (normalized.includes("econom") || normalized.includes("dolar") || normalized.includes("inflacion")) {
+    return NewsSection.ECONOMIA;
+  }
+  if (normalized.includes("internacional") || normalized.includes("eeuu") || normalized.includes("brasil")) {
+    return NewsSection.INTERNACIONALES;
+  }
+  if (normalized.includes("municip")) {
+    return NewsSection.MUNICIPIOS;
+  }
+  if (normalized.includes("provincia")) {
+    return NewsSection.PROVINCIAS;
+  }
+  return NewsSection.NACION;
+}
+
+export function toFeedItem(news: News): FeedItem {
+  return {
+    id: news.id,
+    slug: news.slug,
+    title: news.title,
+    kicker: news.kicker,
+    excerpt: news.excerpt,
+    imageUrl: news.imageUrl,
+    sourceName: news.sourceName,
+    sourceUrl: news.sourceUrl,
+    section: news.section,
+    province: news.province,
+    publishedAt: (news.publishedAt ?? news.createdAt).toISOString(),
+    isSponsored: news.isSponsored,
+    isFeatured: news.isFeatured,
+    isExternal: false,
+  };
+}
+
+export function dedupeByKey(items: FeedItem[]): FeedItem[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const key = `${item.sourceUrl ?? item.slug ?? item.title}`.toLowerCase();
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}

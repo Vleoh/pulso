@@ -1,0 +1,65 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: pulso-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: pulso_pais
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pulso_postgres_data:/var/lib/postgresql/data
+
+  backend:
+    build:
+      context: ./backend
+    container_name: pulso-backend
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    env_file:
+      - ./backend/.env
+    environment:
+      NODE_ENV: production
+      PORT: 8080
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/pulso_pais?schema=public
+      CORS_ORIGINS: "*,http://localhost:3000,http://127.0.0.1:3000,https://*.vercel.app"
+      ADMIN_EMAIL: admin@pulsopais.local
+      ADMIN_PASSWORD: cambiar-este-password
+      ADMIN_JWT_SECRET: cambiar-este-jwt-secret
+      ADMIN_COOKIE_NAME: pulso_admin_session
+      AI_FILTER_ENABLED: "true"
+      AI_FILTER_ENFORCE: "true"
+      AI_PROVIDER_ORDER: gemini,ollama
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.0-flash}
+      AI_OLLAMA_URL: http://host.docker.internal:11434
+      AI_MODEL: qwen3
+      AI_TIMEOUT_MS: "30000"
+      EDITORIAL_GUIDELINES_PATH: ./editorial/pulso-pais-linea-editorial.txt
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8080:8080"
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8080
+        API_INTERNAL_URL: http://backend:8080
+        NEXT_PUBLIC_BACKOFFICE_URL: http://localhost:8080/backoffice
+    container_name: pulso-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8080
+      API_INTERNAL_URL: http://backend:8080
+      NEXT_PUBLIC_BACKOFFICE_URL: http://localhost:8080/backoffice
+    ports:
+      - "3000:3000"
+
+volumes:
+  pulso_postgres_data:
