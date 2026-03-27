@@ -126,18 +126,18 @@ function buildEditorialAssistInput(raw: Record<string, unknown>) {
 }
 
 app.set("trust proxy", 1);
-app.use(
-  cors({
-    origin(origin, callback) {
-      if (!origin || isOriginAllowed(origin)) {
-        callback(null, true);
-        return;
-      }
-      callback(new Error("Origen no permitido por CORS"));
-    },
-    credentials: true,
-  }),
-);
+const apiCors = cors({
+  origin(origin, callback) {
+    if (!origin || isOriginAllowed(origin)) {
+      callback(null, true);
+      return;
+    }
+    callback(new Error("Origen no permitido por CORS"));
+  },
+  credentials: true,
+});
+
+app.use("/api", apiCors);
 app.use(helmet({ crossOriginResourcePolicy: false }));
 app.use(morgan(IS_PRODUCTION ? "combined" : "dev"));
 app.use(express.json({ limit: "2mb" }));
