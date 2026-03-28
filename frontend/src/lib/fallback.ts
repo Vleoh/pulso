@@ -5,6 +5,11 @@ const now = new Date().toISOString();
 export const fallbackHomeData: HomePayload = {
   generatedAt: now,
   theme: "premium",
+  engagement: {
+    commentsEnabled: true,
+    reactionsEnabled: true,
+    analysisEnabled: true,
+  },
   ticker: [
     "Pulso Pais se prepara para cubrir el calendario electoral distrito por distrito.",
     "Radar Electoral: alianzas y estrategias en cada provincia.",

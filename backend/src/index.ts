@@ -37,7 +37,14 @@ import {
   type EditorialReview,
 } from "./editorialAi";
 import { buildAiNewsContext } from "./newsContextWrapper";
-import { getHomeTheme, HOME_THEME_OPTIONS, normalizeHomeTheme, setHomeTheme } from "./siteSettings";
+import {
+  getHomeEngagementSettings,
+  getHomeTheme,
+  HOME_THEME_OPTIONS,
+  normalizeHomeTheme,
+  setHomeEngagementSettings,
+  setHomeTheme,
+} from "./siteSettings";
 import {
   FIXED_CANDIDATE_OPTIONS,
   fixedCandidateTemplateForLabel,
@@ -1857,12 +1864,13 @@ app.get("/backoffice/ai/health", boGuard, async (_request, response, next) => {
 
 app.get("/backoffice", boGuard, async (request, response, next) => {
   try {
-    const [news, homeTheme, pollRows] = await Promise.all([
+    const [news, homeTheme, engagementSettings, pollRows] = await Promise.all([
       prisma.news.findMany({
         orderBy: [{ updatedAt: "desc" }],
         take: 300,
       }),
       getHomeTheme(prisma),
+      getHomeEngagementSettings(prisma),
       buildBackofficePollRows(),
     ]);
 
@@ -1913,6 +1921,27 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
           </div>
           <p style="margin:0; color:#8e8e8e; font-size:12px; line-height:1.4;">El tema <strong>Clasico Editorial</strong> replica una estetica tradicional. El tema <strong>Social Newsroom</strong> prioriza tarjetas consumibles, gadgets e interaccion de lectura constante.</p>
         </form>
+        <form method="post" action="/backoffice/settings/engagement" style="display:grid; gap:10px; margin-top:16px; max-width:760px;">
+          <label style="color:#cfcfcf; text-transform:uppercase; letter-spacing:.08em; font-size:12px; font-weight:600;">Interacciones del front (botones en cada noticia)</label>
+          <div class="checks" style="grid-template-columns:repeat(3,minmax(0,1fr));">
+            <label>
+              <input type="checkbox" name="commentsEnabled" ${engagementSettings.commentsEnabled ? "checked" : ""} />
+              Comentarios
+            </label>
+            <label>
+              <input type="checkbox" name="reactionsEnabled" ${engagementSettings.reactionsEnabled ? "checked" : ""} />
+              Reacciones
+            </label>
+            <label>
+              <input type="checkbox" name="analysisEnabled" ${engagementSettings.analysisEnabled ? "checked" : ""} />
+              Analisis
+            </label>
+          </div>
+          <div style="display:flex; gap:10px; flex-wrap:wrap;">
+            <button class="primary" type="submit">Guardar interacciones</button>
+          </div>
+          <p style="margin:0; color:#8e8e8e; font-size:12px; line-height:1.4;">Si desactivas un modulo, el front deja de mostrar ese boton en todas las tarjetas y portadas al refrescar.</p>
+        </form>
       </div>
       ${renderNewsTable(news)}
     </div>`;
@@ -1928,6 +1957,25 @@ app.post("/backoffice/settings/theme", boGuard, async (request, response, next) 
     const nextTheme = normalizeHomeTheme(readString(request.body.homeTheme));
     await setHomeTheme(prisma, nextTheme);
     response.redirect(`/backoffice?ok=${encodeURIComponent(`Tema de home actualizado: ${nextTheme}`)}`);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/backoffice/settings/engagement", boGuard, async (request, response, next) => {
+  try {
+    const settings = await setHomeEngagementSettings(prisma, {
+      commentsEnabled: readBoolean(request.body.commentsEnabled),
+      reactionsEnabled: readBoolean(request.body.reactionsEnabled),
+      analysisEnabled: readBoolean(request.body.analysisEnabled),
+    });
+    response.redirect(
+      `/backoffice?ok=${encodeURIComponent(
+        `Interacciones actualizadas - comentarios:${settings.commentsEnabled ? "ON" : "OFF"} reacciones:${
+          settings.reactionsEnabled ? "ON" : "OFF"
+        } analisis:${settings.analysisEnabled ? "ON" : "OFF"}`,
+      )}`,
+    );
   } catch (error) {
     next(error);
   }

@@ -1686,6 +1686,12 @@ a {
   color: #ffe07d;
 }
 
+.engagement-btn.is-comments {
+  border-color: #3a3a3a;
+  background: #151515;
+  color: #efefef;
+}
+
 .engagement-btn.is-analisis {
   border-color: #24455f;
   background: #101a22;

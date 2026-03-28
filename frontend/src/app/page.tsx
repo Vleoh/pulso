@@ -20,6 +20,12 @@ type IconName =
   | "map"
   | "trend";
 
+type EngagementControls = {
+  commentsEnabled: boolean;
+  reactionsEnabled: boolean;
+  analysisEnabled: boolean;
+};
+
 const SECTION_LABEL: Record<NewsSection, string> = {
   NACION: "Nacion",
   PROVINCIAS: "Provincias",
@@ -209,7 +215,7 @@ function iconBySection(section: NewsSection): IconName {
   }
 }
 
-function FeedCard({ item }: { item: FeedItem }) {
+function FeedCard({ item, engagementControls }: { item: FeedItem; engagementControls: EngagementControls }) {
   const headline = shortTitle(titleForDisplay(item), 110);
   return (
     <article className="mf-feed-card">
@@ -231,7 +237,7 @@ function FeedCard({ item }: { item: FeedItem }) {
           <span>{item.sourceName ?? "Pulso Pais"}</span>
           <span>{relativeMinutes(item.publishedAt)}</span>
         </div>
-        <EngagementBar itemId={item.id} title={headline} compact />
+        <EngagementBar itemId={item.id} title={headline} compact controls={engagementControls} />
       </div>
     </article>
   );
@@ -248,7 +254,15 @@ function countSections(items: FeedItem[]): NewsSection[] {
     .slice(0, 5);
 }
 
-function DesktopNewsCard({ item, compact = false }: { item: FeedItem; compact?: boolean }) {
+function DesktopNewsCard({
+  item,
+  compact = false,
+  engagementControls,
+}: {
+  item: FeedItem;
+  compact?: boolean;
+  engagementControls: EngagementControls;
+}) {
   const headline = titleForDisplay(item);
   return (
     <article className={`news-card ${compact ? "compact" : ""}`} data-section={item.section}>
@@ -270,7 +284,7 @@ function DesktopNewsCard({ item, compact = false }: { item: FeedItem; compact?: 
           <span>{item.sourceName ?? "Pulso Pais"}</span>
           <span>{formatDate(item.publishedAt)}</span>
         </div>
-        <EngagementBar itemId={item.id} title={headline} compact={compact} />
+        <EngagementBar itemId={item.id} title={headline} compact={compact} controls={engagementControls} />
       </div>
     </article>
   );
@@ -288,6 +302,7 @@ function DesktopHome({
   weatherLabel,
   markets,
   federal,
+  engagementControls,
 }: {
   hero: FeedItem | null;
   heroTitle: string;
@@ -300,6 +315,7 @@ function DesktopHome({
   weatherLabel: string;
   markets: Array<{ symbol: string; label: string; price: number | null; changePct: number | null; currency: string; trend: "up" | "down" | "flat" }>;
   federal: Array<{ province: string; headline: string; section: string }>;
+  engagementControls: EngagementControls;
 }) {
   const sideCards = stream.slice(0, 3);
   const quickRead = stream.slice(3, 9);
@@ -383,13 +399,13 @@ function DesktopHome({
                 <span>{hero.sourceName ?? "Pulso Pais"}</span>
                 <span>{formatDate(hero.publishedAt)}</span>
               </div>
-              <EngagementBar itemId={hero.id} title={heroTitle} />
+              <EngagementBar itemId={hero.id} title={heroTitle} controls={engagementControls} />
             </div>
           </article>
         )}
         <div className="hero-side">
           {sideCards.map((item) => (
-            <DesktopNewsCard key={item.id} item={item} compact />
+            <DesktopNewsCard key={item.id} item={item} compact engagementControls={engagementControls} />
           ))}
         </div>
       </section>
@@ -442,7 +458,7 @@ function DesktopHome({
           </div>
           <div className="list-grid">
             {radar.map((item) => (
-              <DesktopNewsCard key={item.id} item={item} compact />
+              <DesktopNewsCard key={item.id} item={item} compact engagementControls={engagementControls} />
             ))}
           </div>
         </article>
@@ -475,7 +491,7 @@ function DesktopHome({
           </div>
           <div className="social-feed-list">
             {quickRead.map((item) => (
-              <DesktopNewsCard key={item.id} item={item} compact />
+              <DesktopNewsCard key={item.id} item={item} compact engagementControls={engagementControls} />
             ))}
           </div>
         </article>
@@ -510,6 +526,11 @@ export default async function Home() {
   const visibleSections = countSections(sourceItems);
   const tickerItems = home.ticker.length > 0 ? home.ticker.slice(0, 6) : internalItems.slice(0, 6).map((item) => item.title);
   const heroTitle = hero ? titleForDisplay(hero) : "Pulso Pais en actualizacion permanente";
+  const engagementControls: EngagementControls = {
+    commentsEnabled: home.engagement?.commentsEnabled ?? true,
+    reactionsEnabled: home.engagement?.reactionsEnabled ?? true,
+    analysisEnabled: home.engagement?.analysisEnabled ?? true,
+  };
 
   return (
     <>
@@ -573,7 +594,7 @@ export default async function Home() {
                     <span>{hero?.sourceName ?? "Pulso Pais"}</span>
                     <span>{hero ? formatDate(hero.publishedAt) : formatDate(home.generatedAt)}</span>
                   </div>
-                  {hero && <EngagementBar itemId={hero.id} title={heroTitle} />}
+                  {hero && <EngagementBar itemId={hero.id} title={heroTitle} controls={engagementControls} />}
                 </div>
               </article>
 
@@ -584,7 +605,7 @@ export default async function Home() {
                 </div>
                 <div className="mf-card-list">
                   {stream.map((item) => (
-                    <FeedCard key={item.id} item={item} />
+                    <FeedCard key={item.id} item={item} engagementControls={engagementControls} />
                   ))}
                 </div>
               </section>
@@ -669,6 +690,7 @@ export default async function Home() {
           weatherLabel={`${home.social.weather.location} · ${home.social.weather.temperatureC ?? "--"} C`}
           markets={home.social.markets}
           federal={home.federalHighlights}
+          engagementControls={engagementControls}
         />
       </div>
     </>

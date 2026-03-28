@@ -3,7 +3,7 @@ import { PROVINCE_OPTIONS, sectionLabel } from "./catalog";
 import { getExternalNews } from "./externalNews";
 import { dedupeByKey, toFeedItem } from "./feed";
 import type { HomePayload } from "./types";
-import { getHomeTheme } from "./siteSettings";
+import { getHomeEngagementSettings, getHomeTheme } from "./siteSettings";
 import { getSignalData } from "./signalData";
 
 function daysAgo(date: Date): number {
@@ -29,7 +29,7 @@ function compactTopic(input: string): string {
 }
 
 export async function buildHomePayload(prisma: PrismaClient): Promise<HomePayload> {
-  const [internalNews, externalNews, theme, signalData] = await Promise.all([
+  const [internalNews, externalNews, theme, engagement, signalData] = await Promise.all([
     prisma.news.findMany({
       where: {
         status: NewsStatus.PUBLISHED,
@@ -39,6 +39,7 @@ export async function buildHomePayload(prisma: PrismaClient): Promise<HomePayloa
     }),
     getExternalNews(),
     getHomeTheme(prisma),
+    getHomeEngagementSettings(prisma),
     getSignalData(),
   ]);
 
@@ -153,6 +154,7 @@ export async function buildHomePayload(prisma: PrismaClient): Promise<HomePayloa
   return {
     generatedAt: new Date().toISOString(),
     theme,
+    engagement,
     ticker,
     hero,
     secondary,

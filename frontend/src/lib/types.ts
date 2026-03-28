@@ -30,6 +30,11 @@ export type FeedItem = {
 export type HomePayload = {
   generatedAt: string;
   theme: "premium" | "classic" | "social" | "editorial";
+  engagement: {
+    commentsEnabled: boolean;
+    reactionsEnabled: boolean;
+    analysisEnabled: boolean;
+  };
   ticker: string[];
   hero: FeedItem | null;
   secondary: FeedItem[];
