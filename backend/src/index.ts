@@ -6,16 +6,19 @@ import cors from "cors";
 import express, { type NextFunction, type Request, type Response } from "express";
 import helmet from "helmet";
 import morgan from "morgan";
-import { type Poll, type Prisma, NewsStatus, PollStatus } from "@prisma/client";
+import { type Poll, type Prisma, NewsStatus, PollStatus, UserPlan } from "@prisma/client";
 import { adminApiGuard, backofficeGuard, extractAdminToken, signAdminToken, verifyAdminToken } from "./auth";
 import {
   backofficeShell,
+  type BackofficeUserListItem,
   renderIaLab,
   renderLogin,
   renderNewsForm,
   renderNewsTable,
   renderPollForm,
   renderPollTable,
+  renderUserForm,
+  renderUsersTable,
   type BackofficePollListItem,
 } from "./backofficeViews";
 import { buildHomePayload } from "./homePayload";
@@ -46,6 +49,18 @@ import {
   type PollReasonPublic,
   toPollPublicView,
 } from "./polls";
+import {
+  assertValidUserEmail,
+  assertValidUserPassword,
+  createUserSessionToken,
+  hashUserPassword,
+  hashUserSessionToken,
+  normalizeDisplayName,
+  normalizeUserEmail,
+  normalizeUserPlanInput,
+  toPublicUser,
+  verifyUserPassword,
+} from "./users";
 const app = express();
 
 const PORT = Number(process.env.PORT ?? 8080);
@@ -56,6 +71,9 @@ const ADMIN_EMAIL = process.env.ADMIN_EMAIL ?? "admin@pulsopais.local";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "cambiar-este-password";
 const ADMIN_JWT_SECRET = process.env.ADMIN_JWT_SECRET ?? "pulso-pais-admin-secret";
 const ADMIN_COOKIE_NAME = process.env.ADMIN_COOKIE_NAME ?? "pulso_admin_session";
+const USER_SESSION_COOKIE_NAME = process.env.USER_SESSION_COOKIE_NAME ?? "pulso_user_session";
+const USER_SESSION_SECRET = process.env.USER_SESSION_SECRET ?? `${ADMIN_JWT_SECRET}-users`;
+const USER_SESSION_HOURS = Math.max(1, Math.min(24 * 90, Number(process.env.USER_SESSION_HOURS ?? 24 * 30)));
 const FALLBACK_FRONTEND_PUBLIC_URL = IS_PRODUCTION ? "https://pulso-pais.vercel.app" : "http://localhost:3000";
 const FRONTEND_PUBLIC_URL =
   process.env.FRONTEND_PUBLIC_URL ?? process.env.NEXT_PUBLIC_FRONTEND_URL ?? process.env.VERCEL_URL ?? FALLBACK_FRONTEND_PUBLIC_URL;
@@ -207,6 +225,104 @@ function buildVoterHash(request: Request, pollId: string): string {
   const userAgent = request.headers["user-agent"] ?? "unknown";
   const raw = `${pollId}|${ip}|${userAgent}|${POLL_VOTE_SECRET}`;
   return crypto.createHash("sha256").update(raw).digest("hex");
+}
+
+function userSessionCookieSameSite(): "none" | "lax" {
+  return IS_PRODUCTION ? "none" : "lax";
+}
+
+function setUserSessionCookie(response: Response, token: string, expiresAt: Date): void {
+  response.cookie(USER_SESSION_COOKIE_NAME, token, {
+    httpOnly: true,
+    sameSite: userSessionCookieSameSite(),
+    secure: IS_PRODUCTION,
+    expires: expiresAt,
+  });
+}
+
+function clearUserSessionCookie(response: Response): void {
+  response.clearCookie(USER_SESSION_COOKIE_NAME, {
+    httpOnly: true,
+    sameSite: userSessionCookieSameSite(),
+    secure: IS_PRODUCTION,
+  });
+}
+
+async function issueUserSession(userId: string, response: Response): Promise<{ token: string; expiresAt: Date }> {
+  const token = createUserSessionToken();
+  const tokenHash = hashUserSessionToken(token, USER_SESSION_SECRET);
+  const expiresAt = new Date(Date.now() + USER_SESSION_HOURS * 60 * 60 * 1000);
+
+  await prisma.userSession.create({
+    data: {
+      userId,
+      tokenHash,
+      expiresAt,
+    },
+  });
+
+  setUserSessionCookie(response, token, expiresAt);
+  return { token, expiresAt };
+}
+
+type AuthenticatedUserSession = {
+  token: string;
+  tokenHash: string;
+  sessionId: string;
+  expiresAt: Date;
+  user: {
+    id: string;
+    email: string;
+    displayName: string | null;
+    plan: UserPlan;
+    isActive: boolean;
+    createdAt: Date;
+    updatedAt: Date;
+    lastLoginAt: Date | null;
+  };
+};
+
+async function getAuthenticatedUserSession(request: Request): Promise<AuthenticatedUserSession | null> {
+  const token = extractAdminToken(request, USER_SESSION_COOKIE_NAME);
+  if (!token) {
+    return null;
+  }
+
+  const tokenHash = hashUserSessionToken(token, USER_SESSION_SECRET);
+  const session = await prisma.userSession.findUnique({
+    where: { tokenHash },
+    include: {
+      user: {
+        select: {
+          id: true,
+          email: true,
+          displayName: true,
+          plan: true,
+          isActive: true,
+          createdAt: true,
+          updatedAt: true,
+          lastLoginAt: true,
+        },
+      },
+    },
+  });
+
+  if (!session) {
+    return null;
+  }
+
+  if (session.expiresAt.getTime() <= Date.now() || !session.user.isActive) {
+    await prisma.userSession.deleteMany({ where: { id: session.id } });
+    return null;
+  }
+
+  return {
+    token,
+    tokenHash,
+    sessionId: session.id,
+    expiresAt: session.expiresAt,
+    user: session.user,
+  };
 }
 
 async function getPollVoteCountMap(pollId: string): Promise<Map<string, number>> {
@@ -410,6 +526,35 @@ async function buildBackofficePollRows(): Promise<BackofficePollListItem[]> {
       leaderLabel: snapshot.leader?.label ?? null,
     };
   });
+}
+
+async function buildBackofficeUserRows(): Promise<BackofficeUserListItem[]> {
+  const users = await prisma.user.findMany({
+    orderBy: [{ createdAt: "desc" }],
+    include: {
+      _count: {
+        select: {
+          sessions: {
+            where: {
+              expiresAt: { gt: new Date() },
+            },
+          },
+        },
+      },
+    },
+    take: 600,
+  });
+
+  return users.map((user) => ({
+    id: user.id,
+    email: user.email,
+    displayName: user.displayName,
+    plan: user.plan,
+    isActive: user.isActive,
+    createdAt: user.createdAt,
+    lastLoginAt: user.lastLoginAt,
+    activeSessions: user._count.sessions,
+  }));
 }
 
 function normalizedFrontendBaseUrl(): string {
@@ -787,6 +932,155 @@ app.post("/api/polls/:slug/reason", async (request, response, next) => {
   }
 });
 
+app.get("/api/auth/plans", (_request, response) => {
+  response.json({
+    default: UserPlan.FREE,
+    items: Object.values(UserPlan),
+  });
+});
+
+app.post("/api/auth/register", async (request, response, next) => {
+  try {
+    const email = normalizeUserEmail(request.body.email);
+    const password = readString(request.body.password);
+    const displayName = normalizeDisplayName(request.body.displayName);
+
+    assertValidUserEmail(email);
+    assertValidUserPassword(password);
+
+    const passwordHash = await hashUserPassword(password);
+    const created = await prisma.user.create({
+      data: {
+        email,
+        displayName,
+        passwordHash,
+        plan: UserPlan.FREE,
+      },
+      select: {
+        id: true,
+        email: true,
+        displayName: true,
+        plan: true,
+        isActive: true,
+        createdAt: true,
+        updatedAt: true,
+        lastLoginAt: true,
+      },
+    });
+
+    const { token, expiresAt } = await issueUserSession(created.id, response);
+    response.status(201).json({
+      item: toPublicUser(created),
+      token,
+      expiresAt: expiresAt.toISOString(),
+      defaultPlan: UserPlan.FREE,
+    });
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && (error as { code?: string }).code === "P2002") {
+      response.status(409).json({ error: "Ya existe un usuario con ese email." });
+      return;
+    }
+    next(error);
+  }
+});
+
+app.post("/api/auth/login", async (request, response, next) => {
+  try {
+    const email = normalizeUserEmail(request.body.email);
+    const password = readString(request.body.password);
+
+    assertValidUserEmail(email);
+    if (!password) {
+      response.status(400).json({ error: "Password requerida." });
+      return;
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { email },
+      select: {
+        id: true,
+        email: true,
+        displayName: true,
+        plan: true,
+        isActive: true,
+        createdAt: true,
+        updatedAt: true,
+        lastLoginAt: true,
+        passwordHash: true,
+      },
+    });
+
+    if (!user || !user.isActive) {
+      response.status(401).json({ error: "Credenciales invalidas." });
+      return;
+    }
+
+    const valid = await verifyUserPassword(password, user.passwordHash);
+    if (!valid) {
+      response.status(401).json({ error: "Credenciales invalidas." });
+      return;
+    }
+
+    const now = new Date();
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { lastLoginAt: now },
+    });
+
+    await prisma.userSession.deleteMany({
+      where: {
+        userId: user.id,
+        expiresAt: { lte: now },
+      },
+    });
+
+    const { token, expiresAt } = await issueUserSession(user.id, response);
+    response.json({
+      item: toPublicUser({ ...user, lastLoginAt: now }),
+      token,
+      expiresAt: expiresAt.toISOString(),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/auth/me", async (request, response, next) => {
+  try {
+    const auth = await getAuthenticatedUserSession(request);
+    if (!auth) {
+      response.status(401).json({ error: "No autenticado." });
+      return;
+    }
+
+    response.json({
+      item: toPublicUser(auth.user),
+      session: {
+        expiresAt: auth.expiresAt.toISOString(),
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/auth/logout", async (request, response, next) => {
+  try {
+    const auth = await getAuthenticatedUserSession(request);
+    if (auth) {
+      await prisma.userSession.deleteMany({
+        where: {
+          id: auth.sessionId,
+        },
+      });
+    }
+    clearUserSessionCookie(response);
+    response.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/admin/login", (request, response) => {
   const email = readString(request.body.email).toLowerCase();
   const password = readString(request.body.password);
@@ -811,6 +1105,61 @@ app.post("/api/admin/login", (request, response) => {
 });
 
 const apiGuard = adminApiGuard(ADMIN_JWT_SECRET, ADMIN_COOKIE_NAME);
+
+app.get("/api/admin/users", apiGuard, async (_request, response, next) => {
+  try {
+    const now = new Date();
+    const users = await prisma.user.findMany({
+      orderBy: [{ createdAt: "desc" }],
+      include: {
+        sessions: {
+          where: { expiresAt: { gt: now } },
+          select: { id: true },
+        },
+      },
+      take: 600,
+    });
+
+    response.json({
+      items: users.map((user) => ({
+        item: toPublicUser(user),
+        activeSessions: user.sessions.length,
+      })),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/admin/users/:id/plan", apiGuard, async (request, response, next) => {
+  try {
+    const id = readString(request.params.id);
+    if (!id) {
+      response.status(400).json({ error: "ID invalido." });
+      return;
+    }
+
+    const nextPlan = normalizeUserPlanInput(request.body.plan, UserPlan.FREE);
+    const updated = await prisma.user.update({
+      where: { id },
+      data: { plan: nextPlan },
+      select: {
+        id: true,
+        email: true,
+        displayName: true,
+        plan: true,
+        isActive: true,
+        createdAt: true,
+        updatedAt: true,
+        lastLoginAt: true,
+      },
+    });
+
+    response.json({ item: toPublicUser(updated) });
+  } catch (error) {
+    next(error);
+  }
+});
 
 app.get("/api/admin/polls", apiGuard, async (_request, response, next) => {
   try {
@@ -1405,6 +1754,115 @@ app.get("/backoffice/polls", boGuard, async (request, response, next) => {
       ${renderPollTable(rows)}
     </div>`;
     response.send(backofficeShell("Encuestas", body, readString(request.query.ok)));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/backoffice/users", boGuard, async (request, response, next) => {
+  try {
+    const rows = await buildBackofficeUserRows();
+    const total = rows.length;
+    const freeCount = rows.filter((user) => user.plan === UserPlan.FREE).length;
+    const premiumCount = rows.filter((user) => user.plan === UserPlan.PREMIUM).length;
+
+    const body = `<div class="grid">
+      <div class="card">
+        <div class="split-title" style="margin-bottom:8px;">
+          <h3>Sistema de usuarios</h3>
+          <a class="button primary" href="/backoffice/users/new">Nuevo usuario</a>
+        </div>
+        <p class="muted" style="margin-bottom:10px;">Los registros publicos nuevos entran por defecto en <strong>FREE</strong>. Desde este modulo puedes escalar cuentas a <strong>PREMIUM</strong>.</p>
+        <div style="display:grid; gap:10px; grid-template-columns:repeat(3,minmax(0,1fr));">
+          <div style="border:1px solid #2d2d2d; border-radius:10px; padding:10px; background:#121212;"><p style="margin:0; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:#a5a5a5;">Usuarios</p><strong style="font-size:28px; font-family:inherit;">${total}</strong></div>
+          <div style="border:1px solid #3b4429; border-radius:10px; padding:10px; background:#13180f;"><p style="margin:0; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:#d3e0b2;">Plan FREE</p><strong style="font-size:28px; font-family:inherit;">${freeCount}</strong></div>
+          <div style="border:1px solid #574823; border-radius:10px; padding:10px; background:#1f1a0f;"><p style="margin:0; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:#f3dc9f;">Plan PREMIUM</p><strong style="font-size:28px; font-family:inherit;">${premiumCount}</strong></div>
+        </div>
+      </div>
+      ${renderUsersTable(rows)}
+    </div>`;
+
+    response.send(backofficeShell("Usuarios", body, readString(request.query.ok)));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/backoffice/users/new", boGuard, (_request, response) => {
+  response.send(renderUserForm({ action: "/backoffice/users" }));
+});
+
+app.post("/backoffice/users", boGuard, async (request, response, next) => {
+  try {
+    const email = normalizeUserEmail(request.body.email);
+    const password = readString(request.body.password);
+    const displayName = normalizeDisplayName(request.body.displayName);
+    const selectedPlan = normalizeUserPlanInput(request.body.plan, UserPlan.FREE);
+
+    assertValidUserEmail(email);
+    assertValidUserPassword(password);
+
+    const passwordHash = await hashUserPassword(password);
+    await prisma.user.create({
+      data: {
+        email,
+        passwordHash,
+        displayName,
+        plan: selectedPlan,
+      },
+    });
+
+    response.redirect(`/backoffice/users?ok=${encodeURIComponent(`Usuario creado: ${email} (${selectedPlan})`)}`);
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && (error as { code?: string }).code === "P2002") {
+      response.status(409).send(
+        renderUserForm({
+          action: "/backoffice/users",
+          error: "Ya existe un usuario con ese email.",
+          data: {
+            email: readString(request.body.email),
+            displayName: readString(request.body.displayName),
+            plan: normalizeUserPlanInput(request.body.plan, UserPlan.FREE),
+          },
+        }),
+      );
+      return;
+    }
+
+    if (error instanceof Error) {
+      response.status(400).send(
+        renderUserForm({
+          action: "/backoffice/users",
+          error: error.message,
+          data: {
+            email: readString(request.body.email),
+            displayName: readString(request.body.displayName),
+            plan: normalizeUserPlanInput(request.body.plan, UserPlan.FREE),
+          },
+        }),
+      );
+      return;
+    }
+
+    next(error);
+  }
+});
+
+app.post("/backoffice/users/:id/plan", boGuard, async (request, response, next) => {
+  try {
+    const id = readString(request.params.id);
+    if (!id) {
+      response.status(400).send(backofficeShell("Error", `<div class="card">ID invalido.</div>`));
+      return;
+    }
+
+    const nextPlan = normalizeUserPlanInput(request.body.plan, UserPlan.FREE);
+    await prisma.user.update({
+      where: { id },
+      data: { plan: nextPlan },
+    });
+
+    response.redirect(`/backoffice/users?ok=${encodeURIComponent(`Plan actualizado a ${nextPlan}`)}`);
   } catch (error) {
     next(error);
   }

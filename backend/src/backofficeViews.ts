@@ -1,4 +1,4 @@
-import { type News, NewsStatus, type Poll, PollStatus, type Province } from "@prisma/client";
+import { type News, NewsStatus, type Poll, PollStatus, type Province, UserPlan } from "@prisma/client";
 import { PROVINCE_OPTIONS, SECTION_OPTIONS, provinceLabel, sectionLabel } from "./catalog";
 import { escapeHtml } from "./utils";
 
@@ -147,6 +147,7 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
         <a href="/backoffice"><span>Panel</span></a>
         <a href="/backoffice/news/new"><span>Nueva Nota</span></a>
         <a href="/backoffice/polls"><span>Encuestas</span></a>
+        <a href="/backoffice/users"><span>Usuarios</span></a>
         <a href="/backoffice#theme-control"><span>Temas</span></a>
         <a href="/backoffice/ia-lab"><span>IA Lab</span></a>
         <a href="/backoffice/ai/context" target="_blank" rel="noreferrer"><span>Wrapper IA</span></a>
@@ -168,6 +169,7 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
             <a class="button" href="/backoffice">Panel</a>
             <a class="button" href="/backoffice/news/new">Nueva Nota</a>
             <a class="button" href="/backoffice/polls">Encuestas</a>
+            <a class="button" href="/backoffice/users">Usuarios</a>
             <a class="button" href="/backoffice/logout">Cerrar Sesion</a>
           </div>
         </header>
@@ -1199,6 +1201,163 @@ export type BackofficePollListItem = {
   totalVotes: number;
   leaderLabel: string | null;
 };
+
+export type BackofficeUserListItem = {
+  id: string;
+  email: string;
+  displayName: string | null;
+  plan: UserPlan;
+  isActive: boolean;
+  createdAt: Date;
+  lastLoginAt: Date | null;
+  activeSessions: number;
+};
+
+export function renderUsersTable(items: BackofficeUserListItem[]): string {
+  const rows = items
+    .map((item) => {
+      const createdAt = new Date(item.createdAt).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" });
+      const lastLoginAt = item.lastLoginAt
+        ? new Date(item.lastLoginAt).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" })
+        : "-";
+      const searchIndex = escapeHtml(`${item.email} ${item.displayName ?? ""} ${item.plan}`.toLowerCase());
+
+      return `<tr data-user-row data-plan="${item.plan}" data-search="${searchIndex}">
+        <td>
+          <div class="title">${escapeHtml(item.email)}</div>
+          <div class="meta">
+            ${item.displayName ? `<span class="pill">${escapeHtml(item.displayName)}</span>` : ""}
+            <span class="pill ${item.isActive ? "live" : "draft"}">${item.isActive ? "Activo" : "Inactivo"}</span>
+          </div>
+        </td>
+        <td>${escapeHtml(item.plan)}</td>
+        <td>${escapeHtml(String(item.activeSessions))}</td>
+        <td>${escapeHtml(createdAt)}</td>
+        <td>${escapeHtml(lastLoginAt)}</td>
+        <td>
+          <form method="post" action="/backoffice/users/${item.id}/plan" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <select name="plan" style="max-width:130px;">
+              <option value="FREE" ${item.plan === UserPlan.FREE ? "selected" : ""}>FREE</option>
+              <option value="PREMIUM" ${item.plan === UserPlan.PREMIUM ? "selected" : ""}>PREMIUM</option>
+            </select>
+            <button type="submit">Actualizar plan</button>
+          </form>
+        </td>
+      </tr>`;
+    })
+    .join("\n");
+
+  return `<div class="card">
+    <div class="split-title" style="margin-bottom:10px;">
+      <h3>Usuarios registrados</h3>
+      <a class="button primary" href="/backoffice/users/new">Nuevo usuario</a>
+    </div>
+    <div class="table-tools">
+      <input id="userFilterInput" placeholder="Buscar por email o nombre..." />
+      <select id="userPlanFilter">
+        <option value="">Todos los planes</option>
+        <option value="FREE">FREE</option>
+        <option value="PREMIUM">PREMIUM</option>
+      </select>
+      <span class="table-count" id="userRowCount">${items.length} items</span>
+    </div>
+    <table class="news-table">
+      <thead>
+        <tr>
+          <th>Usuario</th>
+          <th>Plan</th>
+          <th>Sesiones</th>
+          <th>Alta</th>
+          <th>Ultimo login</th>
+          <th>Acciones</th>
+        </tr>
+      </thead>
+      <tbody>${rows || `<tr><td colspan="6"><div class="muted">No hay usuarios registrados todavia.</div></td></tr>`}</tbody>
+    </table>
+    <script>
+      (function () {
+        const rows = Array.from(document.querySelectorAll("[data-user-row]"));
+        const input = document.getElementById("userFilterInput");
+        const planFilter = document.getElementById("userPlanFilter");
+        const count = document.getElementById("userRowCount");
+        if (!rows.length || !input || !planFilter || !count) {
+          return;
+        }
+
+        function refresh() {
+          const query = (input.value || "").toLowerCase().trim();
+          const plan = planFilter.value || "";
+          let visible = 0;
+          rows.forEach(function (row) {
+            const rowQuery = (row.getAttribute("data-search") || "").toLowerCase();
+            const rowPlan = row.getAttribute("data-plan") || "";
+            const matchQuery = !query || rowQuery.includes(query);
+            const matchPlan = !plan || plan === rowPlan;
+            const show = matchQuery && matchPlan;
+            row.style.display = show ? "" : "none";
+            if (show) {
+              visible += 1;
+            }
+          });
+          count.textContent = visible + " items visibles";
+        }
+
+        input.addEventListener("input", refresh);
+        planFilter.addEventListener("change", refresh);
+      })();
+    </script>
+  </div>`;
+}
+
+export function renderUserForm(params: { action: string; error?: string; data?: Partial<{ email: string; displayName: string; plan: UserPlan }> }): string {
+  const { action, error, data } = params;
+  const selectedPlan = data?.plan ?? UserPlan.FREE;
+  const emailValue = data?.email ? escapeHtml(data.email) : "";
+  const displayNameValue = data?.displayName ? escapeHtml(data.displayName) : "";
+
+  return backofficeShell(
+    "Nuevo usuario",
+    `<div class="grid">
+      <div class="card">
+        <div class="split-title" style="margin-bottom:8px;">
+          <h3>Alta de usuario</h3>
+          <span class="mini-tag">Planes FREE / PREMIUM</span>
+        </div>
+        <p class="muted" style="margin-bottom:14px;">Todo usuario nuevo se crea por defecto como <strong>FREE</strong>. Luego puedes cambiar a <strong>PREMIUM</strong> desde el listado.</p>
+        ${error ? `<div class="error">${escapeHtml(error)}</div>` : ""}
+        <form method="post" action="${escapeHtml(action)}">
+          <div class="cols-2">
+            <div class="field">
+              <label>Email</label>
+              <input type="email" name="email" required value="${emailValue}" placeholder="usuario@dominio.com" />
+            </div>
+            <div class="field">
+              <label>Nombre visible</label>
+              <input type="text" name="displayName" value="${displayNameValue}" placeholder="Nombre opcional" />
+            </div>
+          </div>
+          <div class="cols-2">
+            <div class="field">
+              <label>Password inicial</label>
+              <input type="password" name="password" required minlength="8" maxlength="120" placeholder="Minimo 8 caracteres" />
+            </div>
+            <div class="field">
+              <label>Plan inicial</label>
+              <select name="plan">
+                <option value="FREE" ${selectedPlan === UserPlan.FREE ? "selected" : ""}>FREE (default)</option>
+                <option value="PREMIUM" ${selectedPlan === UserPlan.PREMIUM ? "selected" : ""}>PREMIUM</option>
+              </select>
+            </div>
+          </div>
+          <div class="actions">
+            <button class="primary" type="submit">Crear usuario</button>
+            <a class="button" href="/backoffice/users">Volver</a>
+          </div>
+        </form>
+      </div>
+    </div>`,
+  );
+}
 
 export function renderPollTable(items: BackofficePollListItem[]): string {
   if (items.length === 0) {
