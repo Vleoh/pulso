@@ -25,12 +25,14 @@ import { buildHomePayload } from "./homePayload";
 import { ensureUniqueSlug, normalizeNewsInput } from "./newsInput";
 import { toFeedItem, dedupeByKey } from "./feed";
 import { getExternalNews } from "./externalNews";
+import { PROVINCE_OPTIONS, SECTION_OPTIONS } from "./catalog";
 import { asNullable, isNewsSection, isNewsStatus, isPollStatus, isProvince, readString, readBoolean } from "./utils";
 import { prisma } from "./prismaClient";
 import {
   applyEditorialSuggestions,
   askEditorialWithAi,
   evaluateEditorialWithAi,
+  generateBatchDraftsWithAi,
   generatePollDraftWithAi,
   generateDraftWithAi,
   getEditorialAiHealth,
@@ -96,6 +98,14 @@ const CORS_ORIGINS = (process.env.CORS_ORIGINS ?? "*,http://localhost:3000,http:
   .split(",")
   .map((origin) => origin.trim())
   .filter(Boolean);
+const BATCH_NEWS_FALLBACK_IMAGES = [
+  "https://images.unsplash.com/photo-1494526585095-c41746248156?auto=format&fit=crop&w=1600&q=80",
+  "https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?auto=format&fit=crop&w=1600&q=80",
+  "https://images.unsplash.com/photo-1454165804606-c3d57bc86b40?auto=format&fit=crop&w=1600&q=80",
+  "https://images.unsplash.com/photo-1444653389962-8149286c578a?auto=format&fit=crop&w=1600&q=80",
+  "https://images.unsplash.com/photo-1504711331083-9c895941bf81?auto=format&fit=crop&w=1600&q=80",
+  "https://images.unsplash.com/photo-1464207687429-7505649dae38?auto=format&fit=crop&w=1600&q=80",
+];
 
 function wildcardToRegExp(pattern: string): RegExp {
   const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
@@ -297,6 +307,21 @@ function isAuthRateLimited(request: Request, routeName: string): boolean {
 
 function clearAuthRateLimitBucket(request: Request, routeName: string): void {
   authAttemptBuckets.delete(authRateLimitKey(request, routeName));
+}
+
+function clampInteger(rawValue: unknown, min: number, max: number, fallback: number): number {
+  const source = typeof rawValue === "number" ? rawValue : Number(readString(rawValue));
+  if (!Number.isFinite(source)) {
+    return fallback;
+  }
+  return Math.max(min, Math.min(max, Math.floor(source)));
+}
+
+function fallbackBatchImageByIndex(index: number): string {
+  if (BATCH_NEWS_FALLBACK_IMAGES.length === 0) {
+    return "";
+  }
+  return BATCH_NEWS_FALLBACK_IMAGES[Math.abs(index) % BATCH_NEWS_FALLBACK_IMAGES.length] || BATCH_NEWS_FALLBACK_IMAGES[0] || "";
 }
 
 async function issueUserSession(userId: string, response: Response): Promise<{ expiresAt: Date }> {
@@ -615,6 +640,176 @@ function normalizedFrontendBaseUrl(): string {
 
 function pollPublicUrl(slug: string): string {
   return `${normalizedFrontendBaseUrl().replace(/\/+$/, "")}/encuestas/${slug}`;
+}
+
+type BatchNewsFormState = {
+  totalItems: number;
+  campaignPercent: number;
+  campaignTopic: string;
+  generalBrief: string;
+  publishStatus: NewsStatus;
+  sectionHint: string;
+  provinceHint: string;
+  requireImageUrl: boolean;
+  defaultSourceName: string;
+  defaultAuthorName: string;
+  defaultSourceUrl: string;
+};
+
+function defaultBatchNewsFormState(): BatchNewsFormState {
+  return {
+    totalItems: 20,
+    campaignPercent: 30,
+    campaignTopic: "",
+    generalBrief: "",
+    publishStatus: NewsStatus.DRAFT,
+    sectionHint: "",
+    provinceHint: "",
+    requireImageUrl: true,
+    defaultSourceName: "Pulso Pais IA",
+    defaultAuthorName: "Redaccion Pulso Pais",
+    defaultSourceUrl: "",
+  };
+}
+
+function renderBatchNewsForm(params: { state?: Partial<BatchNewsFormState>; error?: string; summary?: string }): string {
+  const current = { ...defaultBatchNewsFormState(), ...(params.state ?? {}) };
+  const error = params.error ? `<div class="error">${currentErrorSafe(params.error)}</div>` : "";
+  const summary = params.summary
+    ? `<div class="flash"><strong>Resumen IA:</strong> ${currentErrorSafe(params.summary)}</div>`
+    : "";
+  const sectionOptions = [
+    `<option value="">Sin forzar (IA decide)</option>`,
+    ...SECTION_OPTIONS.map(
+      (option) =>
+        `<option value="${option.value}" ${current.sectionHint === option.value ? "selected" : ""}>${option.label}</option>`,
+    ),
+  ].join("");
+  const provinceOptions = [
+    `<option value="">Sin forzar (IA decide)</option>`,
+    ...PROVINCE_OPTIONS.map(
+      (option) =>
+        `<option value="${option.value}" ${current.provinceHint === option.value ? "selected" : ""}>${option.label}</option>`,
+    ),
+  ].join("");
+
+  return backofficeShell(
+    "Noticias en lote",
+    `<div class="grid">
+      <div class="card">
+        <div class="split-title">
+          <h3>Noticias en lote con IA</h3>
+          <span class="mini-tag">Batch CMS</span>
+        </div>
+        <p style="margin:0; color:#a9a9a9; line-height:1.5;">
+          Crea muchas noticias en una sola corrida IA. Puedes forzar porcentaje de campaña (ej. 30%) y completar el resto con agenda general.
+        </p>
+        ${error}
+        ${summary}
+        <form method="post" action="/backoffice/news/batch" style="margin-top:14px;">
+          <div class="cols-2">
+            <div class="field">
+              <label for="totalItems">Cantidad total</label>
+              <input id="totalItems" name="totalItems" type="number" min="1" max="40" value="${current.totalItems}" required />
+            </div>
+            <div class="field">
+              <label for="campaignPercent">Porcentaje campaña (%)</label>
+              <input id="campaignPercent" name="campaignPercent" type="number" min="0" max="100" value="${current.campaignPercent}" required />
+              <p id="batchSplit" class="hint"></p>
+            </div>
+          </div>
+          <div class="field">
+            <label for="campaignTopic">Tema de campaña (bloque estratégico)</label>
+            <textarea id="campaignTopic" name="campaignTopic" rows="3" placeholder="Ej: cierre de alianzas y armados seccionales en PBA para 2027." required>${currentErrorSafe(
+              current.campaignTopic,
+            )}</textarea>
+          </div>
+          <div class="field">
+            <label for="generalBrief">Brief general para el resto de noticias</label>
+            <textarea id="generalBrief" name="generalBrief" rows="4" placeholder="Ej: agenda nacional, económica, provincias clave, municipios y radar electoral de la semana." required>${currentErrorSafe(
+              current.generalBrief,
+            )}</textarea>
+          </div>
+          <div class="cols-2">
+            <div class="field">
+              <label for="publishStatus">Estado de publicación</label>
+              <select id="publishStatus" name="publishStatus">
+                <option value="DRAFT" ${current.publishStatus === NewsStatus.DRAFT ? "selected" : ""}>DRAFT</option>
+                <option value="PUBLISHED" ${current.publishStatus === NewsStatus.PUBLISHED ? "selected" : ""}>PUBLISHED</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="sectionHint">Sección sugerida base</label>
+              <select id="sectionHint" name="sectionHint">${sectionOptions}</select>
+            </div>
+          </div>
+          <div class="cols-2">
+            <div class="field">
+              <label for="provinceHint">Distrito sugerido base</label>
+              <select id="provinceHint" name="provinceHint">${provinceOptions}</select>
+            </div>
+            <div class="field">
+              <label for="defaultSourceName">Fuente por defecto (fallback)</label>
+              <input id="defaultSourceName" name="defaultSourceName" value="${currentErrorSafe(current.defaultSourceName)}" />
+            </div>
+          </div>
+          <div class="cols-2">
+            <div class="field">
+              <label for="defaultAuthorName">Autor por defecto (fallback)</label>
+              <input id="defaultAuthorName" name="defaultAuthorName" value="${currentErrorSafe(current.defaultAuthorName)}" />
+            </div>
+            <div class="field">
+              <label for="defaultSourceUrl">URL fuente por defecto (opcional)</label>
+              <input id="defaultSourceUrl" name="defaultSourceUrl" placeholder="https://..." value="${currentErrorSafe(current.defaultSourceUrl)}" />
+            </div>
+          </div>
+          <label style="display:inline-flex; gap:8px; align-items:center; font-size:13px; color:#dcdcdc;">
+            <input type="checkbox" name="requireImageUrl" ${current.requireImageUrl ? "checked" : ""} />
+            Exigir foto en todas las noticias (si falta, usa imagen fallback).
+          </label>
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button class="primary" type="submit">Generar y crear noticias en lote</button>
+            <a class="button" href="/backoffice/news/new">Ir a nueva nota individual</a>
+          </div>
+        </form>
+        <script>
+          (function () {
+            const totalInput = document.getElementById("totalItems");
+            const percentInput = document.getElementById("campaignPercent");
+            const target = document.getElementById("batchSplit");
+            if (!totalInput || !percentInput || !target) return;
+            function refresh() {
+              const total = Math.max(1, Math.min(40, Number(totalInput.value || 1)));
+              const pct = Math.max(0, Math.min(100, Number(percentInput.value || 0)));
+              const campaign = Math.round((total * pct) / 100);
+              const normal = total - campaign;
+              target.textContent = "Distribucion estimada: " + campaign + " campaña / " + normal + " agenda general.";
+            }
+            totalInput.addEventListener("input", refresh);
+            percentInput.addEventListener("input", refresh);
+            refresh();
+          })();
+        </script>
+      </div>
+    </div>`,
+  );
+}
+
+function currentErrorSafe(value: string): string {
+  return value.replace(/[&<>"]/g, (char) => {
+    switch (char) {
+      case "&":
+        return "&amp;";
+      case "<":
+        return "&lt;";
+      case ">":
+        return "&gt;";
+      case '"':
+        return "&quot;";
+      default:
+        return char;
+    }
+  });
 }
 
 app.set("trust proxy", 1);
@@ -1908,6 +2103,7 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
         <p style="margin:0 0 12px; color:#a9a9a9; line-height:1.5;">Crea encuestas digitales para compartir en Instagram, mide conversion a voto y visualiza lider por candidato con actualizacion en vivo.</p>
         <div class="actions">
           <a class="button" href="/backoffice/polls">Gestionar encuestas</a>
+          <a class="button" href="/backoffice/news/batch">Noticias en lote IA</a>
         </div>
       </div>
       <div class="card">
@@ -1977,6 +2173,149 @@ app.post("/backoffice/settings/engagement", boGuard, async (request, response, n
       )}`,
     );
   } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/backoffice/news/batch", boGuard, (request, response) => {
+  const summary = readString(request.query.ok);
+  response.send(
+    summary.length > 0
+      ? renderBatchNewsForm({
+          summary,
+        })
+      : renderBatchNewsForm({}),
+  );
+});
+
+app.post("/backoffice/news/batch", boGuard, async (request, response, next) => {
+  const totalItems = clampInteger(request.body.totalItems, 1, 40, 20);
+  const campaignPercent = clampInteger(request.body.campaignPercent, 0, 100, 30);
+  const campaignTopic = readString(request.body.campaignTopic);
+  const generalBrief = readString(request.body.generalBrief);
+  const publishStatus =
+    readString(request.body.publishStatus).toUpperCase() === NewsStatus.PUBLISHED ? NewsStatus.PUBLISHED : NewsStatus.DRAFT;
+  const sectionHintRaw = readString(request.body.sectionHint).toUpperCase();
+  const provinceHintRaw = readString(request.body.provinceHint).toUpperCase();
+  const sectionHint = isNewsSection(sectionHintRaw) ? sectionHintRaw : null;
+  const provinceHint = isProvince(provinceHintRaw) ? provinceHintRaw : null;
+  const requireImageUrl = request.body.requireImageUrl === undefined ? true : readBoolean(request.body.requireImageUrl);
+  const defaultSourceName = readString(request.body.defaultSourceName) || "Pulso Pais IA";
+  const defaultAuthorName = readString(request.body.defaultAuthorName) || "Redaccion Pulso Pais";
+  const defaultSourceUrl = readString(request.body.defaultSourceUrl);
+
+  const formState: BatchNewsFormState = {
+    totalItems,
+    campaignPercent,
+    campaignTopic,
+    generalBrief,
+    publishStatus,
+    sectionHint: sectionHint ?? "",
+    provinceHint: provinceHint ?? "",
+    requireImageUrl,
+    defaultSourceName,
+    defaultAuthorName,
+    defaultSourceUrl,
+  };
+
+  try {
+    if (campaignTopic.length < 8) {
+      throw new Error("El tema de campaña debe tener al menos 8 caracteres.");
+    }
+    if (generalBrief.length < 12) {
+      throw new Error("El brief general debe tener al menos 12 caracteres.");
+    }
+
+    const context = await buildAiNewsContext(prisma);
+    const batch = await generateBatchDraftsWithAi(
+      {
+        totalItems,
+        campaignPercent,
+        campaignTopic,
+        generalBrief,
+        sectionHint,
+        provinceHint,
+        publishStatus,
+        requireImageUrl,
+      },
+      context.contextText,
+    );
+
+    let createdCount = 0;
+    const errors: string[] = [];
+    const nowBase = Date.now();
+
+    for (const [index, item] of batch.items.entries()) {
+      const draft = item.draft;
+
+      try {
+        const finalSection = draft.section && isNewsSection(draft.section) ? draft.section : sectionHint ?? "NACION";
+        const finalProvince = draft.province && isProvince(draft.province) ? draft.province : provinceHint ?? "";
+        const fallbackTitle = item.focus === "CAMPAIGN" ? `Radar de campana ${index + 1}` : `Agenda politica ${index + 1}`;
+        const fallbackKicker = item.focus === "CAMPAIGN" ? "Escenario Electoral" : "Mesa de situacion";
+        const fallbackExcerpt = item.focus === "CAMPAIGN" ? campaignTopic : generalBrief;
+
+        const normalized = normalizeNewsInput({
+          title: draft.title ?? fallbackTitle,
+          slug: "",
+          kicker: draft.kicker ?? fallbackKicker,
+          excerpt: draft.excerpt ?? fallbackExcerpt,
+          body: draft.body ?? draft.excerpt ?? fallbackExcerpt,
+          imageUrl: requireImageUrl ? draft.imageUrl ?? fallbackBatchImageByIndex(index) : draft.imageUrl ?? "",
+          sourceName: draft.sourceName ?? defaultSourceName,
+          sourceUrl: draft.sourceUrl ?? defaultSourceUrl,
+          authorName: draft.authorName ?? defaultAuthorName,
+          section: finalSection,
+          province: finalProvince,
+          tags: draft.tags.length > 0 ? draft.tags : [item.focus === "CAMPAIGN" ? "campana" : "agenda", "pulso-pais"],
+          status: publishStatus,
+          publishedAt: publishStatus === NewsStatus.PUBLISHED ? new Date(nowBase + index * 1000).toISOString() : "",
+          isSponsored: false,
+          isFeatured: draft.flags.isFeatured,
+          isHero: false,
+          isInterview: draft.flags.isInterview,
+          isOpinion: draft.flags.isOpinion,
+          isRadar: draft.flags.isRadar || finalSection === "RADAR_ELECTORAL",
+        });
+
+        const uniqueSlug = await ensureUniqueSlug(prisma, normalized.slug);
+        await prisma.news.create({
+          data: {
+            ...normalized,
+            slug: uniqueSlug,
+            aiDecision: "ALLOW",
+            aiReason: `Generada en lote IA (${batch.model}) [${item.focus}]`,
+            aiWarnings: draft.notes,
+            aiModel: batch.model,
+            aiEvaluatedAt: new Date(),
+          },
+        });
+        createdCount += 1;
+      } catch (error) {
+        errors.push(`Item ${index + 1}: ${(error as Error).message}`);
+      }
+    }
+
+    if (createdCount === 0) {
+      throw new Error(errors[0] ?? "No se pudo crear ninguna noticia del lote.");
+    }
+
+    const detail =
+      errors.length > 0
+        ? `Se crearon ${createdCount}/${batch.items.length}. Errores: ${errors.slice(0, 3).join(" | ")}`
+        : `Se crearon ${createdCount} noticias.`;
+
+    response.redirect(`/backoffice/news/batch?ok=${encodeURIComponent(`${detail} Modelo: ${batch.model}.`)}`);
+  } catch (error) {
+    if (error instanceof Error) {
+      response.status(400).send(
+        renderBatchNewsForm({
+          state: formState,
+          error: error.message,
+        }),
+      );
+      return;
+    }
     next(error);
   }
 });

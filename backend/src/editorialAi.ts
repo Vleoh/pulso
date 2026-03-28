@@ -82,6 +82,29 @@ export type EditorialAskResponse = {
   model: string;
 };
 
+export type EditorialBatchAssistInput = {
+  totalItems: number;
+  campaignPercent: number;
+  campaignTopic: string;
+  generalBrief: string;
+  sectionHint: string | null;
+  provinceHint: string | null;
+  publishStatus: NewsStatus;
+  requireImageUrl: boolean;
+};
+
+export type EditorialBatchAssistItem = {
+  slot: number;
+  focus: "CAMPAIGN" | "GENERAL";
+  draft: EditorialAssistDraft;
+};
+
+export type EditorialBatchAssistOutput = {
+  items: EditorialBatchAssistItem[];
+  summary: string | null;
+  model: string;
+};
+
 export type PollAssistInput = {
   brief: string;
   currentTitle: string | null;
@@ -732,6 +755,93 @@ function buildAssistPrompt(input: EditorialAssistInput, guidelineText: string, n
   ].join("\n");
 }
 
+function buildBatchAssistPrompt(input: EditorialBatchAssistInput, guidelineText: string, newsContext: string | null): string {
+  const totalItems = Math.max(1, Math.min(40, Math.floor(input.totalItems)));
+  const campaignPercent = Math.max(0, Math.min(100, Math.round(input.campaignPercent)));
+  const campaignSlots = Math.round((totalItems * campaignPercent) / 100);
+  const plan = Array.from({ length: totalItems }, (_unused, idx) => {
+    const slot = idx + 1;
+    const focus: "CAMPAIGN" | "GENERAL" = slot <= campaignSlots ? "CAMPAIGN" : "GENERAL";
+    return { slot, focus };
+  });
+
+  const payload = {
+    total_items: totalItems,
+    campaign_percent: campaignPercent,
+    campaign_slots: campaignSlots,
+    general_slots: totalItems - campaignSlots,
+    campaign_topic: input.campaignTopic,
+    general_brief: input.generalBrief,
+    section_hint: input.sectionHint,
+    province_hint: input.provinceHint,
+    publish_status: input.publishStatus,
+    require_image_url: input.requireImageUrl,
+    slot_plan: plan,
+  };
+
+  return [
+    "LINEA EDITORIAL DE REFERENCIA:",
+    guidelineText,
+    "",
+    "CONTEXTO DE AGENDA PROVISTO POR WRAPPER:",
+    newsContext ?? "Sin contexto adicional disponible.",
+    "",
+    "PEDIDO DEL EDITOR:",
+    JSON.stringify(payload, null, 2),
+    "",
+    "TAREA:",
+    "1) Genera un lote de noticias listo para CMS con EXACTAMENTE la cantidad de slots indicada.",
+    "2) Respeta el slot_plan: cada slot debe mantener su focus CAMPAIGN o GENERAL.",
+    "3) CAMPAIGN debe tratar directamente el tema de campana indicado.",
+    "4) GENERAL debe cubrir agenda politica/economica/federal complementaria sin repetir titulares.",
+    "5) Completa SIEMPRE title, kicker, excerpt y body con contenido util para publicacion.",
+    "6) Si require_image_url=true, coloca image_url valida en todos los items.",
+    "7) Evita afirmaciones no verificables, tono militante o propaganda explicita.",
+    "8) Usa seccion/provincia validas del CMS; no inventes valores fuera de catalogo.",
+    "",
+    "VALORES PERMITIDOS DE SECTION:",
+    "NACION, PROVINCIAS, MUNICIPIOS, OPINION, ENTREVISTAS, PUBLINOTAS, RADAR_ELECTORAL, ECONOMIA, INTERNACIONALES, DISTRITOS",
+    "",
+    "VALORES PERMITIDOS DE PROVINCE (o null):",
+    "CABA, BUENOS_AIRES, CATAMARCA, CHACO, CHUBUT, CORDOBA, CORRIENTES, ENTRE_RIOS, FORMOSA, JUJUY, LA_PAMPA, LA_RIOJA, MENDOZA, MISIONES, NEUQUEN, RIO_NEGRO, SALTA, SAN_JUAN, SAN_LUIS, SANTA_CRUZ, SANTA_FE, SANTIAGO_DEL_ESTERO, TIERRA_DEL_FUEGO, TUCUMAN",
+    "",
+    "RESPUESTA OBLIGATORIA EN JSON ESTRICTO:",
+    "(todo texto en espanol neutro, sin ingles)",
+    "{",
+    '  "summary": "resumen editorial del lote",',
+    '  "items": [',
+    "    {",
+    '      "slot": 1,',
+    '      "focus": "CAMPAIGN|GENERAL",',
+    '      "title": "titulo sugerido",',
+    '      "kicker": "volanta sugerida",',
+    '      "excerpt": "bajada sugerida",',
+    '      "body": "cuerpo sugerido",',
+    '      "image_url": "url opcional",',
+    '      "source_name": "fuente opcional",',
+    '      "source_url": "url fuente opcional",',
+    '      "author_name": "autor opcional",',
+    '      "tags": ["tag1","tag2"],',
+    '      "section": "NACION|...|DISTRITOS|null",',
+    '      "province": "CABA|...|TUCUMAN|null",',
+    '      "status": "DRAFT|PUBLISHED|null",',
+    '      "published_at": "ISO 8601 opcional o null",',
+    '      "flags": {',
+    '        "is_hero": false,',
+    '        "is_featured": false,',
+    '        "is_sponsored": false,',
+    '        "is_interview": false,',
+    '        "is_opinion": false,',
+    '        "is_radar": false',
+    "      },",
+    '      "notes": ["criterio editorial aplicado"],',
+    '      "publish_now_recommended": false',
+    "    }",
+    "  ]",
+    "}",
+  ].join("\n");
+}
+
 function buildAskPrompt(input: EditorialAssistInput, guidelineText: string, newsContext: string | null): string {
   const payload = {
     user_request: input.brief,
@@ -960,6 +1070,53 @@ function normalizeAskResponse(parsed: Record<string, unknown>, modelUsed: string
   };
 }
 
+function normalizeBatchFocus(value: unknown): "CAMPAIGN" | "GENERAL" {
+  if (typeof value !== "string") {
+    return "GENERAL";
+  }
+  const normalized = value.trim().toUpperCase();
+  return normalized === "CAMPAIGN" ? "CAMPAIGN" : "GENERAL";
+}
+
+function normalizeBatchOutput(
+  parsed: Record<string, unknown>,
+  modelUsed: string,
+  expectedTotalItems: number,
+): EditorialBatchAssistOutput {
+  const rawItems = Array.isArray(parsed.items) ? parsed.items : [];
+  const normalizedItems: EditorialBatchAssistItem[] = rawItems
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return null;
+      }
+      const data = entry as Record<string, unknown>;
+      const slotRaw = Number(data.slot);
+      const slot = Number.isFinite(slotRaw) ? Math.max(1, Math.floor(slotRaw)) : null;
+      if (!slot) {
+        return null;
+      }
+      return {
+        slot,
+        focus: normalizeBatchFocus(data.focus),
+        draft: normalizeAssistDraft(data, modelUsed),
+      };
+    })
+    .filter((item): item is EditorialBatchAssistItem => Boolean(item))
+    .sort((a, b) => a.slot - b.slot);
+
+  if (normalizedItems.length < expectedTotalItems) {
+    throw new Error(
+      `La IA devolvio ${normalizedItems.length} items y se esperaban ${expectedTotalItems}. Reintenta con un brief mas preciso.`,
+    );
+  }
+
+  return {
+    items: normalizedItems.slice(0, expectedTotalItems),
+    summary: asCleanText(parsed.summary, 400),
+    model: modelUsed,
+  };
+}
+
 export async function generateDraftWithAi(
   input: EditorialAssistInput,
   newsContext: string | null = null,
@@ -984,6 +1141,47 @@ export async function generateDraftWithAi(
     return normalizeAssistDraft(parsed, modelUsed);
   } catch (error) {
     throw new Error(`No se pudo generar borrador con IA (${(error as Error).message}).`);
+  }
+}
+
+export async function generateBatchDraftsWithAi(
+  input: EditorialBatchAssistInput,
+  newsContext: string | null = null,
+): Promise<EditorialBatchAssistOutput> {
+  if (!AI_FILTER_ENABLED) {
+    throw new Error("Asistencia IA desactivada por configuracion.");
+  }
+
+  const totalItems = Math.max(1, Math.min(40, Math.floor(input.totalItems)));
+  const campaignPercent = Math.max(0, Math.min(100, Math.round(input.campaignPercent)));
+
+  if (input.campaignTopic.trim().length < 8) {
+    throw new Error("El tema de campana debe tener al menos 8 caracteres.");
+  }
+  if (input.generalBrief.trim().length < 12) {
+    throw new Error("El brief general debe tener al menos 12 caracteres.");
+  }
+
+  try {
+    const guidelineText = await readGuidelines();
+    const prompt = buildBatchAssistPrompt(
+      {
+        ...input,
+        totalItems,
+        campaignPercent,
+      },
+      guidelineText,
+      newsContext,
+    );
+    const { parsed, modelUsed } = await runAiJson({
+      systemPrompt:
+        "Sos editor senior de Pulso Pais. Entregas lotes de noticias listos para cargar en CMS. Responde SIEMPRE en JSON valido y en espanol neutro.",
+      userPrompt: prompt,
+      temperature: 0.35,
+    });
+    return normalizeBatchOutput(parsed, modelUsed, totalItems);
+  } catch (error) {
+    throw new Error(`No se pudo generar lote con IA (${(error as Error).message}).`);
   }
 }
 

@@ -146,6 +146,7 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
       <nav class="side-nav">
         <a href="/backoffice"><span>Panel</span></a>
         <a href="/backoffice/news/new"><span>Nueva Nota</span></a>
+        <a href="/backoffice/news/batch"><span>Noticias Lote</span></a>
         <a href="/backoffice/polls"><span>Encuestas</span></a>
         <a href="/backoffice/users"><span>Usuarios</span></a>
         <a href="/backoffice#theme-control"><span>Temas</span></a>
@@ -168,6 +169,7 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
           <div class="actions">
             <a class="button" href="/backoffice">Panel</a>
             <a class="button" href="/backoffice/news/new">Nueva Nota</a>
+            <a class="button" href="/backoffice/news/batch">Noticias Lote</a>
             <a class="button" href="/backoffice/polls">Encuestas</a>
             <a class="button" href="/backoffice/users">Usuarios</a>
             <a class="button" href="/backoffice/logout">Cerrar Sesion</a>
