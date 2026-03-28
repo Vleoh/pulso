@@ -1,4 +1,4 @@
-import { NewsSection, NewsStatus, PollStatus, Province } from "@prisma/client";
+﻿import { NewsSection, NewsStatus, PollStatus, Province } from "@prisma/client";
 import { prisma } from "../src/prismaClient";
 import { FIXED_CANDIDATE_OPTIONS } from "../src/polls";
 
@@ -169,7 +169,7 @@ async function main(): Promise<void> {
     orderBy: { sortOrder: "asc" },
   });
 
-  const seedVotesPerOption = [35, 16, 14, 11, 9, 7, 6, 4, 3, 2];
+  const seedVotesPerOption = [7, 0, 12, 0, 3, 1, 0, 0, 0, 8];
   await prisma.pollVote.deleteMany({ where: { pollId: poll.id } });
   for (const option of options) {
     const total = seedVotesPerOption[option.sortOrder - 1] ?? 1;
@@ -195,3 +195,4 @@ main()
     await prisma.$disconnect();
     process.exit(1);
   });
+

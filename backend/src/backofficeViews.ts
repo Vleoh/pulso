@@ -1232,6 +1232,9 @@ export function renderPollTable(items: BackofficePollListItem[]): string {
           <div class="inline-actions">
             <a class="button" href="/backoffice/polls/${item.id}/edit">Editar</a>
             <a class="button" target="_blank" rel="noreferrer" href="${escapeHtml(item.publicUrl)}">Abrir</a>
+            <form method="post" action="/backoffice/polls/${item.id}/bootstrap-hardcoded" onsubmit="return confirm('Esto reemplaza los votos actuales por la base hardcodeada. Continuar?');">
+              <button type="submit">Cargar base</button>
+            </form>
             <form method="post" action="/backoffice/polls/${item.id}/delete" onsubmit="return confirm('Eliminar encuesta? Esta accion no se puede deshacer.');">
               <button class="danger" type="submit">Eliminar</button>
             </form>

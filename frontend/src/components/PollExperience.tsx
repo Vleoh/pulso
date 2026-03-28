@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { PollItem } from "@/lib/types";
@@ -101,8 +101,12 @@ function formatPct(value: number): string {
   return `${value.toFixed(2)}%`;
 }
 
+function rankOptions(options: PollItem["metrics"]["options"]): PollItem["metrics"]["options"] {
+  return [...options].sort((a, b) => b.votes - a.votes || a.sortOrder - b.sortOrder);
+}
+
 function pieGradient(poll: PollItem): string {
-  const options = [...poll.metrics.options].sort((a, b) => a.sortOrder - b.sortOrder);
+  const options = rankOptions(poll.metrics.options);
   if (poll.metrics.totalVotes <= 0) {
     const fallbackStops = options
       .map((option, index) => {
@@ -170,7 +174,11 @@ function normalizeCopy(value: string): string {
 
 function normalizeQuestion(value: string): string {
   let text = normalizeCopy(value);
-  text = text.replace(/^A quien\b/i, "¿A quien");
+  text = text.replace(/^Â¿/, "¿");
+  text = text.replace(/^�+/, "");
+  if (/^A quien\b/i.test(text)) {
+    text = `¿${text}`;
+  }
   text = text.replace(/^¿+/, "¿");
   text = text.replace(/\?+$/, "?");
 
@@ -225,10 +233,7 @@ export function PollExperience({ initialPoll, initialSelectedOptionId, apiBaseUr
   const readableQuestion = useMemo(() => normalizeQuestion(poll.question), [poll.question]);
   const readableDescription = useMemo(() => (poll.description ? normalizeCopy(poll.description) : null), [poll.description]);
   const readableFooterCta = useMemo(() => normalizeCopy(poll.footerCta || "Vota y explica por que"), [poll.footerCta]);
-  const sortedOptions = useMemo(
-    () => [...poll.metrics.options].sort((a, b) => a.sortOrder - b.sortOrder),
-    [poll.metrics.options],
-  );
+  const sortedOptions = useMemo(() => rankOptions(poll.metrics.options), [poll.metrics.options]);
   const modalOption = useMemo(() => sortedOptions.find((option) => option.id === modalOptionId) ?? null, [sortedOptions, modalOptionId]);
   const modalReasonNormalized = useMemo(() => normalizeReasonInput(modalReason), [modalReason]);
   const gradient = useMemo(() => pieGradient(poll), [poll]);
@@ -429,7 +434,7 @@ export function PollExperience({ initialPoll, initialSelectedOptionId, apiBaseUr
             </div>
             <p className="poll-vote-hint">Pulsa un candidato para abrir el modal de voto.</p>
             <div className="poll-option-list">
-              {sortedOptions.map((option) => {
+              {sortedOptions.map((option, index) => {
                 const selected = selectedOptionId === option.id;
                 const meta = getCandidateMeta(option.label, option.colorHex);
                 const optionStyle = {
@@ -450,7 +455,7 @@ export function PollExperience({ initialPoll, initialSelectedOptionId, apiBaseUr
                     style={optionStyle}
                   >
                     <span className="poll-option-index" style={{ backgroundColor: meta.partyColor }}>
-                      {option.sortOrder}
+                      {index + 1}
                     </span>
                     <span className="poll-candidate-avatar">
                       <img src={meta.imagePath} alt={option.label} loading="lazy" />
@@ -594,3 +599,4 @@ export function PollExperience({ initialPoll, initialSelectedOptionId, apiBaseUr
     </main>
   );
 }
+

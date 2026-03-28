@@ -37,8 +37,10 @@ import { buildAiNewsContext } from "./newsContextWrapper";
 import { getHomeTheme, HOME_THEME_OPTIONS, normalizeHomeTheme, setHomeTheme } from "./siteSettings";
 import {
   FIXED_CANDIDATE_OPTIONS,
+  hardcodedVoteCountForLabel,
   buildPollSnapshot,
   ensureUniquePollSlug,
+  normalizePollQuestionText,
   normalizePollInput,
   type PollReasonPublic,
   toPollPublicView,
@@ -273,6 +275,56 @@ async function getRecentPollReasons(pollId: string, limit = 12): Promise<PollRea
       text: (row.reasonText ?? "").trim(),
       createdAt: row.createdAt.toISOString(),
     }));
+}
+
+async function replacePollVotesWithHardcodedBase(pollId: string): Promise<{
+  totalVotes: number;
+  perCandidate: Array<{ label: string; votes: number }>;
+}> {
+  const options = await prisma.pollOption.findMany({
+    where: { pollId },
+    orderBy: { sortOrder: "asc" },
+    select: {
+      id: true,
+      label: true,
+      sortOrder: true,
+    },
+  });
+
+  if (options.length === 0) {
+    throw new Error("La encuesta no tiene candidatos cargados.");
+  }
+
+  const perCandidate = options.map((option) => ({
+    label: option.label,
+    votes: hardcodedVoteCountForLabel(option.label),
+  }));
+  const totalVotes = perCandidate.reduce((acc, item) => acc + item.votes, 0);
+  const batchKey = Date.now();
+
+  await prisma.$transaction(async (tx) => {
+    await tx.pollVote.deleteMany({
+      where: { pollId },
+    });
+
+    for (const option of options) {
+      const votes = hardcodedVoteCountForLabel(option.label);
+      if (votes <= 0) {
+        continue;
+      }
+
+      await tx.pollVote.createMany({
+        data: Array.from({ length: votes }, (_unused, voteIndex) => ({
+          pollId,
+          optionId: option.id,
+          voterHash: `hardcoded-${batchKey}-${option.sortOrder}-${voteIndex + 1}`,
+          sourceRef: "hardcoded-import",
+        })),
+      });
+    }
+  });
+
+  return { totalVotes, perCandidate };
 }
 
 async function buildPollPublicPayloadBySlug(slug: string) {
@@ -1520,6 +1572,46 @@ app.post("/backoffice/polls/:id", boGuard, async (request, response, next) => {
       );
       return;
     }
+    next(error);
+  }
+});
+
+app.post("/backoffice/polls/:id/bootstrap-hardcoded", boGuard, async (request, response, next) => {
+  try {
+    const id = readString(request.params.id);
+    if (!id) {
+      response.status(400).send(backofficeShell("Error", `<div class="card">ID invalido.</div>`));
+      return;
+    }
+
+    const poll = await prisma.poll.findUnique({
+      where: { id },
+      select: { id: true, question: true },
+    });
+    if (!poll) {
+      response.status(404).send(backofficeShell("No encontrado", `<div class="card">No se encontro la encuesta solicitada.</div>`));
+      return;
+    }
+
+    const normalizedQuestion = normalizePollQuestionText(poll.question);
+    if (normalizedQuestion !== poll.question) {
+      await prisma.poll.update({
+        where: { id },
+        data: { question: normalizedQuestion },
+      });
+    }
+
+    const applied = await replacePollVotesWithHardcodedBase(id);
+    const leader =
+      [...applied.perCandidate].sort((a, b) => b.votes - a.votes || a.label.localeCompare(b.label, "es-AR"))[0]?.label ??
+      "sin lider";
+
+    response.redirect(
+      `/backoffice/polls?ok=${encodeURIComponent(
+        `Base hardcodeada aplicada (${applied.totalVotes} votos). Lider actual: ${leader}.`,
+      )}`,
+    );
+  } catch (error) {
     next(error);
   }
 });

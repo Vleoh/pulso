@@ -20,6 +20,19 @@ export const FIXED_CANDIDATE_OPTIONS: readonly CandidateTemplate[] = [
   { label: "Dante Gebel", colorHex: "#8f55dd", emoji: "DG" },
 ] as const;
 
+export const HARDCODED_POLL_VOTE_BASE: readonly { label: string; votes: number }[] = [
+  { label: "Javier Milei", votes: 7 },
+  { label: "Axel Kicillof", votes: 0 },
+  { label: "Victoria Villarruel", votes: 12 },
+  { label: "Sergio Massa", votes: 0 },
+  { label: "Patricia Bullrich", votes: 3 },
+  { label: "Mauricio Macri", votes: 1 },
+  { label: "Cristina Kirchner", votes: 0 },
+  { label: "Myriam Bregman", votes: 0 },
+  { label: "Juan Grabois", votes: 0 },
+  { label: "Dante Gebel", votes: 8 },
+] as const;
+
 export type PollOptionInput = {
   label: string;
   sortOrder: number;
@@ -81,13 +94,51 @@ function parseDateTime(value: string): Date | null {
   return parsed;
 }
 
+function normalizeCandidateLabel(value: string): string {
+  return String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+const HARDCODED_POLL_VOTE_BASE_MAP = new Map<string, number>(
+  HARDCODED_POLL_VOTE_BASE.map((entry) => [normalizeCandidateLabel(entry.label), entry.votes]),
+);
+
+export function hardcodedVoteCountForLabel(label: string): number {
+  return HARDCODED_POLL_VOTE_BASE_MAP.get(normalizeCandidateLabel(label)) ?? 0;
+}
+
+export function normalizePollQuestionText(value: string): string {
+  let text = String(value ?? "")
+    .replace(/\uFFFD/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  text = text.replace(/^Â¿/, "¿");
+  text = text.replace(/^�+/, "");
+  if (/^A quien\b/i.test(text)) {
+    text = `¿${text}`;
+  }
+  text = text.replace(/^¿+/, "¿");
+  text = text.replace(/\?+$/, "?");
+
+  if (text.startsWith("¿") && !text.endsWith("?")) {
+    text = `${text}?`;
+  }
+
+  return text;
+}
+
 export function normalizePollInput(raw: Record<string, unknown>): NormalizedPollInput {
   const title = readString(raw.title);
   if (title.length < 8) {
     throw new Error("El titulo de la encuesta debe tener al menos 8 caracteres.");
   }
 
-  const question = readString(raw.question);
+  const question = normalizePollQuestionText(readString(raw.question));
   if (question.length < 12) {
     throw new Error("La pregunta principal debe tener al menos 12 caracteres.");
   }
@@ -176,11 +227,12 @@ export function buildPollSnapshot(options: PollOption[], voteCountByOptionId: Ma
     };
   });
 
-  const leader = [...snapshotOptions].sort((a, b) => b.votes - a.votes || a.sortOrder - b.sortOrder)[0] ?? null;
+  const rankedOptions = [...snapshotOptions].sort((a, b) => b.votes - a.votes || a.sortOrder - b.sortOrder);
+  const leader = rankedOptions[0] ?? null;
 
   return {
     totalVotes,
-    options: snapshotOptions,
+    options: rankedOptions,
     leader,
   };
 }
@@ -216,7 +268,7 @@ export function toPollPublicView(
     id: poll.id,
     slug: poll.slug,
     title: poll.title,
-    question: poll.question,
+    question: normalizePollQuestionText(poll.question),
     hookLabel: poll.hookLabel,
     footerCta: poll.footerCta,
     description: poll.description,
