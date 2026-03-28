@@ -25,6 +25,7 @@ import { buildHomePayload } from "./homePayload";
 import { ensureUniqueSlug, normalizeNewsInput } from "./newsInput";
 import { toFeedItem, dedupeByKey } from "./feed";
 import { getExternalNews } from "./externalNews";
+import { getMarketData, getWeatherData } from "./signalData";
 import { PROVINCE_OPTIONS, SECTION_OPTIONS } from "./catalog";
 import { asNullable, isNewsSection, isNewsStatus, isPollStatus, isProvince, readString, readBoolean } from "./utils";
 import { prisma } from "./prismaClient";
@@ -858,6 +859,38 @@ app.get("/api/home", async (_request, response, next) => {
   }
 });
 
+app.get("/api/markets", async (request, response, next) => {
+  try {
+    const symbolsRaw = readString(request.query.symbols);
+    const symbols = symbolsRaw
+      ? symbolsRaw
+          .split(",")
+          .map((item) => item.trim())
+          .filter(Boolean)
+      : undefined;
+
+    const items = await getMarketData(symbols);
+    response.json({
+      generatedAt: new Date().toISOString(),
+      items,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/weather", async (_request, response, next) => {
+  try {
+    const item = await getWeatherData();
+    response.json({
+      generatedAt: new Date().toISOString(),
+      item,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/news", async (request, response, next) => {
   try {
     const sectionQuery = readString(request.query.section).toUpperCase();
@@ -896,6 +929,56 @@ app.get("/api/news", async (request, response, next) => {
     const external = await getExternalNews();
     response.json({
       items: dedupeByKey([...internal, ...external]).slice(0, limit),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/news/:slug", async (request, response, next) => {
+  try {
+    const slug = readString(request.params.slug);
+    if (!slug) {
+      response.status(400).json({ error: "Slug de noticia invalido." });
+      return;
+    }
+
+    const item = await prisma.news.findFirst({
+      where: {
+        slug,
+        status: NewsStatus.PUBLISHED,
+      },
+    });
+
+    if (!item) {
+      response.status(404).json({ error: "Noticia no encontrada." });
+      return;
+    }
+
+    const [internalRelated, externalRelated] = await Promise.all([
+      prisma.news.findMany({
+        where: {
+          id: { not: item.id },
+          status: NewsStatus.PUBLISHED,
+          OR: [{ section: item.section }, ...(item.province ? [{ province: item.province }] : [])],
+        },
+        orderBy: [{ isFeatured: "desc" }, { publishedAt: "desc" }, { createdAt: "desc" }],
+        take: 8,
+      }),
+      getExternalNews(),
+    ]);
+
+    response.json({
+      item: {
+        ...item,
+        publishedAt: (item.publishedAt ?? item.createdAt).toISOString(),
+        createdAt: item.createdAt.toISOString(),
+        updatedAt: item.updatedAt.toISOString(),
+      },
+      related: dedupeByKey([
+        ...internalRelated.map(toFeedItem),
+        ...externalRelated.filter((entry) => entry.section === item.section),
+      ]).slice(0, 6),
     });
   } catch (error) {
     next(error);
@@ -2139,7 +2222,7 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
           <p style="margin:0; color:#8e8e8e; font-size:12px; line-height:1.4;">Si desactivas un modulo, el front deja de mostrar ese boton en todas las tarjetas y portadas al refrescar.</p>
         </form>
       </div>
-      ${renderNewsTable(news)}
+      ${renderNewsTable(news, { frontendBaseUrl: normalizedFrontendBaseUrl() })}
     </div>`;
 
     response.send(backofficeShell("Panel editorial", body, readString(request.query.ok)));

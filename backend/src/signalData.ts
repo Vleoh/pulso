@@ -31,7 +31,12 @@ const MARKET_TICKERS = [
   { symbol: "AAPL", label: "Apple" },
   { symbol: "MSFT", label: "Microsoft" },
   { symbol: "NVDA", label: "NVIDIA" },
+  { symbol: "TSLA", label: "Tesla" },
+  { symbol: "AMZN", label: "Amazon" },
+  { symbol: "GOOGL", label: "Alphabet" },
 ] as const;
+
+const MARKET_LABELS = new Map(MARKET_TICKERS.map((entry) => [entry.symbol.toUpperCase(), entry.label]));
 
 const FALLBACK_MARKETS: MarketSnapshot[] = MARKET_TICKERS.map((item, index) => ({
   symbol: item.symbol,
@@ -134,14 +139,39 @@ async function fetchWeather(): Promise<WeatherSnapshot> {
   };
 }
 
-async function fetchMarkets(): Promise<MarketSnapshot[]> {
-  const symbols = MARKET_TICKERS.map((item) => item.symbol).join(",");
-  const response = await fetch(`https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(symbols)}`, {
-    headers: {
-      accept: "application/json",
-      "user-agent": "PulsoPais/1.0",
+function normalizeSymbols(symbols?: string[]): string[] {
+  if (!symbols || symbols.length === 0) {
+    return MARKET_TICKERS.map((item) => item.symbol);
+  }
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const rawSymbol of symbols) {
+    const cleaned = rawSymbol.trim().toUpperCase();
+    if (!cleaned) {
+      continue;
+    }
+    if (!seen.has(cleaned)) {
+      seen.add(cleaned);
+      normalized.push(cleaned);
+    }
+    if (normalized.length >= 25) {
+      break;
+    }
+  }
+  return normalized.length > 0 ? normalized : MARKET_TICKERS.map((item) => item.symbol);
+}
+
+async function fetchMarketsBySymbols(symbolsInput?: string[]): Promise<MarketSnapshot[]> {
+  const symbols = normalizeSymbols(symbolsInput);
+  const response = await fetch(
+    `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(symbols.join(","))}`,
+    {
+      headers: {
+        accept: "application/json",
+        "user-agent": "PulsoPais/1.0",
+      },
     },
-  });
+  );
 
   if (!response.ok) {
     throw new Error(`Yahoo Finance ${response.status}`);
@@ -164,14 +194,14 @@ async function fetchMarkets(): Promise<MarketSnapshot[]> {
       .map((item) => [item.symbol as string, item]),
   );
 
-  return MARKET_TICKERS.map((item) => {
-    const quote = bySymbol.get(item.symbol);
+  return symbols.map((symbol) => {
+    const quote = bySymbol.get(symbol);
     const price = typeof quote?.regularMarketPrice === "number" ? Number(quote.regularMarketPrice.toFixed(2)) : null;
     const changePct =
       typeof quote?.regularMarketChangePercent === "number" ? Number(quote.regularMarketChangePercent.toFixed(2)) : null;
     return {
-      symbol: item.symbol,
-      label: item.label,
+      symbol,
+      label: MARKET_LABELS.get(symbol) ?? symbol,
       price,
       changePct,
       currency: quote?.currency ?? "USD",
@@ -185,7 +215,7 @@ export async function getSignalData(): Promise<SignalPayload> {
     return signalCache.value;
   }
 
-  const [weatherResult, marketsResult] = await Promise.allSettled([fetchWeather(), fetchMarkets()]);
+  const [weatherResult, marketsResult] = await Promise.allSettled([fetchWeather(), fetchMarketsBySymbols()]);
 
   const weather = weatherResult.status === "fulfilled" ? weatherResult.value : FALLBACK_WEATHER;
   const markets = marketsResult.status === "fulfilled" ? marketsResult.value : FALLBACK_MARKETS;
@@ -197,4 +227,31 @@ export async function getSignalData(): Promise<SignalPayload> {
   };
 
   return value;
+}
+
+export async function getMarketData(symbolsInput?: string[]): Promise<MarketSnapshot[]> {
+  try {
+    return await fetchMarketsBySymbols(symbolsInput);
+  } catch {
+    if (!symbolsInput || symbolsInput.length === 0) {
+      return FALLBACK_MARKETS;
+    }
+    const symbols = normalizeSymbols(symbolsInput);
+    return symbols.map((symbol) => ({
+      symbol,
+      label: MARKET_LABELS.get(symbol) ?? symbol,
+      price: null,
+      changePct: null,
+      currency: "USD",
+      trend: "flat",
+    }));
+  }
+}
+
+export async function getWeatherData(): Promise<WeatherSnapshot> {
+  try {
+    return await fetchWeather();
+  } catch {
+    return FALLBACK_WEATHER;
+  }
 }

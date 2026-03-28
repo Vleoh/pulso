@@ -27,6 +27,37 @@ export type FeedItem = {
   isExternal: boolean;
 };
 
+export type NewsItem = {
+  id: string;
+  slug: string;
+  title: string;
+  kicker: string | null;
+  excerpt: string | null;
+  body: string | null;
+  imageUrl: string | null;
+  sourceName: string | null;
+  sourceUrl: string | null;
+  authorName: string | null;
+  section: NewsSection;
+  province: string | null;
+  tags: string[];
+  status: "DRAFT" | "PUBLISHED";
+  isSponsored: boolean;
+  isFeatured: boolean;
+  isHero: boolean;
+  isInterview: boolean;
+  isOpinion: boolean;
+  isRadar: boolean;
+  publishedAt: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type NewsBySlugResponse = {
+  item: NewsItem;
+  related: FeedItem[];
+};
+
 export type HomePayload = {
   generatedAt: string;
   theme: "premium" | "classic" | "social" | "editorial";

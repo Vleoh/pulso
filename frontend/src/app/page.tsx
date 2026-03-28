@@ -1,4 +1,6 @@
-import Image from "next/image";
+﻿import Image from "next/image";
+import Link from "next/link";
+import type { ReactNode } from "react";
 import { EngagementBar } from "@/components/EngagementBar";
 import { UserSessionNav } from "@/components/UserSessionNav";
 import { getFeaturedPoll, getHomeData } from "@/lib/api";
@@ -102,7 +104,7 @@ function shortTitle(title: string, max = 120): string {
   if (normalized.length <= max) {
     return normalized;
   }
-  return `${normalized.slice(0, max - 1).trimEnd()}…`;
+  return `${normalized.slice(0, max - 3).trimEnd()}...`;
 }
 
 function formatHeaderDate(dateIso: string): string {
@@ -215,23 +217,68 @@ function iconBySection(section: NewsSection): IconName {
   }
 }
 
+type StoryLinkData = { href: string; external: boolean } | null;
+
+function storyLink(item: Pick<FeedItem, "slug" | "sourceUrl" | "isExternal">): StoryLinkData {
+  if (item.slug && !item.isExternal) {
+    return { href: `/noticias/${item.slug}`, external: false };
+  }
+  if (item.sourceUrl) {
+    return { href: item.sourceUrl, external: true };
+  }
+  return null;
+}
+
+function StoryAnchor({
+  item,
+  className,
+  children,
+}: {
+  item: Pick<FeedItem, "slug" | "sourceUrl" | "isExternal">;
+  className?: string;
+  children: ReactNode;
+}) {
+  const link = storyLink(item);
+  if (!link) {
+    return <span className={className}>{children}</span>;
+  }
+  if (link.external) {
+    return (
+      <a href={link.href} target="_blank" rel="noreferrer" className={className}>
+        {children}
+      </a>
+    );
+  }
+  return (
+    <Link href={link.href} className={className}>
+      {children}
+    </Link>
+  );
+}
+
 function FeedCard({ item, engagementControls }: { item: FeedItem; engagementControls: EngagementControls }) {
   const headline = shortTitle(titleForDisplay(item), 110);
   return (
     <article className="mf-feed-card">
       <div className="mf-feed-media">
-        {item.imageUrl ? (
-          <Image src={item.imageUrl} alt={headline} fill sizes="(max-width: 700px) 36vw, 180px" className="mf-feed-image" />
-        ) : (
-          <div className="mf-feed-placeholder" />
-        )}
+        <StoryAnchor item={item} className="story-link story-link-media">
+          {item.imageUrl ? (
+            <Image src={item.imageUrl} alt={headline} fill sizes="(max-width: 700px) 36vw, 180px" className="mf-feed-image" />
+          ) : (
+            <div className="mf-feed-placeholder" />
+          )}
+        </StoryAnchor>
       </div>
       <div className="mf-feed-body">
         <p className={`mf-badge ${sectionClass(item.section)}`}>
           <UiIcon name={iconBySection(item.section)} />
           {SECTION_LABEL[item.section]}
         </p>
-        <h3>{headline}</h3>
+        <h3>
+          <StoryAnchor item={item} className="story-link-headline">
+            {headline}
+          </StoryAnchor>
+        </h3>
         {item.excerpt && <p className="mf-excerpt">{item.excerpt}</p>}
         <div className="mf-meta">
           <span>{item.sourceName ?? "Pulso Pais"}</span>
@@ -267,18 +314,24 @@ function DesktopNewsCard({
   return (
     <article className={`news-card ${compact ? "compact" : ""}`} data-section={item.section}>
       <div className="news-image-wrap">
-        {item.imageUrl ? (
-          <Image src={item.imageUrl} alt={headline} fill sizes="(max-width: 700px) 100vw, 33vw" className="news-image" />
-        ) : (
-          <div className="news-image-placeholder" />
-        )}
+        <StoryAnchor item={item} className="story-link story-link-media">
+          {item.imageUrl ? (
+            <Image src={item.imageUrl} alt={headline} fill sizes="(max-width: 700px) 100vw, 33vw" className="news-image" />
+          ) : (
+            <div className="news-image-placeholder" />
+          )}
+        </StoryAnchor>
       </div>
       <div className="news-content">
         <p className="news-kicker">
           <UiIcon name={iconBySection(item.section)} className="kicker-icon" />
           {SECTION_LABEL[item.section]}
         </p>
-        <h3>{headline}</h3>
+        <h3>
+          <StoryAnchor item={item} className="story-link-headline">
+            {headline}
+          </StoryAnchor>
+        </h3>
         {item.excerpt && <p className="news-excerpt">{item.excerpt}</p>}
         <div className="news-meta">
           <span>{item.sourceName ?? "Pulso Pais"}</span>
@@ -353,26 +406,30 @@ function DesktopHome({
 
       <nav className="main-nav">
         <div className="container nav-scroll">
-          <button type="button">
+          <Link href="/noticias?section=NACION" className="nav-link">
             <UiIcon name="nation" className="nav-icon" />
             Nacion
-          </button>
-          <button type="button">
+          </Link>
+          <Link href="/noticias?section=PROVINCIAS" className="nav-link">
             <UiIcon name="province" className="nav-icon" />
             Provincias
-          </button>
-          <button type="button">
+          </Link>
+          <Link href="/noticias?section=RADAR_ELECTORAL" className="nav-link">
             <UiIcon name="radar" className="nav-icon" />
             Radar Electoral
-          </button>
-          <button type="button">
+          </Link>
+          <Link href="/noticias?section=OPINION" className="nav-link">
             <UiIcon name="opinion" className="nav-icon" />
             Opinion
-          </button>
-          <button type="button">
+          </Link>
+          <Link href="/noticias?section=ECONOMIA" className="nav-link">
             <UiIcon name="economy" className="nav-icon" />
             Economia
-          </button>
+          </Link>
+          <Link href="/noticias" className="nav-link">
+            <UiIcon name="pulse" className="nav-icon" />
+            Ultimas
+          </Link>
           {featuredPoll ? (
             <a href={`/encuestas/${featuredPoll.slug}`} className="nav-poll-link" target="_blank" rel="noopener noreferrer">
               <UiIcon name="trend" className="nav-icon" />
@@ -386,14 +443,24 @@ function DesktopHome({
         {hero && (
           <article className="hero-main" data-section={hero.section}>
             <div className="hero-image-wrap">
-              {hero.imageUrl ? <Image src={hero.imageUrl} alt={heroTitle} fill priority className="hero-image" /> : <div className="hero-image-placeholder" />}
+              <StoryAnchor item={hero} className="story-link story-link-media">
+                {hero.imageUrl ? (
+                  <Image src={hero.imageUrl} alt={heroTitle} fill priority className="hero-image" />
+                ) : (
+                  <div className="hero-image-placeholder" />
+                )}
+              </StoryAnchor>
             </div>
             <div className="hero-content">
               <p className="hero-kicker">
                 <UiIcon name={iconBySection(hero.section)} className="kicker-icon" />
                 {hero.kicker ?? SECTION_LABEL[hero.section]}
               </p>
-              <h1>{heroTitle}</h1>
+              <h1>
+                <StoryAnchor item={hero} className="story-link-headline">
+                  {heroTitle}
+                </StoryAnchor>
+              </h1>
               {hero.excerpt && <p>{hero.excerpt}</p>}
               <div className="hero-meta">
                 <span>{hero.sourceName ?? "Pulso Pais"}</span>
@@ -577,8 +644,14 @@ export default async function Home() {
             <section className="mf-main">
               <article className="mf-hero-card">
                 <div className="mf-hero-media">
-                  {hero?.imageUrl ? (
-                    <Image src={hero.imageUrl} alt={heroTitle} fill priority sizes="(max-width: 900px) 100vw, 62vw" className="mf-feed-image" />
+                  {hero ? (
+                    <StoryAnchor item={hero} className="story-link story-link-media">
+                      {hero.imageUrl ? (
+                        <Image src={hero.imageUrl} alt={heroTitle} fill priority sizes="(max-width: 900px) 100vw, 62vw" className="mf-feed-image" />
+                      ) : (
+                        <div className="mf-feed-placeholder" />
+                      )}
+                    </StoryAnchor>
                   ) : (
                     <div className="mf-feed-placeholder" />
                   )}
@@ -588,7 +661,7 @@ export default async function Home() {
                     <UiIcon name={hero ? iconBySection(hero.section) : "nation"} />
                     {hero ? SECTION_LABEL[hero.section] : "Nacion"}
                   </p>
-                  <h1>{heroTitle}</h1>
+                  <h1>{hero ? <StoryAnchor item={hero} className="story-link-headline">{heroTitle}</StoryAnchor> : heroTitle}</h1>
                   {hero?.excerpt && <p className="mf-hero-excerpt">{hero.excerpt}</p>}
                   <div className="mf-meta">
                     <span>{hero?.sourceName ?? "Pulso Pais"}</span>
@@ -639,7 +712,11 @@ export default async function Home() {
                           <UiIcon name="radar" />
                           Radar
                         </p>
-                        <h3>{shortTitle(titleForDisplay(item), 105)}</h3>
+                        <h3>
+                          <StoryAnchor item={item} className="story-link-headline">
+                            {shortTitle(titleForDisplay(item), 105)}
+                          </StoryAnchor>
+                        </h3>
                         <div className="mf-meta">
                           <span>{item.sourceName ?? "Pulso Pais"}</span>
                           <span>{relativeMinutes(item.publishedAt)}</span>
@@ -656,7 +733,11 @@ export default async function Home() {
                 <h3>Agenda Rapida</h3>
                 <ol>
                   {quickList.map((item) => (
-                    <li key={item.id}>{shortTitle(titleForDisplay(item), 95)}</li>
+                    <li key={item.id}>
+                      <StoryAnchor item={item} className="story-link-headline">
+                        {shortTitle(titleForDisplay(item), 95)}
+                      </StoryAnchor>
+                    </li>
                   ))}
                 </ol>
               </section>
@@ -687,7 +768,7 @@ export default async function Home() {
           theme={home.theme}
           tickerItems={tickerItems}
           backofficeUrl={backofficeUrl}
-          weatherLabel={`${home.social.weather.location} · ${home.social.weather.temperatureC ?? "--"} C`}
+          weatherLabel={`${home.social.weather.location} - ${home.social.weather.temperatureC ?? "--"} C`}
           markets={home.social.markets}
           federal={home.federalHighlights}
           engagementControls={engagementControls}

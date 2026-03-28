@@ -267,10 +267,11 @@ export function renderLogin(errorMessage?: string): string {
 </body></html>`;
 }
 
-export function renderNewsTable(news: News[]): string {
+export function renderNewsTable(news: News[], options?: { frontendBaseUrl?: string }): string {
   if (news.length === 0) {
     return `<div class="card"><p>No hay noticias creadas. Usa "Nueva Nota" para cargar la primera portada.</p></div>`;
   }
+  const frontendBaseUrl = (options?.frontendBaseUrl ?? "").replace(/\/+$/, "");
 
   const rows = news
     .map((item) => {
@@ -292,6 +293,14 @@ export function renderNewsTable(news: News[]): string {
       const published = item.publishedAt
         ? new Date(item.publishedAt).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" })
         : "-";
+      const openUrl = item.slug
+        ? `${frontendBaseUrl}/noticias/${item.slug}`
+        : item.sourceUrl && item.sourceUrl.length > 0
+          ? item.sourceUrl
+          : "";
+      const openAction = openUrl
+        ? `<a class="button" href="${escapeHtml(openUrl)}" target="_blank" rel="noreferrer">Abrir</a>`
+        : `<button type="button" disabled>Abrir</button>`;
 
       return `<tr data-news-row data-status="${item.status}" data-ai="${item.aiDecision}" data-search="${searchIndex}">
         <td>
@@ -307,6 +316,7 @@ export function renderNewsTable(news: News[]): string {
         <td>
           <div class="inline-actions">
             <a class="button" href="/backoffice/news/${item.id}/edit">Editar</a>
+            ${openAction}
             <form method="post" action="/backoffice/news/${item.id}/delete" onsubmit="return confirm('Eliminar noticia? Esta accion no se puede deshacer.');">
               <button class="danger" type="submit">Eliminar</button>
             </form>
