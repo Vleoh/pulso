@@ -1,4 +1,4 @@
-import { type Poll, type PollOption, PollStatus, type PrismaClient } from "@prisma/client";
+﻿import { type Poll, type PollOption, PollStatus, type PrismaClient } from "@prisma/client";
 import { asNullable, isPollStatus, readBoolean, readString, slugifyText } from "./utils";
 
 export type CandidateTemplate = {
@@ -8,16 +8,16 @@ export type CandidateTemplate = {
 };
 
 export const FIXED_CANDIDATE_OPTIONS: readonly CandidateTemplate[] = [
-  { label: "Javier Milei", colorHex: "#cfa437", emoji: "JM" },
-  { label: "Axel Kicillof", colorHex: "#d24b3d", emoji: "AK" },
-  { label: "Victoria Villarruel", colorHex: "#7a4de2", emoji: "VV" },
-  { label: "Sergio Massa", colorHex: "#22a2ff", emoji: "SM" },
-  { label: "Patricia Bullrich", colorHex: "#1f6cf0", emoji: "PB" },
-  { label: "Mauricio Macri", colorHex: "#f58a2e", emoji: "MM" },
-  { label: "Cristina Kirchner", colorHex: "#3ea2ff", emoji: "CK" },
-  { label: "Myriam Bregman", colorHex: "#d63f4d", emoji: "MB" },
-  { label: "Juan Grabois", colorHex: "#52b66d", emoji: "JG" },
-  { label: "Dante Gebel", colorHex: "#8f55dd", emoji: "DG" },
+  { label: "Javier Milei", colorHex: "#D4AF37", emoji: "JM" },
+  { label: "Axel Kicillof", colorHex: "#59B7FF", emoji: "AK" },
+  { label: "Victoria Villarruel", colorHex: "#6B3DF5", emoji: "VV" },
+  { label: "Sergio Massa", colorHex: "#1E90FF", emoji: "SM" },
+  { label: "Patricia Bullrich", colorHex: "#FFD400", emoji: "PB" },
+  { label: "Mauricio Macri", colorHex: "#FFD400", emoji: "MM" },
+  { label: "Cristina Kirchner", colorHex: "#59B7FF", emoji: "CK" },
+  { label: "Myriam Bregman", colorHex: "#E53935", emoji: "MB" },
+  { label: "Juan Grabois", colorHex: "#21A366", emoji: "JG" },
+  { label: "Dante Gebel", colorHex: "#9E9E9E", emoji: "DG" },
 ] as const;
 
 export const HARDCODED_POLL_VOTE_BASE: readonly { label: string; votes: number }[] = [
@@ -106,9 +106,16 @@ function normalizeCandidateLabel(value: string): string {
 const HARDCODED_POLL_VOTE_BASE_MAP = new Map<string, number>(
   HARDCODED_POLL_VOTE_BASE.map((entry) => [normalizeCandidateLabel(entry.label), entry.votes]),
 );
+const FIXED_CANDIDATE_BY_LABEL = new Map<string, CandidateTemplate>(
+  FIXED_CANDIDATE_OPTIONS.map((entry) => [normalizeCandidateLabel(entry.label), entry]),
+);
 
 export function hardcodedVoteCountForLabel(label: string): number {
   return HARDCODED_POLL_VOTE_BASE_MAP.get(normalizeCandidateLabel(label)) ?? 0;
+}
+
+export function fixedCandidateTemplateForLabel(label: string): CandidateTemplate | null {
+  return FIXED_CANDIDATE_BY_LABEL.get(normalizeCandidateLabel(label)) ?? null;
 }
 
 export function normalizePollQuestionText(value: string): string {
@@ -117,15 +124,16 @@ export function normalizePollQuestionText(value: string): string {
     .replace(/\s+/g, " ")
     .trim();
 
-  text = text.replace(/^Â¿/, "¿");
-  text = text.replace(/^�+/, "");
+  text = text.replace(/^\u00C2\u00BF/, "\u00BF");
+  text = text.replace(/^\u00BF+/, "\u00BF");
+  text = text.replace(/^\uFFFD+/, "");
   if (/^A quien\b/i.test(text)) {
-    text = `¿${text}`;
+    text = `\u00BF${text}`;
   }
-  text = text.replace(/^¿+/, "¿");
+  text = text.replace(/^\u00BF+/, "\u00BF");
   text = text.replace(/\?+$/, "?");
 
-  if (text.startsWith("¿") && !text.endsWith("?")) {
+  if (text.startsWith("\u00BF") && !text.endsWith("?")) {
     text = `${text}?`;
   }
 
@@ -286,3 +294,4 @@ export function toPollPublicView(
     recentReasons,
   };
 }
+

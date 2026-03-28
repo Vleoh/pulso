@@ -37,6 +37,7 @@ import { buildAiNewsContext } from "./newsContextWrapper";
 import { getHomeTheme, HOME_THEME_OPTIONS, normalizeHomeTheme, setHomeTheme } from "./siteSettings";
 import {
   FIXED_CANDIDATE_OPTIONS,
+  fixedCandidateTemplateForLabel,
   hardcodedVoteCountForLabel,
   buildPollSnapshot,
   ensureUniquePollSlug,
@@ -288,6 +289,8 @@ async function replacePollVotesWithHardcodedBase(pollId: string): Promise<{
       id: true,
       label: true,
       sortOrder: true,
+      colorHex: true,
+      emoji: true,
     },
   });
 
@@ -308,6 +311,21 @@ async function replacePollVotesWithHardcodedBase(pollId: string): Promise<{
     });
 
     for (const option of options) {
+      const template = fixedCandidateTemplateForLabel(option.label);
+      if (
+        template &&
+        (option.label !== template.label || option.colorHex !== template.colorHex || option.emoji !== template.emoji)
+      ) {
+        await tx.pollOption.update({
+          where: { id: option.id },
+          data: {
+            label: template.label,
+            colorHex: template.colorHex,
+            emoji: template.emoji,
+          },
+        });
+      }
+
       const votes = hardcodedVoteCountForLabel(option.label);
       if (votes <= 0) {
         continue;
