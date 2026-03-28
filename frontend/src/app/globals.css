@@ -180,6 +180,37 @@ a {
   border-color: var(--gold);
 }
 
+.auth-stack {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.auth-pill {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 8px 12px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #f0f0f0;
+  background: #111111;
+}
+
+.auth-pill.ghost {
+  background: transparent;
+  color: #cdcdcd;
+}
+
+.auth-pill.as-btn {
+  cursor: pointer;
+}
+
+.auth-pill:hover {
+  border-color: var(--gold);
+}
+
 .main-nav {
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
@@ -2715,6 +2746,32 @@ a {
 
 .mf-header-meta a:hover {
   border-color: var(--gold);
+}
+
+.mf-auth-stack {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mf-auth-pill {
+  border: 1px solid #3a3a3a;
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #efefef;
+  background: #121212;
+}
+
+.mf-auth-pill.ghost {
+  background: transparent;
+  color: #c8c8c8;
+}
+
+.mf-auth-pill.as-btn {
+  cursor: pointer;
 }
 
 .mf-topics {

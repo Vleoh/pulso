@@ -1,12 +1,14 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { FormEvent, useMemo, useState } from "react";
 import styles from "../auth-styles.module.css";
 import { authLogin, resolveAuthApiBase } from "@/lib/userAuthClient";
 
 export default function IngresarPage() {
   const apiBase = useMemo(resolveAuthApiBase, []);
+  const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -20,8 +22,11 @@ export default function IngresarPage() {
     setMessage("");
     try {
       const payload = await authLogin(apiBase, { email, password });
-      setMessage(`Sesion iniciada. Plan: ${payload.item.plan}.`);
+      setMessage(`Sesion iniciada (${payload.item.plan}). Redirigiendo...`);
       setPassword("");
+      window.setTimeout(() => {
+        router.push("/");
+      }, 320);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "No se pudo iniciar sesion.");
     } finally {

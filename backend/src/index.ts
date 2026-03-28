@@ -6,7 +6,7 @@ import cors from "cors";
 import express, { type NextFunction, type Request, type Response } from "express";
 import helmet from "helmet";
 import morgan from "morgan";
-import { type Poll, type Prisma, NewsStatus, PollStatus, UserPlan } from "@prisma/client";
+import { type Poll, type Prisma, NewsStatus, PollStatus, UserEmailCodePurpose, UserPlan } from "@prisma/client";
 import { adminApiGuard, backofficeGuard, extractAdminToken, signAdminToken, verifyAdminToken } from "./auth";
 import {
   backofficeShell,
@@ -52,15 +52,19 @@ import {
 import {
   assertValidUserEmail,
   assertValidUserPassword,
+  createEmailCode,
   createUserSessionToken,
+  hashEmailCode,
   hashUserPassword,
   hashUserSessionToken,
+  normalizeEmailCode,
   normalizeDisplayName,
   normalizeUserEmail,
   normalizeUserPlanInput,
   toPublicUser,
   verifyUserPassword,
 } from "./users";
+import { emailHealth, sendAccountCodeEmail, sendWelcomeEmail } from "./email";
 const app = express();
 
 const PORT = Number(process.env.PORT ?? 8080);
@@ -76,6 +80,8 @@ const USER_SESSION_SECRET = process.env.USER_SESSION_SECRET ?? `${ADMIN_JWT_SECR
 const USER_SESSION_HOURS = Math.max(1, Math.min(24 * 90, Number(process.env.USER_SESSION_HOURS ?? 24 * 30)));
 const AUTH_RATE_LIMIT_WINDOW_MS = Math.max(30_000, Number(process.env.AUTH_RATE_LIMIT_WINDOW_MS ?? 10 * 60 * 1000));
 const AUTH_RATE_LIMIT_MAX_ATTEMPTS = Math.max(3, Number(process.env.AUTH_RATE_LIMIT_MAX_ATTEMPTS ?? 20));
+const USER_EMAIL_CODE_SECRET = process.env.USER_EMAIL_CODE_SECRET ?? `${USER_SESSION_SECRET}-email-code`;
+const USER_EMAIL_CODE_TTL_MINUTES = Math.max(5, Math.min(60, Number(process.env.USER_EMAIL_CODE_TTL_MINUTES ?? 15)));
 const FALLBACK_FRONTEND_PUBLIC_URL = IS_PRODUCTION ? "https://pulso-pais.vercel.app" : "http://localhost:3000";
 const FRONTEND_PUBLIC_URL =
   process.env.FRONTEND_PUBLIC_URL ?? process.env.NEXT_PUBLIC_FRONTEND_URL ?? process.env.VERCEL_URL ?? FALLBACK_FRONTEND_PUBLIC_URL;
@@ -311,6 +317,7 @@ type AuthenticatedUserSession = {
     email: string;
     displayName: string | null;
     plan: UserPlan;
+    emailVerifiedAt: Date | null;
     isActive: boolean;
     createdAt: Date;
     updatedAt: Date;
@@ -334,6 +341,7 @@ async function getAuthenticatedUserSession(request: Request): Promise<Authentica
           email: true,
           displayName: true,
           plan: true,
+          emailVerifiedAt: true,
           isActive: true,
           createdAt: true,
           updatedAt: true,
@@ -1000,6 +1008,7 @@ app.post("/api/auth/register", async (request, response, next) => {
         email: true,
         displayName: true,
         plan: true,
+        emailVerifiedAt: true,
         isActive: true,
         createdAt: true,
         updatedAt: true,
@@ -1009,6 +1018,11 @@ app.post("/api/auth/register", async (request, response, next) => {
 
     clearAuthRateLimitBucket(request, "register");
     const { expiresAt } = await issueUserSession(created.id, response);
+    try {
+      await sendWelcomeEmail({ email: created.email, displayName: created.displayName });
+    } catch (mailError) {
+      console.error("No se pudo enviar email de bienvenida", mailError);
+    }
     response.status(201).json({
       item: toPublicUser(created),
       session: { expiresAt: expiresAt.toISOString() },
@@ -1046,6 +1060,7 @@ app.post("/api/auth/login", async (request, response, next) => {
         email: true,
         displayName: true,
         plan: true,
+        emailVerifiedAt: true,
         isActive: true,
         createdAt: true,
         updatedAt: true,
@@ -1125,6 +1140,145 @@ app.post("/api/auth/logout", async (request, response, next) => {
   }
 });
 
+app.get("/api/auth/email/health", (_request, response) => {
+  response.json({ email: emailHealth() });
+});
+
+app.post("/api/auth/email/send-code", async (request, response, next) => {
+  try {
+    const auth = await getAuthenticatedUserSession(request);
+    if (!auth) {
+      response.status(401).json({ error: "No autenticado." });
+      return;
+    }
+
+    const purposeRaw = readString(request.body.purpose).toUpperCase();
+    const purpose =
+      purposeRaw === UserEmailCodePurpose.PASSWORD_RESET ? UserEmailCodePurpose.PASSWORD_RESET : UserEmailCodePurpose.ACCOUNT_VERIFY;
+
+    const now = new Date();
+    const recentAttempt = await prisma.userEmailCode.findFirst({
+      where: {
+        userId: auth.user.id,
+        purpose,
+        createdAt: {
+          gt: new Date(now.getTime() - 60 * 1000),
+        },
+      },
+      orderBy: { createdAt: "desc" },
+      select: { id: true },
+    });
+
+    if (recentAttempt) {
+      response.status(429).json({ error: "Espera 60 segundos antes de pedir otro codigo." });
+      return;
+    }
+
+    const code = createEmailCode();
+    const codeHash = hashEmailCode(code, USER_EMAIL_CODE_SECRET);
+    const expiresAt = new Date(now.getTime() + USER_EMAIL_CODE_TTL_MINUTES * 60 * 1000);
+
+    await prisma.userEmailCode.create({
+      data: {
+        userId: auth.user.id,
+        purpose,
+        codeHash,
+        expiresAt,
+      },
+    });
+
+    try {
+      await sendAccountCodeEmail({ email: auth.user.email, code });
+    } catch (mailError) {
+      console.error("No se pudo enviar codigo por email", mailError);
+      response.status(503).json({ error: "No se pudo enviar el email en este momento." });
+      return;
+    }
+
+    response.json({
+      ok: true,
+      purpose,
+      expiresAt: expiresAt.toISOString(),
+      ...(IS_PRODUCTION ? {} : { debugCode: code }),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/auth/email/verify-code", async (request, response, next) => {
+  try {
+    const auth = await getAuthenticatedUserSession(request);
+    if (!auth) {
+      response.status(401).json({ error: "No autenticado." });
+      return;
+    }
+
+    const code = normalizeEmailCode(request.body.code);
+    if (code.length !== 6) {
+      response.status(400).json({ error: "Codigo invalido. Debe tener 6 digitos." });
+      return;
+    }
+
+    const codeHash = hashEmailCode(code, USER_EMAIL_CODE_SECRET);
+    const now = new Date();
+    const match = await prisma.userEmailCode.findFirst({
+      where: {
+        userId: auth.user.id,
+        purpose: UserEmailCodePurpose.ACCOUNT_VERIFY,
+        codeHash,
+        consumedAt: null,
+        expiresAt: { gt: now },
+      },
+      orderBy: { createdAt: "desc" },
+      select: { id: true },
+    });
+
+    if (!match) {
+      response.status(400).json({ error: "Codigo incorrecto o vencido." });
+      return;
+    }
+
+    await prisma.$transaction([
+      prisma.userEmailCode.update({
+        where: { id: match.id },
+        data: { consumedAt: now },
+      }),
+      prisma.user.update({
+        where: { id: auth.user.id },
+        data: { emailVerifiedAt: now },
+      }),
+    ]);
+
+    const refreshed = await prisma.user.findUnique({
+      where: { id: auth.user.id },
+      select: {
+        id: true,
+        email: true,
+        displayName: true,
+        plan: true,
+        emailVerifiedAt: true,
+        isActive: true,
+        createdAt: true,
+        updatedAt: true,
+        lastLoginAt: true,
+      },
+    });
+
+    if (!refreshed) {
+      response.status(404).json({ error: "Usuario no encontrado." });
+      return;
+    }
+
+    response.json({
+      ok: true,
+      item: toPublicUser(refreshed),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/admin/login", (request, response) => {
   const email = readString(request.body.email).toLowerCase();
   const password = readString(request.body.password);
@@ -1192,6 +1346,7 @@ app.put("/api/admin/users/:id/plan", apiGuard, async (request, response, next) =
         email: true,
         displayName: true,
         plan: true,
+        emailVerifiedAt: true,
         isActive: true,
         createdAt: true,
         updatedAt: true,

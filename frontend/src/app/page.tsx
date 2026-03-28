@@ -1,5 +1,6 @@
 import Image from "next/image";
 import { EngagementBar } from "@/components/EngagementBar";
+import { UserSessionNav } from "@/components/UserSessionNav";
 import { getFeaturedPoll, getHomeData } from "@/lib/api";
 import type { FeedItem, NewsSection, PollItem } from "@/lib/types";
 
@@ -327,7 +328,7 @@ function DesktopHome({
         </div>
         <div className="header-right">
           <p>{formatHeaderDate(hero?.publishedAt ?? new Date().toISOString())}</p>
-          <a href="/ingresar">Ingresar</a>
+          <UserSessionNav />
           <a href={backofficeUrl} target="_blank" rel="noreferrer">
             Backoffice
           </a>
@@ -535,7 +536,7 @@ export default async function Home() {
             </a>
             <div className="mf-header-meta">
               <p>{formatHeaderDate(home.generatedAt)}</p>
-              <a href="/ingresar">Ingresar</a>
+              <UserSessionNav compact />
               <a href={backofficeUrl} target="_blank" rel="noreferrer">
                 Backoffice
               </a>

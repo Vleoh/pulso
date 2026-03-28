@@ -1,12 +1,14 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { FormEvent, useMemo, useState } from "react";
 import styles from "../auth-styles.module.css";
 import { authRegister, resolveAuthApiBase } from "@/lib/userAuthClient";
 
 export default function RegistroPage() {
   const apiBase = useMemo(resolveAuthApiBase, []);
+  const router = useRouter();
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -14,15 +16,32 @@ export default function RegistroPage() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
 
+  const passwordChecks = {
+    minLength: password.length >= 10,
+    hasUpper: /[A-Z]/.test(password),
+    hasLower: /[a-z]/.test(password),
+    hasNumber: /\d/.test(password),
+    hasSymbol: /[^A-Za-z0-9]/.test(password),
+  };
+  const isPasswordStrong = Object.values(passwordChecks).every(Boolean);
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     setLoading(true);
     setError("");
     setMessage("");
+    if (!isPasswordStrong) {
+      setError("La clave aun no cumple todos los requisitos.");
+      setLoading(false);
+      return;
+    }
     try {
       const payload = await authRegister(apiBase, { email, password, displayName });
-      setMessage(`Cuenta creada. Plan asignado: ${payload.item.plan}.`);
+      setMessage(`Cuenta creada (${payload.item.plan}). Redirigiendo...`);
       setPassword("");
+      window.setTimeout(() => {
+        router.push("/");
+      }, 350);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "No se pudo crear la cuenta.");
     } finally {
@@ -50,7 +69,13 @@ export default function RegistroPage() {
                 {loading ? "Creando..." : "Crear cuenta"}
               </button>
             </form>
-            <p className={styles.muted}>Requisitos de password: 10+ caracteres, mayúscula, minúscula, número y símbolo.</p>
+            <ul className={styles.checklist}>
+              <li className={passwordChecks.minLength ? styles.okItem : ""}>Minimo 10 caracteres</li>
+              <li className={passwordChecks.hasUpper ? styles.okItem : ""}>Al menos una mayuscula</li>
+              <li className={passwordChecks.hasLower ? styles.okItem : ""}>Al menos una minuscula</li>
+              <li className={passwordChecks.hasNumber ? styles.okItem : ""}>Al menos un numero</li>
+              <li className={passwordChecks.hasSymbol ? styles.okItem : ""}>Al menos un simbolo</li>
+            </ul>
             <div className={styles.links}>
               <Link className={styles.link} href="/ingresar">
                 Ya tengo cuenta

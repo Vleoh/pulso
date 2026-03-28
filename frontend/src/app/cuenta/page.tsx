@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import styles from "../auth-styles.module.css";
-import { authLogout, authMe, type PublicUser, resolveAuthApiBase } from "@/lib/userAuthClient";
+import { authLogout, authMe, authSendEmailCode, authVerifyEmailCode, type PublicUser, resolveAuthApiBase } from "@/lib/userAuthClient";
 
 export default function CuentaPage() {
   const apiBase = useMemo(resolveAuthApiBase, []);
@@ -11,6 +11,7 @@ export default function CuentaPage() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [user, setUser] = useState<PublicUser | null>(null);
+  const [code, setCode] = useState("");
 
   useEffect(() => {
     setLoading(true);
@@ -36,6 +37,36 @@ export default function CuentaPage() {
       setMessage("Sesion cerrada.");
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "No se pudo cerrar sesion.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleSendCode(): Promise<void> {
+    setLoading(true);
+    setError("");
+    setMessage("");
+    try {
+      const payload = await authSendEmailCode(apiBase, "ACCOUNT_VERIFY");
+      setMessage(`Codigo enviado por email. Vence: ${new Date(payload.expiresAt).toLocaleTimeString("es-AR")}.`);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "No se pudo enviar el codigo.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleVerifyCode(): Promise<void> {
+    setLoading(true);
+    setError("");
+    setMessage("");
+    try {
+      const payload = await authVerifyEmailCode(apiBase, code);
+      setUser(payload.item);
+      setCode("");
+      setMessage("Email verificado correctamente.");
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "No se pudo verificar el codigo.");
     } finally {
       setLoading(false);
     }
@@ -69,8 +100,22 @@ export default function CuentaPage() {
                 <strong>Plan:</strong> {user.plan}
               </p>
               <p className={styles.muted}>
+                <strong>Email verificado:</strong> {user.emailVerifiedAt ? "Si" : "No"}
+              </p>
+              <p className={styles.muted}>
                 <strong>Ultimo login:</strong> {user.lastLoginAt ? new Date(user.lastLoginAt).toLocaleString("es-AR") : "-"}
               </p>
+              {!user.emailVerifiedAt ? (
+                <div style={{ display: "grid", gap: 8 }}>
+                  <button className={styles.submit} type="button" onClick={handleSendCode} disabled={loading}>
+                    Enviar codigo por email
+                  </button>
+                  <input className={styles.input} type="text" value={code} onChange={(event) => setCode(event.target.value)} placeholder="Codigo de 6 digitos" maxLength={6} />
+                  <button className={styles.submit} type="button" onClick={handleVerifyCode} disabled={loading || code.trim().length !== 6}>
+                    Verificar email
+                  </button>
+                </div>
+              ) : null}
               <button className={styles.submit} type="button" onClick={handleLogout} disabled={loading}>
                 Cerrar sesion
               </button>

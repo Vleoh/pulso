@@ -3,6 +3,7 @@ export type PublicUser = {
   email: string;
   displayName: string | null;
   plan: "FREE" | "PREMIUM";
+  emailVerifiedAt: string | null;
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
@@ -77,4 +78,33 @@ export async function authLogout(apiBase: string): Promise<void> {
     const payload = (await response.json().catch(() => ({ error: "No se pudo cerrar sesion." }))) as { error?: string };
     throw new Error(payload.error || "No se pudo cerrar sesion.");
   }
+}
+
+export async function authSendEmailCode(
+  apiBase: string,
+  purpose: "ACCOUNT_VERIFY" | "PASSWORD_RESET" = "ACCOUNT_VERIFY",
+): Promise<{ expiresAt: string; debugCode?: string }> {
+  const response = await fetch(`${apiBase}/api/auth/email/send-code`, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json",
+    },
+    body: JSON.stringify({ purpose }),
+  });
+  return parseOrThrow<{ expiresAt: string; debugCode?: string }>(response);
+}
+
+export async function authVerifyEmailCode(apiBase: string, code: string): Promise<{ item: PublicUser }> {
+  const response = await fetch(`${apiBase}/api/auth/email/verify-code`, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json",
+    },
+    body: JSON.stringify({ code }),
+  });
+  return parseOrThrow<{ item: PublicUser }>(response);
 }

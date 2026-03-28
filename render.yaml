@@ -48,3 +48,25 @@ services:
         sync: false
       - key: EDITORIAL_GUIDELINES_PATH
         value: ./editorial/pulso-pais-linea-editorial.txt
+      - key: USER_SESSION_COOKIE_NAME
+        value: pulso_user_session
+      - key: USER_SESSION_SECRET
+        sync: false
+      - key: USER_SESSION_HOURS
+        value: "720"
+      - key: AUTH_RATE_LIMIT_WINDOW_MS
+        value: "600000"
+      - key: AUTH_RATE_LIMIT_MAX_ATTEMPTS
+        value: "20"
+      - key: USER_EMAIL_CODE_SECRET
+        sync: false
+      - key: USER_EMAIL_CODE_TTL_MINUTES
+        value: "15"
+      - key: EMAIL_ENABLED
+        value: "true"
+      - key: EMAIL_PROVIDER
+        value: resend
+      - key: EMAIL_FROM
+        value: Pulso Pais <no-reply@pulsopais.local>
+      - key: RESEND_API_KEY
+        sync: false

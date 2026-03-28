@@ -11,6 +11,7 @@ export type PublicUser = {
   email: string;
   displayName: string | null;
   plan: UserPlan;
+  emailVerifiedAt: string | null;
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
@@ -61,6 +62,10 @@ export function normalizeUserPlanInput(raw: unknown, fallback: UserPlan = UserPl
   return (Object.values(UserPlan) as string[]).includes(candidate) ? (candidate as UserPlan) : fallback;
 }
 
+export function normalizeEmailCode(raw: unknown): string {
+  return readString(raw).replace(/\s+/g, "").replace(/[^0-9]/g, "").slice(0, 6);
+}
+
 export async function hashUserPassword(password: string): Promise<string> {
   const salt = crypto.randomBytes(16).toString("hex");
   const derived = (await scryptAsync(password, salt, 64)) as Buffer;
@@ -89,12 +94,24 @@ export function hashUserSessionToken(token: string, secret: string): string {
   return crypto.createHash("sha256").update(`${token}:${secret}`).digest("hex");
 }
 
-export function toPublicUser(user: Pick<User, "id" | "email" | "displayName" | "plan" | "isActive" | "createdAt" | "updatedAt" | "lastLoginAt">): PublicUser {
+export function createEmailCode(): string {
+  const code = crypto.randomInt(0, 1_000_000);
+  return code.toString().padStart(6, "0");
+}
+
+export function hashEmailCode(code: string, secret: string): string {
+  return crypto.createHash("sha256").update(`${code}:${secret}`).digest("hex");
+}
+
+export function toPublicUser(
+  user: Pick<User, "id" | "email" | "displayName" | "plan" | "emailVerifiedAt" | "isActive" | "createdAt" | "updatedAt" | "lastLoginAt">,
+): PublicUser {
   return {
     id: user.id,
     email: user.email,
     displayName: user.displayName,
     plan: user.plan,
+    emailVerifiedAt: user.emailVerifiedAt ? user.emailVerifiedAt.toISOString() : null,
     isActive: user.isActive,
     createdAt: user.createdAt.toISOString(),
     updatedAt: user.updatedAt.toISOString(),
