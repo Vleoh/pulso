@@ -36,11 +36,23 @@ export function assertValidUserEmail(email: string): void {
 }
 
 export function assertValidUserPassword(password: string): void {
-  if (password.length < 8) {
-    throw new Error("La clave debe tener al menos 8 caracteres.");
+  if (password.length < 10) {
+    throw new Error("La clave debe tener al menos 10 caracteres.");
   }
   if (password.length > 120) {
     throw new Error("La clave no puede superar 120 caracteres.");
+  }
+  if (!/[a-z]/.test(password)) {
+    throw new Error("La clave debe incluir al menos una letra minuscula.");
+  }
+  if (!/[A-Z]/.test(password)) {
+    throw new Error("La clave debe incluir al menos una letra mayuscula.");
+  }
+  if (!/\d/.test(password)) {
+    throw new Error("La clave debe incluir al menos un numero.");
+  }
+  if (!/[^A-Za-z0-9]/.test(password)) {
+    throw new Error("La clave debe incluir al menos un simbolo.");
   }
 }
 

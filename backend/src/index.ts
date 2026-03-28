@@ -74,6 +74,8 @@ const ADMIN_COOKIE_NAME = process.env.ADMIN_COOKIE_NAME ?? "pulso_admin_session"
 const USER_SESSION_COOKIE_NAME = process.env.USER_SESSION_COOKIE_NAME ?? "pulso_user_session";
 const USER_SESSION_SECRET = process.env.USER_SESSION_SECRET ?? `${ADMIN_JWT_SECRET}-users`;
 const USER_SESSION_HOURS = Math.max(1, Math.min(24 * 90, Number(process.env.USER_SESSION_HOURS ?? 24 * 30)));
+const AUTH_RATE_LIMIT_WINDOW_MS = Math.max(30_000, Number(process.env.AUTH_RATE_LIMIT_WINDOW_MS ?? 10 * 60 * 1000));
+const AUTH_RATE_LIMIT_MAX_ATTEMPTS = Math.max(3, Number(process.env.AUTH_RATE_LIMIT_MAX_ATTEMPTS ?? 20));
 const FALLBACK_FRONTEND_PUBLIC_URL = IS_PRODUCTION ? "https://pulso-pais.vercel.app" : "http://localhost:3000";
 const FRONTEND_PUBLIC_URL =
   process.env.FRONTEND_PUBLIC_URL ?? process.env.NEXT_PUBLIC_FRONTEND_URL ?? process.env.VERCEL_URL ?? FALLBACK_FRONTEND_PUBLIC_URL;
@@ -196,6 +198,7 @@ function buildPollAssistInput(raw: Record<string, unknown>) {
 
 const POLL_VOTE_COOKIE_PREFIX = "pulso_poll_vote_";
 const POLL_VOTE_SECRET = process.env.POLL_VOTE_SECRET ?? ADMIN_JWT_SECRET;
+const authAttemptBuckets = new Map<string, { count: number; resetAt: number }>();
 
 function voteCookieName(slug: string): string {
   return `${POLL_VOTE_COOKIE_PREFIX}${slug}`;
@@ -248,7 +251,42 @@ function clearUserSessionCookie(response: Response): void {
   });
 }
 
-async function issueUserSession(userId: string, response: Response): Promise<{ token: string; expiresAt: Date }> {
+function extractCookieToken(request: Request, cookieName: string): string | null {
+  const value = request.cookies?.[cookieName];
+  if (typeof value === "string" && value.trim().length > 0) {
+    return value.trim();
+  }
+  return null;
+}
+
+function authRateLimitKey(request: Request, routeName: string): string {
+  const forwarded = request.headers["x-forwarded-for"];
+  const forwardedIp = Array.isArray(forwarded) ? forwarded[0] : forwarded;
+  const firstChunk = (forwardedIp || request.ip || request.socket.remoteAddress || "unknown").toString().split(",")[0];
+  const ip = (firstChunk ?? "unknown").trim() || "unknown";
+  return `${routeName}:${ip}`;
+}
+
+function isAuthRateLimited(request: Request, routeName: string): boolean {
+  const now = Date.now();
+  const key = authRateLimitKey(request, routeName);
+  const existing = authAttemptBuckets.get(key);
+
+  if (!existing || existing.resetAt <= now) {
+    authAttemptBuckets.set(key, { count: 1, resetAt: now + AUTH_RATE_LIMIT_WINDOW_MS });
+    return false;
+  }
+
+  existing.count += 1;
+  authAttemptBuckets.set(key, existing);
+  return existing.count > AUTH_RATE_LIMIT_MAX_ATTEMPTS;
+}
+
+function clearAuthRateLimitBucket(request: Request, routeName: string): void {
+  authAttemptBuckets.delete(authRateLimitKey(request, routeName));
+}
+
+async function issueUserSession(userId: string, response: Response): Promise<{ expiresAt: Date }> {
   const token = createUserSessionToken();
   const tokenHash = hashUserSessionToken(token, USER_SESSION_SECRET);
   const expiresAt = new Date(Date.now() + USER_SESSION_HOURS * 60 * 60 * 1000);
@@ -262,12 +300,10 @@ async function issueUserSession(userId: string, response: Response): Promise<{ t
   });
 
   setUserSessionCookie(response, token, expiresAt);
-  return { token, expiresAt };
+  return { expiresAt };
 }
 
 type AuthenticatedUserSession = {
-  token: string;
-  tokenHash: string;
   sessionId: string;
   expiresAt: Date;
   user: {
@@ -283,7 +319,7 @@ type AuthenticatedUserSession = {
 };
 
 async function getAuthenticatedUserSession(request: Request): Promise<AuthenticatedUserSession | null> {
-  const token = extractAdminToken(request, USER_SESSION_COOKIE_NAME);
+  const token = extractCookieToken(request, USER_SESSION_COOKIE_NAME);
   if (!token) {
     return null;
   }
@@ -317,8 +353,6 @@ async function getAuthenticatedUserSession(request: Request): Promise<Authentica
   }
 
   return {
-    token,
-    tokenHash,
     sessionId: session.id,
     expiresAt: session.expiresAt,
     user: session.user,
@@ -941,6 +975,11 @@ app.get("/api/auth/plans", (_request, response) => {
 
 app.post("/api/auth/register", async (request, response, next) => {
   try {
+    if (isAuthRateLimited(request, "register")) {
+      response.status(429).json({ error: "Demasiados intentos de registro. Espera unos minutos." });
+      return;
+    }
+
     const email = normalizeUserEmail(request.body.email);
     const password = readString(request.body.password);
     const displayName = normalizeDisplayName(request.body.displayName);
@@ -968,11 +1007,11 @@ app.post("/api/auth/register", async (request, response, next) => {
       },
     });
 
-    const { token, expiresAt } = await issueUserSession(created.id, response);
+    clearAuthRateLimitBucket(request, "register");
+    const { expiresAt } = await issueUserSession(created.id, response);
     response.status(201).json({
       item: toPublicUser(created),
-      token,
-      expiresAt: expiresAt.toISOString(),
+      session: { expiresAt: expiresAt.toISOString() },
       defaultPlan: UserPlan.FREE,
     });
   } catch (error) {
@@ -986,6 +1025,11 @@ app.post("/api/auth/register", async (request, response, next) => {
 
 app.post("/api/auth/login", async (request, response, next) => {
   try {
+    if (isAuthRateLimited(request, "login")) {
+      response.status(429).json({ error: "Demasiados intentos de login. Espera unos minutos." });
+      return;
+    }
+
     const email = normalizeUserEmail(request.body.email);
     const password = readString(request.body.password);
 
@@ -1021,6 +1065,7 @@ app.post("/api/auth/login", async (request, response, next) => {
       return;
     }
 
+    clearAuthRateLimitBucket(request, "login");
     const now = new Date();
     await prisma.user.update({
       where: { id: user.id },
@@ -1034,11 +1079,10 @@ app.post("/api/auth/login", async (request, response, next) => {
       },
     });
 
-    const { token, expiresAt } = await issueUserSession(user.id, response);
+    const { expiresAt } = await issueUserSession(user.id, response);
     response.json({
       item: toPublicUser({ ...user, lastLoginAt: now }),
-      token,
-      expiresAt: expiresAt.toISOString(),
+      session: { expiresAt: expiresAt.toISOString() },
     });
   } catch (error) {
     next(error);

@@ -327,7 +327,7 @@ function DesktopHome({
         </div>
         <div className="header-right">
           <p>{formatHeaderDate(hero?.publishedAt ?? new Date().toISOString())}</p>
-          <a href="/cuenta">Cuenta</a>
+          <a href="/ingresar">Ingresar</a>
           <a href={backofficeUrl} target="_blank" rel="noreferrer">
             Backoffice
           </a>
@@ -535,7 +535,7 @@ export default async function Home() {
             </a>
             <div className="mf-header-meta">
               <p>{formatHeaderDate(home.generatedAt)}</p>
-              <a href="/cuenta">Cuenta</a>
+              <a href="/ingresar">Ingresar</a>
               <a href={backofficeUrl} target="_blank" rel="noreferrer">
                 Backoffice
               </a>

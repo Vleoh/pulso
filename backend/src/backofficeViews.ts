@@ -1339,7 +1339,8 @@ export function renderUserForm(params: { action: string; error?: string; data?: 
           <div class="cols-2">
             <div class="field">
               <label>Password inicial</label>
-              <input type="password" name="password" required minlength="8" maxlength="120" placeholder="Minimo 8 caracteres" />
+              <input type="password" name="password" required minlength="10" maxlength="120" placeholder="Minimo 10 chars + mayuscula, minuscula, numero y simbolo" />
+              <p class="hint">Regla de seguridad: 10+ caracteres con mayuscula, minuscula, numero y simbolo.</p>
             </div>
             <div class="field">
               <label>Plan inicial</label>

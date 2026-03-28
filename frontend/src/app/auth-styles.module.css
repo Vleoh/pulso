@@ -1,0 +1,141 @@
+.page {
+  min-height: 100vh;
+  background: radial-gradient(circle at top right, #161616, #090909 60%);
+  color: #f4f4f4;
+}
+
+.wrap {
+  width: min(960px, 92vw);
+  margin: 0 auto;
+  padding: 40px 0 64px;
+}
+
+.shell {
+  border: 1px solid #262626;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #141414, #101010);
+  padding: 20px;
+  display: grid;
+  gap: 14px;
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #5a4720;
+  background: #1f180d;
+  color: #f0d58d;
+  border-radius: 999px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 4px 10px;
+  width: fit-content;
+}
+
+.title {
+  margin: 0;
+  font-family: var(--font-headline);
+  font-size: clamp(40px, 5vw, 54px);
+  letter-spacing: 0.02em;
+  line-height: 1;
+}
+
+.subtitle {
+  margin: 0;
+  color: #bbbbbb;
+  line-height: 1.5;
+}
+
+.card {
+  width: min(460px, 100%);
+  border: 1px solid #2a2a2a;
+  border-radius: 14px;
+  background: #111111;
+  padding: 18px;
+  display: grid;
+  gap: 10px;
+}
+
+.card h2 {
+  margin: 0;
+  font-size: 24px;
+  font-family: var(--font-headline);
+  letter-spacing: 0.02em;
+}
+
+.form {
+  display: grid;
+  gap: 10px;
+}
+
+.input {
+  width: 100%;
+  border: 1px solid #2f2f2f;
+  background: #0f0f0f;
+  color: #f4f4f4;
+  border-radius: 10px;
+  padding: 11px 12px;
+  font-size: 15px;
+}
+
+.input:focus {
+  outline: 2px solid #9a7a2f;
+  outline-offset: 1px;
+  border-color: #9a7a2f;
+}
+
+.submit {
+  border-radius: 10px;
+  border: 0;
+  background: linear-gradient(120deg, #bd9b48, #e4c66f);
+  color: #101010;
+  font-weight: 700;
+  padding: 11px 12px;
+  cursor: pointer;
+}
+
+.submit:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.muted {
+  margin: 0;
+  font-size: 13px;
+  color: #a6a6a6;
+  line-height: 1.4;
+}
+
+.error {
+  border: 1px solid #6a3030;
+  background: #281414;
+  color: #f0b8b8;
+  border-radius: 10px;
+  padding: 9px 11px;
+  font-size: 14px;
+}
+
+.ok {
+  border: 1px solid #5d4f24;
+  background: #221b0d;
+  color: #f3dc9f;
+  border-radius: 10px;
+  padding: 9px 11px;
+  font-size: 14px;
+}
+
+.links {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.link {
+  color: #d3af53;
+  text-decoration: none;
+}
+
+.link:hover {
+  text-decoration: underline;
+}
