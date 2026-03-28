@@ -484,7 +484,11 @@ function DesktopHome({
 
 export default async function Home() {
   const [home, featuredPoll] = await Promise.all([getHomeData(), getFeaturedPoll()]);
-  const backofficeUrl = process.env.NEXT_PUBLIC_BACKOFFICE_URL ?? "http://localhost:8080/backoffice";
+  const backofficeUrl =
+    process.env.NEXT_PUBLIC_BACKOFFICE_URL ??
+    (process.env.NODE_ENV === "production"
+      ? "https://pulso-backend-kgtc.onrender.com/backoffice"
+      : "http://localhost:8080/backoffice");
 
   const internalItems = dedupe([
     ...(home.hero ? [home.hero] : []),

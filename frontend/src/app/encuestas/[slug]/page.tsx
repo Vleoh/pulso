@@ -37,10 +37,10 @@ export default async function PollPage({ params }: PollPageProps) {
   }
 
   const apiBaseUrl =
-    process.env.NEXT_PUBLIC_API_URL ??
     process.env.API_INTERNAL_URL ??
+    process.env.NEXT_PUBLIC_API_URL ??
     process.env.API_URL ??
-    "http://localhost:8080";
+    (process.env.NODE_ENV === "production" ? "https://pulso-backend-kgtc.onrender.com" : "http://localhost:8080");
 
   return (
     <PollExperience

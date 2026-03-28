@@ -53,8 +53,9 @@ const ADMIN_EMAIL = process.env.ADMIN_EMAIL ?? "admin@pulsopais.local";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "cambiar-este-password";
 const ADMIN_JWT_SECRET = process.env.ADMIN_JWT_SECRET ?? "pulso-pais-admin-secret";
 const ADMIN_COOKIE_NAME = process.env.ADMIN_COOKIE_NAME ?? "pulso_admin_session";
+const FALLBACK_FRONTEND_PUBLIC_URL = IS_PRODUCTION ? "https://pulso-pais.vercel.app" : "http://localhost:3000";
 const FRONTEND_PUBLIC_URL =
-  process.env.FRONTEND_PUBLIC_URL ?? process.env.NEXT_PUBLIC_FRONTEND_URL ?? process.env.VERCEL_URL ?? "http://localhost:3000";
+  process.env.FRONTEND_PUBLIC_URL ?? process.env.NEXT_PUBLIC_FRONTEND_URL ?? process.env.VERCEL_URL ?? FALLBACK_FRONTEND_PUBLIC_URL;
 const CORS_ORIGINS = (process.env.CORS_ORIGINS ?? "*,http://localhost:3000,http://127.0.0.1:3000,https://*.vercel.app")
   .split(",")
   .map((origin) => origin.trim())
@@ -365,7 +366,17 @@ const apiCors = cors({
 });
 
 app.use("/api", apiCors);
-app.use(helmet({ crossOriginResourcePolicy: false }));
+app.use(
+  helmet({
+    crossOriginResourcePolicy: false,
+    contentSecurityPolicy: {
+      directives: {
+        ...helmet.contentSecurityPolicy.getDefaultDirectives(),
+        "script-src": ["'self'", "'unsafe-inline'"],
+      },
+    },
+  }),
+);
 app.use(morgan(IS_PRODUCTION ? "combined" : "dev"));
 app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ extended: true, limit: "2mb" }));
