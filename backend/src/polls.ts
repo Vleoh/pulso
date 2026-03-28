@@ -60,6 +60,15 @@ export type PollSnapshot = {
   leader: PollSnapshotOption | null;
 };
 
+export type PollReasonPublic = {
+  id: string;
+  optionId: string;
+  optionLabel: string;
+  optionColorHex: string;
+  text: string;
+  createdAt: string;
+};
+
 function parseDateTime(value: string): Date | null {
   if (!value) {
     return null;
@@ -192,9 +201,14 @@ export type PollPublicView = {
   createdAt: string;
   updatedAt: string;
   metrics: PollSnapshot;
+  recentReasons: PollReasonPublic[];
 };
 
-export function toPollPublicView(poll: Poll & { options: PollOption[] }, snapshot: PollSnapshot): PollPublicView {
+export function toPollPublicView(
+  poll: Poll & { options: PollOption[] },
+  snapshot: PollSnapshot,
+  recentReasons: PollReasonPublic[] = [],
+): PollPublicView {
   return {
     id: poll.id,
     slug: poll.slug,
@@ -213,5 +227,6 @@ export function toPollPublicView(poll: Poll & { options: PollOption[] }, snapsho
     createdAt: poll.createdAt.toISOString(),
     updatedAt: poll.updatedAt.toISOString(),
     metrics: snapshot,
+    recentReasons,
   };
 }

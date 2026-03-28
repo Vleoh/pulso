@@ -167,6 +167,7 @@ model PollVote {
   optionId  String
   voterHash String
   sourceRef String?
+  reasonText String?
   createdAt DateTime   @default(now())
   poll      Poll       @relation(fields: [pollId], references: [id], onDelete: Cascade)
   option    PollOption @relation(fields: [optionId], references: [id], onDelete: Cascade)

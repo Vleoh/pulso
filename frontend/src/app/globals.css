@@ -3300,6 +3300,75 @@ a {
   line-height: 1.35;
 }
 
+.poll-reason-box {
+  border: 1px solid #2b2b2b;
+  border-radius: 10px;
+  background: #101010;
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.poll-reason-box label {
+  color: #d7d7d7;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.poll-reason-box textarea {
+  width: 100%;
+  border: 1px solid #333333;
+  border-radius: 9px;
+  background: #0b0b0b;
+  color: #f2f2f2;
+  font-size: 13px;
+  padding: 9px 10px;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 74px;
+}
+
+.poll-reason-box textarea:focus {
+  outline: none;
+  border-color: #6f5a27;
+  box-shadow: 0 0 0 1px rgba(181, 143, 63, 0.35);
+}
+
+.poll-reason-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.poll-reason-actions small {
+  color: #9a9a9a;
+  font-size: 11px;
+}
+
+.poll-reason-actions span {
+  color: #a8a8a8;
+  font-size: 12px;
+}
+
+.poll-reason-actions button {
+  border: 1px solid #7a6330;
+  border-radius: 999px;
+  background: #17130b;
+  color: #f0d07a;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 7px 11px;
+  cursor: pointer;
+}
+
+.poll-reason-actions button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .poll-footer-cta {
   color: #c9b06b;
   text-transform: uppercase;
@@ -3407,6 +3476,48 @@ a {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
+}
+
+.poll-reasons-card {
+  border: 1px solid #2a2a2a;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #131313, #0d0d0d);
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.poll-reasons-list {
+  display: grid;
+  gap: 8px;
+}
+
+.poll-reason-item {
+  border: 1px solid #2c2c2c;
+  border-radius: 10px;
+  background: #101010;
+  padding: 9px 10px;
+  display: grid;
+  gap: 4px;
+}
+
+.poll-reason-item strong {
+  font-size: 12px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.poll-reason-item p {
+  margin: 0;
+  color: #dedede;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.poll-reasons-empty {
+  margin: 0;
+  color: #acacac;
+  font-size: 13px;
 }
 
 .poll-guide-card {

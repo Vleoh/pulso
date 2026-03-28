@@ -39,6 +39,7 @@ import {
   buildPollSnapshot,
   ensureUniquePollSlug,
   normalizePollInput,
+  type PollReasonPublic,
   toPollPublicView,
 } from "./polls";
 const app = express();
@@ -187,6 +188,65 @@ async function getPollVoteCountMap(pollId: string): Promise<Map<string, number>>
   return new Map(grouped.map((entry) => [entry.optionId, entry._count._all]));
 }
 
+function normalizeVoteReasonInput(raw: unknown): string | null {
+  const reason = readString(raw)
+    .replace(/\uFFFD/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!reason) {
+    return null;
+  }
+
+  if (reason.length < 8) {
+    throw new Error("Tu explicacion debe tener al menos 8 caracteres.");
+  }
+
+  if (reason.length > 360) {
+    throw new Error("Tu explicacion no puede superar 360 caracteres.");
+  }
+
+  return reason;
+}
+
+async function getRecentPollReasons(pollId: string, limit = 12): Promise<PollReasonPublic[]> {
+  const rows = await prisma.pollVote.findMany({
+    where: {
+      pollId,
+      reasonText: {
+        not: null,
+      },
+    },
+    orderBy: {
+      createdAt: "desc",
+    },
+    take: limit,
+    select: {
+      id: true,
+      optionId: true,
+      reasonText: true,
+      createdAt: true,
+      option: {
+        select: {
+          label: true,
+          colorHex: true,
+        },
+      },
+    },
+  });
+
+  return rows
+    .filter((row) => Boolean(row.reasonText && row.reasonText.trim().length > 0))
+    .map((row) => ({
+      id: row.id,
+      optionId: row.optionId,
+      optionLabel: row.option.label,
+      optionColorHex: row.option.colorHex ?? "#c8a64f",
+      text: (row.reasonText ?? "").trim(),
+      createdAt: row.createdAt.toISOString(),
+    }));
+}
+
 async function buildPollPublicPayloadBySlug(slug: string) {
   const poll = await prisma.poll.findUnique({
     where: { slug },
@@ -201,9 +261,9 @@ async function buildPollPublicPayloadBySlug(slug: string) {
     return null;
   }
 
-  const voteMap = await getPollVoteCountMap(poll.id);
+  const [voteMap, recentReasons] = await Promise.all([getPollVoteCountMap(poll.id), getRecentPollReasons(poll.id)]);
   const snapshot = buildPollSnapshot(poll.options, voteMap);
-  return toPollPublicView(poll, snapshot);
+  return toPollPublicView(poll, snapshot, recentReasons);
 }
 
 async function buildBackofficePollRows(): Promise<BackofficePollListItem[]> {
@@ -452,6 +512,13 @@ app.post("/api/polls/:slug/vote", async (request, response, next) => {
       response.status(400).json({ error: "Selecciona una opcion para votar." });
       return;
     }
+    let reasonText: string | null;
+    try {
+      reasonText = normalizeVoteReasonInput(request.body.reasonText);
+    } catch (error) {
+      response.status(400).json({ error: error instanceof Error ? error.message : "Explicacion invalida." });
+      return;
+    }
 
     const poll = await prisma.poll.findUnique({
       where: { slug },
@@ -476,8 +543,9 @@ app.post("/api/polls/:slug/vote", async (request, response, next) => {
     const voterHash = buildVoterHash(request, poll.id);
     const existingVote = await prisma.pollVote.findUnique({
       where: { pollId_voterHash: { pollId: poll.id, voterHash } },
-      select: { optionId: true },
+      select: { id: true, optionId: true, reasonText: true },
     });
+    let reasonSaved = false;
 
     if (!existingVote) {
       await prisma.pollVote.create({
@@ -486,8 +554,23 @@ app.post("/api/polls/:slug/vote", async (request, response, next) => {
           optionId: targetOption.id,
           voterHash,
           sourceRef: asNullable(readString(request.body.sourceRef)),
+          reasonText,
         },
       });
+      reasonSaved = Boolean(reasonText);
+    } else if (reasonText) {
+      await prisma.pollVote.update({
+        where: {
+          pollId_voterHash: {
+            pollId: poll.id,
+            voterHash,
+          },
+        },
+        data: {
+          reasonText,
+        },
+      });
+      reasonSaved = true;
     }
 
     response.cookie(voteCookieName(slug), existingVote?.optionId ?? targetOption.id, {
@@ -508,12 +591,90 @@ app.post("/api/polls/:slug/vote", async (request, response, next) => {
       item: payload,
       selectedOptionId,
       alreadyVoted: Boolean(existingVote),
+      reasonSaved,
     });
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && (error as { code?: string }).code === "P2002") {
       response.status(409).json({ error: "Ya registraste un voto para esta encuesta." });
       return;
     }
+    next(error);
+  }
+});
+
+app.post("/api/polls/:slug/reason", async (request, response, next) => {
+  try {
+    const slug = readString(request.params.slug);
+    if (!slug) {
+      response.status(400).json({ error: "Slug de encuesta invalido." });
+      return;
+    }
+
+    let reasonText: string | null;
+    try {
+      reasonText = normalizeVoteReasonInput(request.body.reasonText);
+    } catch (error) {
+      response.status(400).json({ error: error instanceof Error ? error.message : "Explicacion invalida." });
+      return;
+    }
+
+    if (!reasonText) {
+      response.status(400).json({ error: "Escribe una explicacion para guardar." });
+      return;
+    }
+
+    const poll = await prisma.poll.findUnique({
+      where: { slug },
+      select: { id: true, status: true, startsAt: true, endsAt: true },
+    });
+
+    if (!poll || !isPollAvailableNow(poll)) {
+      response.status(404).json({ error: "Encuesta no disponible." });
+      return;
+    }
+
+    const voterHash = buildVoterHash(request, poll.id);
+    const existingVote = await prisma.pollVote.findUnique({
+      where: {
+        pollId_voterHash: {
+          pollId: poll.id,
+          voterHash,
+        },
+      },
+      select: {
+        optionId: true,
+      },
+    });
+
+    if (!existingVote) {
+      response.status(404).json({ error: "Primero registra tu voto para poder explicar por que." });
+      return;
+    }
+
+    await prisma.pollVote.update({
+      where: {
+        pollId_voterHash: {
+          pollId: poll.id,
+          voterHash,
+        },
+      },
+      data: {
+        reasonText,
+      },
+    });
+
+    const payload = await buildPollPublicPayloadBySlug(slug);
+    if (!payload) {
+      response.status(404).json({ error: "No se pudo reconstruir la encuesta." });
+      return;
+    }
+
+    response.json({
+      item: payload,
+      selectedOptionId: existingVote.optionId,
+      reasonSaved: true,
+    });
+  } catch (error) {
     next(error);
   }
 });

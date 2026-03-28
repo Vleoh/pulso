@@ -117,6 +117,15 @@ export type PollOptionResult = {
   pct: number;
 };
 
+export type PollReasonItem = {
+  id: string;
+  optionId: string;
+  optionLabel: string;
+  optionColorHex: string;
+  text: string;
+  createdAt: string;
+};
+
 export type PollItem = {
   id: string;
   slug: string;
@@ -139,4 +148,5 @@ export type PollItem = {
     options: PollOptionResult[];
     leader: PollOptionResult | null;
   };
+  recentReasons: PollReasonItem[];
 };
