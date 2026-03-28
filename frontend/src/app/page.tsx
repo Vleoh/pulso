@@ -281,6 +281,7 @@ function DesktopHome({
   stream,
   radar,
   featuredPoll,
+  theme,
   tickerItems,
   backofficeUrl,
   weatherLabel,
@@ -292,6 +293,7 @@ function DesktopHome({
   stream: FeedItem[];
   radar: FeedItem[];
   featuredPoll: PollItem | null;
+  theme: "premium" | "classic" | "social" | "editorial";
   tickerItems: string[];
   backofficeUrl: string;
   weatherLabel: string;
@@ -300,9 +302,10 @@ function DesktopHome({
 }) {
   const sideCards = stream.slice(0, 3);
   const quickRead = stream.slice(3, 9);
+  const themeClass = theme === "premium" ? "" : `theme-${theme}`;
 
   return (
-    <main className="home theme-social">
+    <main className={`home ${themeClass}`.trim()}>
       <section className="ticker">
         <div className="ticker-label">Urgente</div>
         <div className="ticker-track">
@@ -649,6 +652,7 @@ export default async function Home() {
           stream={stream}
           radar={radar}
           featuredPoll={featuredPoll}
+          theme={home.theme}
           tickerItems={tickerItems}
           backofficeUrl={backofficeUrl}
           weatherLabel={`${home.social.weather.location} · ${home.social.weather.temperatureC ?? "--"} C`}
