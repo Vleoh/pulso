@@ -17,6 +17,76 @@ type VoteResponse = {
   error?: string;
 };
 
+type CandidateMeta = {
+  imagePath: string;
+  party: string;
+  tag: string;
+  partyColor: string;
+};
+
+const CANDIDATE_META_MAP: Record<string, CandidateMeta> = {
+  "javier milei": {
+    imagePath: "/caras/Javier_Milei.jpg",
+    party: "La Libertad Avanza",
+    tag: "LLA",
+    partyColor: "#d5ad45",
+  },
+  "axel kicillof": {
+    imagePath: "/caras/Axel_Kicillof.jpg",
+    party: "Union por la Patria",
+    tag: "UxP",
+    partyColor: "#de4a4a",
+  },
+  "victoria villarruel": {
+    imagePath: "/caras/Victoria_Villarruel.jpg",
+    party: "La Libertad Avanza",
+    tag: "LLA",
+    partyColor: "#d5ad45",
+  },
+  "sergio massa": {
+    imagePath: "/caras/Sergio_Massa.jpg",
+    party: "Frente Renovador",
+    tag: "FR",
+    partyColor: "#28a8ff",
+  },
+  "patricia bullrich": {
+    imagePath: "/caras/Patricia_Bullrich.jpg",
+    party: "PRO",
+    tag: "PRO",
+    partyColor: "#2d79ff",
+  },
+  "mauricio macri": {
+    imagePath: "/caras/Mauricio_Macri.jpg",
+    party: "PRO",
+    tag: "PRO",
+    partyColor: "#2d79ff",
+  },
+  "cristina kirchner": {
+    imagePath: "/caras/Cristina_Kirchner.jpg",
+    party: "Union por la Patria",
+    tag: "UxP",
+    partyColor: "#de4a4a",
+  },
+  "myriam bregman": {
+    imagePath: "/caras/Myriam_Bregman.jpg",
+    party: "FIT-U",
+    tag: "FIT-U",
+    partyColor: "#d14a66",
+  },
+  "juan grabois": {
+    imagePath: "/caras/Juan_Grabois.jpg",
+    party: "Patria Grande",
+    tag: "PG",
+    partyColor: "#58bc70",
+  },
+  "dante gebel": {
+    imagePath: "/caras/Dante_Gebel.jpg",
+    party: "Independiente",
+    tag: "IND",
+    partyColor: "#8f55dd",
+  },
+};
+
 function normalizeBaseUrl(value: string): string {
   if (value.startsWith("http://") || value.startsWith("https://")) {
     return value.replace(/\/+$/, "");
@@ -94,21 +164,17 @@ function playVoteSound(): void {
 function normalizeCopy(value: string): string {
   return value
     .replace(/\uFFFD/g, "")
-    .replace(/\bconfiarias\b/gi, "confiar\u00edas")
-    .replace(/\bpais\b/gi, "pa\u00eds")
-    .replace(/\bpor que\b/gi, "por qu\u00e9")
     .replace(/\s+/g, " ")
     .trim();
 }
 
 function normalizeQuestion(value: string): string {
   let text = normalizeCopy(value);
-  text = text.replace(/^A quien\b/i, "\u00bfA qui\u00e9n");
-  text = text.replace(/^A qui\u00e9n\b/i, "\u00bfA qui\u00e9n");
-  text = text.replace(/^\u00bf+/, "\u00bf");
+  text = text.replace(/^A quien\b/i, "¿A quien");
+  text = text.replace(/^¿+/, "¿");
   text = text.replace(/\?+$/, "?");
 
-  if (text.startsWith("\u00bf") && !text.endsWith("?")) {
+  if (text.startsWith("¿") && !text.endsWith("?")) {
     text = `${text}?`;
   }
   return text;
@@ -129,6 +195,18 @@ function ensurePollShape(item: PollItem): PollItem {
   };
 }
 
+function getCandidateMeta(label: string, fallbackColor: string): CandidateMeta {
+  const key = label.toLowerCase().trim();
+  return (
+    CANDIDATE_META_MAP[key] ?? {
+      imagePath: "/caras/candidatos_square_preview.jpg",
+      party: "Comunidad",
+      tag: "PP",
+      partyColor: fallbackColor,
+    }
+  );
+}
+
 export function PollExperience({ initialPoll, initialSelectedOptionId, apiBaseUrl }: PollExperienceProps) {
   const [poll, setPoll] = useState<PollItem>(ensurePollShape(initialPoll));
   const [selectedOptionId, setSelectedOptionId] = useState<string | null>(initialSelectedOptionId);
@@ -136,16 +214,25 @@ export function PollExperience({ initialPoll, initialSelectedOptionId, apiBaseUr
   const [status, setStatus] = useState<string>("Resultados en vivo actualizados.");
   const [statusLevel, setStatusLevel] = useState<"ok" | "warn" | "error">("ok");
   const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const [reasonDraft, setReasonDraft] = useState<string>("");
-  const [savingReason, setSavingReason] = useState<boolean>(false);
+  const [modalOptionId, setModalOptionId] = useState<string | null>(null);
+  const [modalReason, setModalReason] = useState<string>("");
+  const [modalError, setModalError] = useState<string | null>(null);
+
   const lastUpdateRef = useRef<number>(Date.now());
   const toastTimerRef = useRef<number | null>(null);
+
   const baseUrl = useMemo(() => normalizeBaseUrl(apiBaseUrl), [apiBaseUrl]);
   const readableQuestion = useMemo(() => normalizeQuestion(poll.question), [poll.question]);
   const readableDescription = useMemo(() => (poll.description ? normalizeCopy(poll.description) : null), [poll.description]);
   const readableFooterCta = useMemo(() => normalizeCopy(poll.footerCta || "Vota y explica por que"), [poll.footerCta]);
-  const normalizedReason = useMemo(() => normalizeReasonInput(reasonDraft), [reasonDraft]);
-  const reasonLength = normalizedReason?.length ?? 0;
+  const sortedOptions = useMemo(
+    () => [...poll.metrics.options].sort((a, b) => a.sortOrder - b.sortOrder),
+    [poll.metrics.options],
+  );
+  const modalOption = useMemo(() => sortedOptions.find((option) => option.id === modalOptionId) ?? null, [sortedOptions, modalOptionId]);
+  const modalReasonNormalized = useMemo(() => normalizeReasonInput(modalReason), [modalReason]);
+  const gradient = useMemo(() => pieGradient(poll), [poll]);
+  const secondsAgo = Math.max(0, Math.round((Date.now() - lastUpdateRef.current) / 1000));
 
   const showToast = useCallback((message: string) => {
     setToastMessage(message);
@@ -179,7 +266,7 @@ export function PollExperience({ initialPoll, initialSelectedOptionId, apiBaseUr
       }
       lastUpdateRef.current = Date.now();
     } catch {
-      // no-op: mantenemos el ultimo estado valido.
+      // keep last good state
     }
   }, [baseUrl, poll.slug]);
 
@@ -192,7 +279,7 @@ export function PollExperience({ initialPoll, initialSelectedOptionId, apiBaseUr
 
   useEffect(() => {
     if (initialSelectedOptionId) {
-      setStatus("Tu voto ya estaba registrado. Puedes sumar tu argumento debajo.");
+      setStatus("Tu voto ya estaba registrado.");
       setStatusLevel("warn");
     }
   }, [initialSelectedOptionId]);
@@ -205,7 +292,29 @@ export function PollExperience({ initialPoll, initialSelectedOptionId, apiBaseUr
     };
   }, []);
 
-  async function vote(optionId: string): Promise<void> {
+  const closeVoteModal = useCallback(() => {
+    if (busyOptionId) {
+      return;
+    }
+    setModalOptionId(null);
+    setModalReason("");
+    setModalError(null);
+  }, [busyOptionId]);
+
+  useEffect(() => {
+    if (!modalOptionId) {
+      return;
+    }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        closeVoteModal();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [modalOptionId, closeVoteModal]);
+
+  async function vote(optionId: string, reasonText: string | null): Promise<void> {
     if (busyOptionId || selectedOptionId) {
       return;
     }
@@ -224,8 +333,8 @@ export function PollExperience({ initialPoll, initialSelectedOptionId, apiBaseUr
         },
         body: JSON.stringify({
           optionId,
+          reasonText,
           sourceRef: typeof document !== "undefined" ? document.referrer : "",
-          reasonText: normalizedReason,
         }),
       });
 
@@ -241,88 +350,56 @@ export function PollExperience({ initialPoll, initialSelectedOptionId, apiBaseUr
       setPoll(ensurePollShape(payload.item));
       setSelectedOptionId(payload.selectedOptionId ?? optionId);
       lastUpdateRef.current = Date.now();
+      setModalOptionId(null);
+      setModalReason("");
+      setModalError(null);
 
       if (!payload.alreadyVoted) {
         playVoteSound();
       }
 
       if (payload.reasonSaved) {
-        showToast("Tu voto y tu explicacion quedaron registrados.");
+        showToast("Voto y explicacion registrados.");
       } else if (!payload.alreadyVoted) {
-        showToast("Tu voto quedo registrado.");
+        showToast("Voto registrado.");
       } else {
-        showToast("Ya tenias un voto registrado en esta encuesta.");
+        showToast("Ya tenias un voto registrado.");
       }
 
-      setStatus(
-        payload.alreadyVoted
-          ? "Ya tenias un voto registrado. Puedes actualizar tu explicacion."
-          : payload.reasonSaved
-            ? "Voto + explicacion guardados. Resultado actualizado en vivo."
-            : "Voto registrado. Si quieres, agrega tu explicacion debajo.",
-      );
+      setStatus(payload.alreadyVoted ? "Ya tenias un voto registrado." : "Voto registrado. Resultado actualizado en vivo.");
       setStatusLevel(payload.alreadyVoted ? "warn" : "ok");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Error al votar.");
       setStatusLevel("error");
+      setModalError(error instanceof Error ? error.message : "Error al votar.");
     } finally {
       setBusyOptionId(null);
     }
   }
 
-  async function saveReason(): Promise<void> {
-    if (!selectedOptionId || !normalizedReason || normalizedReason.length < 8 || normalizedReason.length > 360 || savingReason) {
+  function openVoteModal(optionId: string): void {
+    if (selectedOptionId || busyOptionId) {
       return;
     }
-
-    setSavingReason(true);
-    setStatus("Guardando tu explicacion...");
-    setStatusLevel("warn");
-
-    try {
-      const response = await fetch(`${baseUrl}/api/polls/${encodeURIComponent(poll.slug)}/reason`, {
-        method: "POST",
-        credentials: "include",
-        headers: {
-          "content-type": "application/json",
-          accept: "application/json",
-        },
-        body: JSON.stringify({
-          reasonText: normalizedReason,
-        }),
-      });
-
-      const payload = (await response.json()) as VoteResponse;
-      if (!response.ok) {
-        throw new Error(payload.error || "No se pudo guardar tu explicacion.");
-      }
-
-      if (payload.item) {
-        setPoll(ensurePollShape(payload.item));
-      }
-      if (typeof payload.selectedOptionId === "string" || payload.selectedOptionId === null) {
-        setSelectedOptionId(payload.selectedOptionId);
-      }
-      lastUpdateRef.current = Date.now();
-
-      setStatus("Explicacion registrada correctamente.");
-      setStatusLevel("ok");
-      showToast("Tu explicacion ya esta publicada.");
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Error al guardar la explicacion.");
-      setStatusLevel("error");
-    } finally {
-      setSavingReason(false);
-    }
+    setModalOptionId(optionId);
+    setModalReason("");
+    setModalError(null);
   }
 
-  const sortedOptions = useMemo(
-    () => [...poll.metrics.options].sort((a, b) => a.sortOrder - b.sortOrder),
-    [poll.metrics.options],
-  );
-
-  const gradient = useMemo(() => pieGradient(poll), [poll]);
-  const secondsAgo = Math.max(0, Math.round((Date.now() - lastUpdateRef.current) / 1000));
+  async function confirmVoteFromModal(): Promise<void> {
+    if (!modalOption) {
+      return;
+    }
+    if (modalReasonNormalized && modalReasonNormalized.length < 8) {
+      setModalError("Si agregas explicacion, usa al menos 8 caracteres.");
+      return;
+    }
+    if (modalReasonNormalized && modalReasonNormalized.length > 360) {
+      setModalError("La explicacion no puede superar 360 caracteres.");
+      return;
+    }
+    await vote(modalOption.id, modalReasonNormalized);
+  }
 
   return (
     <main className="poll-screen">
@@ -347,31 +424,39 @@ export function PollExperience({ initialPoll, initialSelectedOptionId, apiBaseUr
               <h2>Candidatos</h2>
               <span>{poll.metrics.totalVotes} votos</span>
             </div>
-            <p className="poll-vote-hint">Toca un candidato para votar. Un voto por dispositivo/navegador.</p>
+            <p className="poll-vote-hint">Pulsa un candidato para abrir el modal de voto.</p>
             <div className="poll-option-list">
               {sortedOptions.map((option) => {
                 const selected = selectedOptionId === option.id;
+                const meta = getCandidateMeta(option.label, option.colorHex);
                 const optionStyle = {
                   borderColor: selected ? option.colorHex : undefined,
                   boxShadow: selected ? `0 0 0 1px ${option.colorHex} inset` : undefined,
                   ["--vote-pct" as string]: `${Math.max(0, Math.min(100, option.pct)).toFixed(2)}%`,
                 } as CSSProperties;
+
                 return (
                   <button
                     type="button"
                     key={option.id}
                     className={`poll-option ${selected ? "is-selected" : ""}`}
-                    onClick={() => vote(option.id)}
+                    onClick={() => openVoteModal(option.id)}
                     disabled={Boolean(selectedOptionId) || busyOptionId !== null}
                     aria-pressed={selected}
                     title={selected ? "Ya votaste esta opcion" : `Votar por ${option.label}`}
                     style={optionStyle}
                   >
-                    <span className="poll-option-index" style={{ backgroundColor: option.colorHex }}>
+                    <span className="poll-option-index" style={{ backgroundColor: meta.partyColor }}>
                       {option.sortOrder}
                     </span>
-                    <span className="poll-option-label">{option.label}</span>
-                    <span className="poll-option-emoji">{option.emoji}</span>
+                    <span className="poll-candidate-avatar">
+                      <img src={meta.imagePath} alt={option.label} loading="lazy" />
+                    </span>
+                    <span className="poll-candidate-main">
+                      <strong>{option.label}</strong>
+                      <small style={{ color: meta.partyColor }}>{meta.party}</small>
+                      <em style={{ color: meta.partyColor }}>{meta.tag}</em>
+                    </span>
                     <span className="poll-option-right">
                       <strong>{formatPct(option.pct)}</strong>
                       <small>{option.votes} votos</small>
@@ -381,33 +466,6 @@ export function PollExperience({ initialPoll, initialSelectedOptionId, apiBaseUr
                 );
               })}
             </div>
-
-            <div className="poll-reason-box">
-              <label htmlFor="pollReasonInput">Explica por que votaste asi (se publica en la encuesta)</label>
-              <textarea
-                id="pollReasonInput"
-                value={reasonDraft}
-                onChange={(event) => setReasonDraft(event.target.value)}
-                rows={3}
-                maxLength={360}
-                placeholder="Ej: Porque tiene mejor equipo para gobernar y mas capacidad de gestion federal."
-              />
-              <div className="poll-reason-actions">
-                <small>{reasonLength}/360</small>
-                {selectedOptionId ? (
-                  <button
-                    type="button"
-                    onClick={() => void saveReason()}
-                    disabled={savingReason || !normalizedReason || reasonLength < 8 || reasonLength > 360}
-                  >
-                    {savingReason ? "Guardando..." : "Guardar explicacion"}
-                  </button>
-                ) : (
-                  <span>Si ya escribiste, se enviara junto a tu voto.</span>
-                )}
-              </div>
-            </div>
-
             <p className="poll-footer-cta">{readableFooterCta}</p>
           </article>
 
@@ -476,6 +534,54 @@ export function PollExperience({ initialPoll, initialSelectedOptionId, apiBaseUr
           </article>
         </section>
       </section>
+
+      {modalOption ? (
+        <div className="poll-modal-backdrop" onClick={closeVoteModal}>
+          <div className="poll-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+            <button type="button" className="poll-modal-close" onClick={closeVoteModal} aria-label="Cerrar modal">
+              ×
+            </button>
+            <p className="poll-modal-kicker">Confirmar voto</p>
+            <h3>¿Vas a votar por este candidato?</h3>
+            <div className="poll-modal-candidate">
+              <img src={getCandidateMeta(modalOption.label, modalOption.colorHex).imagePath} alt={modalOption.label} />
+              <div>
+                <strong>{modalOption.label}</strong>
+                <span style={{ color: getCandidateMeta(modalOption.label, modalOption.colorHex).partyColor }}>
+                  {getCandidateMeta(modalOption.label, modalOption.colorHex).party}
+                </span>
+              </div>
+            </div>
+            <label htmlFor="pollModalReason">Opcional: explica por que</label>
+            <textarea
+              id="pollModalReason"
+              rows={3}
+              maxLength={360}
+              placeholder="Tu explicacion (opcional)..."
+              value={modalReason}
+              onChange={(event) => {
+                setModalReason(event.target.value);
+                if (modalError) {
+                  setModalError(null);
+                }
+              }}
+            />
+            <div className="poll-modal-meta">
+              <small>{modalReasonNormalized?.length ?? 0}/360</small>
+              <span>Opcional para no friccionar el voto.</span>
+            </div>
+            {modalError ? <p className="poll-modal-error">{modalError}</p> : null}
+            <div className="poll-modal-actions">
+              <button type="button" className="ghost" onClick={closeVoteModal} disabled={Boolean(busyOptionId)}>
+                Cancelar
+              </button>
+              <button type="button" onClick={() => void confirmVoteFromModal()} disabled={Boolean(busyOptionId)}>
+                {busyOptionId === modalOption.id ? "Enviando..." : "Enviar voto"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {toastMessage ? (
         <div className="poll-toast" role="status" aria-live="polite">
