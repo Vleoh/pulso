@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { PollItem } from "@/lib/types";
 
 type PollExperienceProps = {
@@ -89,14 +89,53 @@ function playVoteSound(): void {
   }, 260);
 }
 
+function normalizeCopy(value: string): string {
+  return value
+    .replace(/\uFFFD/g, "")
+    .replace(/\bconfiarias\b/gi, "confiarías")
+    .replace(/\bpais\b/gi, "país")
+    .replace(/\bpor que\b/gi, "por qué")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeQuestion(value: string): string {
+  let text = normalizeCopy(value);
+  text = text.replace(/^A quien\b/i, "¿A quién");
+  text = text.replace(/^A quién\b/i, "¿A quién");
+  text = text.replace(/^¿+/, "¿");
+  text = text.replace(/\?+$/, "?");
+
+  if (text.startsWith("¿") && !text.endsWith("?")) {
+    text = `${text}?`;
+  }
+  return text;
+}
+
 export function PollExperience({ initialPoll, initialSelectedOptionId, apiBaseUrl }: PollExperienceProps) {
   const [poll, setPoll] = useState<PollItem>(initialPoll);
   const [selectedOptionId, setSelectedOptionId] = useState<string | null>(initialSelectedOptionId);
   const [busyOptionId, setBusyOptionId] = useState<string | null>(null);
   const [status, setStatus] = useState<string>("Resultados en vivo actualizados.");
   const [statusLevel, setStatusLevel] = useState<"ok" | "warn" | "error">("ok");
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
   const lastUpdateRef = useRef<number>(Date.now());
+  const toastTimerRef = useRef<number | null>(null);
   const baseUrl = useMemo(() => normalizeBaseUrl(apiBaseUrl), [apiBaseUrl]);
+  const readableQuestion = useMemo(() => normalizeQuestion(poll.question), [poll.question]);
+  const readableDescription = useMemo(() => (poll.description ? normalizeCopy(poll.description) : null), [poll.description]);
+  const readableFooterCta = useMemo(() => normalizeCopy(poll.footerCta || "Votá y explicá por qué"), [poll.footerCta]);
+
+  const showToast = useCallback((message: string) => {
+    setToastMessage(message);
+    if (toastTimerRef.current) {
+      window.clearTimeout(toastTimerRef.current);
+    }
+    toastTimerRef.current = window.setTimeout(() => {
+      setToastMessage(null);
+      toastTimerRef.current = null;
+    }, 3600);
+  }, []);
 
   const refreshPoll = useCallback(async () => {
     try {
@@ -129,6 +168,21 @@ export function PollExperience({ initialPoll, initialSelectedOptionId, apiBaseUr
     }, 8000);
     return () => window.clearInterval(timer);
   }, [refreshPoll]);
+
+  useEffect(() => {
+    if (initialSelectedOptionId) {
+      setStatus("Tu voto ya estaba registrado. Mostramos el resultado en vivo.");
+      setStatusLevel("warn");
+    }
+  }, [initialSelectedOptionId]);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) {
+        window.clearTimeout(toastTimerRef.current);
+      }
+    };
+  }, []);
 
   async function vote(optionId: string): Promise<void> {
     if (busyOptionId || selectedOptionId) {
@@ -168,6 +222,9 @@ export function PollExperience({ initialPoll, initialSelectedOptionId, apiBaseUr
 
       if (!payload.alreadyVoted) {
         playVoteSound();
+        showToast("Tu voto quedó registrado.");
+      } else {
+        showToast("Ya tenías un voto registrado en esta encuesta.");
       }
 
       setStatus(payload.alreadyVoted ? "Ya tenias un voto registrado. Mostrando resultado actual." : "Voto registrado. Resultado actualizado en vivo.");
@@ -193,8 +250,8 @@ export function PollExperience({ initialPoll, initialSelectedOptionId, apiBaseUr
       <section className="poll-shell">
         <header className="poll-header-card">
           <p className="poll-hook">{poll.hookLabel || "Encuesta Nacional"}</p>
-          <h1>{poll.question}</h1>
-          {poll.description && <p className="poll-description">{poll.description}</p>}
+          <h1>{readableQuestion}</h1>
+          {readableDescription && <p className="poll-description">{readableDescription}</p>}
           <div className="poll-head-actions">
             {poll.interviewUrl ? (
               <a className="poll-link-btn" href={poll.interviewUrl} target="_blank" rel="noreferrer">
@@ -211,9 +268,15 @@ export function PollExperience({ initialPoll, initialSelectedOptionId, apiBaseUr
               <h2>Candidatos</h2>
               <span>{poll.metrics.totalVotes} votos</span>
             </div>
+            <p className="poll-vote-hint">Tocá un candidato para votar. Un voto por dispositivo/navegador.</p>
             <div className="poll-option-list">
               {sortedOptions.map((option) => {
                 const selected = selectedOptionId === option.id;
+                const optionStyle = {
+                  borderColor: selected ? option.colorHex : undefined,
+                  boxShadow: selected ? `0 0 0 1px ${option.colorHex} inset` : undefined,
+                  ["--vote-pct" as string]: `${Math.max(0, Math.min(100, option.pct)).toFixed(2)}%`,
+                } as CSSProperties;
                 return (
                   <button
                     type="button"
@@ -221,10 +284,9 @@ export function PollExperience({ initialPoll, initialSelectedOptionId, apiBaseUr
                     className={`poll-option ${selected ? "is-selected" : ""}`}
                     onClick={() => vote(option.id)}
                     disabled={Boolean(selectedOptionId) || busyOptionId !== null}
-                    style={{
-                      borderColor: selected ? option.colorHex : undefined,
-                      boxShadow: selected ? `0 0 0 1px ${option.colorHex} inset` : undefined,
-                    }}
+                    aria-pressed={selected}
+                    title={selected ? "Ya votaste esta opción" : `Votar por ${option.label}`}
+                    style={optionStyle}
                   >
                     <span className="poll-option-index" style={{ backgroundColor: option.colorHex }}>
                       {option.sortOrder}
@@ -234,12 +296,13 @@ export function PollExperience({ initialPoll, initialSelectedOptionId, apiBaseUr
                     <span className="poll-option-right">
                       <strong>{formatPct(option.pct)}</strong>
                       <small>{option.votes} votos</small>
+                      {selected ? <em>Tu voto</em> : null}
                     </span>
                   </button>
                 );
               })}
             </div>
-            <p className="poll-footer-cta">{poll.footerCta || "Vota y explica por que"}</p>
+            <p className="poll-footer-cta">{readableFooterCta}</p>
           </article>
 
           <article className="poll-chart-card">
@@ -266,7 +329,36 @@ export function PollExperience({ initialPoll, initialSelectedOptionId, apiBaseUr
             </div>
           </article>
         </section>
+
+        <section className="poll-guide-grid">
+          <article className="poll-guide-card">
+            <h3>Cómo funciona</h3>
+            <p>Encuesta digital de opinión de la comunidad. Se actualiza en tiempo real con cada voto.</p>
+            <ul>
+              <li>Ranking en vivo por candidato.</li>
+              <li>Seguimiento continuo para compartir en redes.</li>
+              <li>Un voto por dispositivo/navegador.</li>
+            </ul>
+          </article>
+          <article className="poll-guide-card">
+            <h3>Transparencia editorial</h3>
+            <p>
+              Este módulo refleja participación digital, no reemplaza una encuesta estadística con muestra representativa.
+            </p>
+            <ul>
+              <li>Etiqueta pública: “Encuesta digital / opinión de la comunidad”.</li>
+              <li>Resultados abiertos para lectura y debate.</li>
+              <li>CTA sugerida: “Votá y explicá por qué”.</li>
+            </ul>
+          </article>
+        </section>
       </section>
+
+      {toastMessage ? (
+        <div className="poll-toast" role="status" aria-live="polite">
+          {toastMessage}
+        </div>
+      ) : null}
     </main>
   );
 }
