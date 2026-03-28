@@ -1,9 +1,10 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import mammoth from "mammoth";
-import { NewsStatus } from "@prisma/client";
+import { NewsStatus, PollStatus } from "@prisma/client";
 import type { NormalizedNewsInput } from "./types";
 import { slugifyText } from "./utils";
+import { FIXED_CANDIDATE_OPTIONS } from "./polls";
 
 export type AiDecision = "ALLOW" | "REVIEW" | "REJECT";
 
@@ -78,6 +79,42 @@ export type EditorialAskResponse = {
   answer: string;
   shouldApplyDraft: boolean;
   draft: EditorialAssistDraft | null;
+  model: string;
+};
+
+export type PollAssistInput = {
+  brief: string;
+  currentTitle: string | null;
+  currentSlug: string | null;
+  currentQuestion: string | null;
+  currentHookLabel: string | null;
+  currentFooterCta: string | null;
+  currentDescription: string | null;
+  currentInterviewUrl: string | null;
+  currentCoverImageUrl: string | null;
+  currentStatus: PollStatus | null;
+  currentPublishedAt: string | null;
+  currentStartsAt: string | null;
+  currentEndsAt: string | null;
+  currentIsFeatured: boolean;
+};
+
+export type PollAssistDraft = {
+  title: string | null;
+  slug: string | null;
+  question: string | null;
+  hookLabel: string | null;
+  footerCta: string | null;
+  description: string | null;
+  interviewUrl: string | null;
+  coverImageUrl: string | null;
+  status: PollStatus | null;
+  publishedAt: string | null;
+  startsAt: string | null;
+  endsAt: string | null;
+  isFeatured: boolean;
+  customSheetCode: string | null;
+  notes: string[];
   model: string;
 };
 
@@ -657,6 +694,7 @@ function buildAssistPrompt(input: EditorialAssistInput, guidelineText: string, n
     "3) Evita afirmaciones no verificables, lenguaje militante o propaganda explicita.",
     "4) Devuelve seccion y provincia sugeridas solo en valores del CMS.",
     "5) Cruza el contexto del wrapper para detectar angulo noticioso y continuidad de cobertura.",
+    "6) Completa SIEMPRE title, kicker, excerpt y body con contenido util para publicacion.",
     "",
     "VALORES PERMITIDOS DE SECTION:",
     "NACION, PROVINCIAS, MUNICIPIOS, OPINION, ENTREVISTAS, PUBLINOTAS, RADAR_ELECTORAL, ECONOMIA, INTERNACIONALES, DISTRITOS",
@@ -771,6 +809,100 @@ function buildAskPrompt(input: EditorialAssistInput, guidelineText: string, news
   ].join("\n");
 }
 
+function buildPollAssistPrompt(input: PollAssistInput, guidelineText: string, newsContext: string | null): string {
+  const fixedCandidates = FIXED_CANDIDATE_OPTIONS.map(
+    (candidate, index) => `${index + 1}. ${candidate.label} (${candidate.colorHex})`,
+  ).join("\n");
+  const payload = {
+    brief: input.brief,
+    current_poll: {
+      title: input.currentTitle,
+      slug: input.currentSlug,
+      question: input.currentQuestion,
+      hook_label: input.currentHookLabel,
+      footer_cta: input.currentFooterCta,
+      description: input.currentDescription,
+      interview_url: input.currentInterviewUrl,
+      cover_image_url: input.currentCoverImageUrl,
+      status: input.currentStatus,
+      published_at: input.currentPublishedAt,
+      starts_at: input.currentStartsAt,
+      ends_at: input.currentEndsAt,
+      is_featured: input.currentIsFeatured,
+    },
+  };
+
+  return [
+    "LINEA EDITORIAL DE REFERENCIA:",
+    guidelineText,
+    "",
+    "CONTEXTO DE AGENDA PROVISTO POR WRAPPER:",
+    newsContext ?? "Sin contexto adicional disponible.",
+    "",
+    "PEDIDO DEL EDITOR:",
+    JSON.stringify(payload, null, 2),
+    "",
+    "CANDIDATOS FIJOS (NO CAMBIAR ORDEN NI NOMBRES):",
+    fixedCandidates,
+    "",
+    "TAREA:",
+    "1) Diseña una encuesta digital lista para Pulso Pais con foco en participacion y claridad legal.",
+    "2) Mantene tono firme, periodistico y neutral (sin militancia).",
+    "3) Hook y CTA deben ser cortos y accionables.",
+    "4) Si faltan datos, completa con defaults operativos.",
+    "5) Genera un bloque opcional de codigo HTML/CSS/JS para hoja personalizada (responsivo, sin dependencias externas).",
+    "6) NO incluyas ni modifiques candidatos; solo campos de configuracion de la encuesta.",
+    "",
+    "REGLAS LEGALES:",
+    '- Presentar como "encuesta digital" u "opinion de la comunidad".',
+    "- Nunca presentar como encuesta estadistica cientifica.",
+    "",
+    "RESPUESTA OBLIGATORIA EN JSON ESTRICTO:",
+    "(todo texto en espanol neutro, sin ingles)",
+    "{",
+    '  "title": "titulo interno de encuesta",',
+    '  "slug": "slug-publico-opcional",',
+    '  "question": "pregunta principal",',
+    '  "hook_label": "etiqueta superior",',
+    '  "footer_cta": "llamado a accion",',
+    '  "description": "contexto corto",',
+    '  "interview_url": "url opcional",',
+    '  "cover_image_url": "url opcional",',
+    '  "status": "DRAFT|PUBLISHED|null",',
+    '  "published_at": "ISO 8601 o null",',
+    '  "starts_at": "ISO 8601 o null",',
+    '  "ends_at": "ISO 8601 o null",',
+    '  "is_featured": false,',
+    '  "custom_sheet_code": "<section>...</section>",',
+    '  "notes": ["criterios aplicados"]',
+    "}",
+  ].join("\n");
+}
+
+function normalizePollAssistDraft(parsed: Record<string, unknown>, modelUsed: string): PollAssistDraft {
+  const rawStatus = asCleanText(parsed.status, 24);
+  const status = rawStatus === PollStatus.DRAFT || rawStatus === PollStatus.PUBLISHED ? rawStatus : null;
+
+  return {
+    title: asCleanText(parsed.title, 220),
+    slug: asCleanText(parsed.slug, 180),
+    question: asCleanText(parsed.question, 260),
+    hookLabel: asCleanText(parsed.hook_label, 80),
+    footerCta: asCleanText(parsed.footer_cta, 140),
+    description: asCleanText(parsed.description, 420),
+    interviewUrl: asCleanText(parsed.interview_url, 1200),
+    coverImageUrl: asCleanText(parsed.cover_image_url, 1200),
+    status,
+    publishedAt: asCleanText(parsed.published_at, 80),
+    startsAt: asCleanText(parsed.starts_at, 80),
+    endsAt: asCleanText(parsed.ends_at, 80),
+    isFeatured: asBoolean(parsed.is_featured),
+    customSheetCode: asLongText(parsed.custom_sheet_code, 12000),
+    notes: asStringList(parsed.notes, 8, 220),
+    model: modelUsed,
+  };
+}
+
 function normalizeAssistDraft(parsed: Record<string, unknown>, modelUsed: string): EditorialAssistDraft {
   const rawSection = asCleanText(parsed.section, 40);
   const rawProvince = asCleanText(parsed.province, 40);
@@ -879,6 +1011,45 @@ export async function askEditorialWithAi(
     return normalizeAskResponse(parsed, modelUsed);
   } catch (error) {
     throw new Error(`No se pudo responder la consulta IA (${(error as Error).message}).`);
+  }
+}
+
+export async function generatePollDraftWithAi(
+  input: PollAssistInput,
+  newsContext: string | null = null,
+): Promise<PollAssistDraft> {
+  if (!AI_FILTER_ENABLED) {
+    throw new Error("Asistencia IA desactivada por configuracion.");
+  }
+
+  if (input.brief.trim().length < 12) {
+    throw new Error("El brief para IA debe tener al menos 12 caracteres.");
+  }
+
+  try {
+    const guidelineText = await readGuidelines();
+    const prompt = buildPollAssistPrompt(input, guidelineText, newsContext);
+    const { parsed, modelUsed } = await runAiJson({
+      systemPrompt:
+        "Sos asistente de estrategia editorial de Pulso Pais. Generas configuraciones de encuestas listas para publicar y codigo opcional de hoja personalizada. Responde SIEMPRE en JSON valido y en espanol neutro.",
+      userPrompt: prompt,
+      temperature: 0.35,
+    });
+    const normalized = normalizePollAssistDraft(parsed, modelUsed);
+
+    if (!normalized.slug && normalized.title) {
+      normalized.slug = slugifyText(normalized.title);
+    }
+    if (!normalized.hookLabel) {
+      normalized.hookLabel = "Encuesta Nacional";
+    }
+    if (!normalized.footerCta) {
+      normalized.footerCta = "Vota y explica por que";
+    }
+
+    return normalized;
+  } catch (error) {
+    throw new Error(`No se pudo generar encuesta con IA (${(error as Error).message}).`);
   }
 }
 

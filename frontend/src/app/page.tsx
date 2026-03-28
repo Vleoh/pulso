@@ -356,7 +356,7 @@ function DesktopHome({
             Economia
           </button>
           {featuredPoll ? (
-            <a href={`/encuestas/${featuredPoll.slug}`} className="nav-poll-link">
+            <a href={`/encuestas/${featuredPoll.slug}`} className="nav-poll-link" target="_blank" rel="noopener noreferrer">
               <UiIcon name="trend" className="nav-icon" />
               Encuestas
             </a>
@@ -423,7 +423,9 @@ function DesktopHome({
             <p>Encuesta en vivo</p>
             <h3>{featuredPoll.question}</h3>
             <span>{featuredPoll.metrics.totalVotes} votos acumulados</span>
-            <a href={`/encuestas/${featuredPoll.slug}`}>Abrir encuesta</a>
+            <a href={`/encuestas/${featuredPoll.slug}`} target="_blank" rel="noopener noreferrer">
+              Abrir encuesta
+            </a>
           </article>
         </section>
       ) : null}
@@ -589,7 +591,9 @@ export default async function Home() {
                   <article className="mf-poll-card">
                     <p>{featuredPoll.hookLabel || "Encuesta Nacional"}</p>
                     <h3>{featuredPoll.question}</h3>
-                    <a href={`/encuestas/${featuredPoll.slug}`}>Votar ahora</a>
+                    <a href={`/encuestas/${featuredPoll.slug}`} target="_blank" rel="noopener noreferrer">
+                      Votar ahora
+                    </a>
                   </article>
                 </section>
               ) : null}

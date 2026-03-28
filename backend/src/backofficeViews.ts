@@ -26,6 +26,7 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
     .mode-card p { margin:0; font-size:11px; color:#9f9f9f; text-transform:uppercase; letter-spacing:.09em; }
     .mode-actions { display:flex; gap:6px; flex-wrap:wrap; }
     .mode-actions button { flex:1; min-width:70px; font-size:11px; padding:7px 8px; text-transform:uppercase; letter-spacing:.06em; }
+    .mode-actions button.is-active { border-color:#7f672d; background:#2b2110; color:#f7dda1; box-shadow:0 0 0 1px rgba(198,162,74,.25) inset; }
     .main { min-width:0; }
     .wrap { width:min(1220px,94vw); margin:0 auto; padding:24px 0 64px; }
     .top { display:flex; align-items:center; justify-content:space-between; margin-bottom:26px; border-bottom:1px solid var(--line); padding-bottom:18px; gap:12px; flex-wrap:wrap; }
@@ -33,7 +34,7 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
     .brand strong { letter-spacing:.14em; font-size:24px; text-transform:uppercase; }
     .brand span { color:var(--gold); font-size:12px; letter-spacing:.24em; text-transform:uppercase; }
     .actions { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
-    .button, button { display:inline-flex; align-items:center; justify-content:center; border-radius:10px; border:1px solid var(--line); background:#1a1a1a; color:var(--text); text-decoration:none; font-weight:600; font-size:13px; padding:10px 14px; cursor:pointer; transition:border-color .18s,color .18s,opacity .18s,transform .18s; }
+    .button, button { display:inline-flex; align-items:center; justify-content:center; gap:8px; border-radius:10px; border:1px solid var(--line); background:#1a1a1a; color:var(--text); text-decoration:none; font-weight:600; font-size:13px; padding:10px 14px; cursor:pointer; transition:border-color .18s,color .18s,opacity .18s,transform .18s; }
     .button.primary, button.primary { background:linear-gradient(120deg,#b58f3f,var(--gold-soft)); color:#0b0b0b; border-color:transparent; }
     .button:hover, button:hover { border-color:var(--gold); color:var(--gold-soft); }
     .button.primary:hover, button.primary:hover { color:#0b0b0b; filter:brightness(1.05); }
@@ -67,6 +68,10 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
     .ai-badge { display:inline-flex; align-items:center; border:1px solid #5f4e27; background:#201a0f; color:var(--gold-soft); border-radius:999px; font-size:10px; padding:4px 8px; text-transform:uppercase; letter-spacing:.08em; }
     .ai-actions { display:flex; gap:8px; flex-wrap:wrap; }
     .ai-actions button { position:relative; }
+    .ai-main-action { font-size:14px; padding:11px 16px; letter-spacing:.02em; }
+    .ai-advanced { border:1px solid #2b2b2b; border-radius:10px; background:#101010; padding:8px 10px; display:grid; gap:8px; }
+    .ai-advanced summary { cursor:pointer; user-select:none; color:#d7d7d7; font-size:12px; text-transform:uppercase; letter-spacing:.08em; }
+    .ai-advanced .ai-actions { margin-top:8px; }
     .ai-actions button.is-running::after { content:""; width:11px; height:11px; border:2px solid #9b7c36; border-top-color:transparent; border-radius:999px; margin-left:8px; animation:spin .7s linear infinite; }
     .ai-status { border:1px solid #2b2b2b; background:#121212; color:#d4d4d4; border-radius:10px; padding:10px 12px; font-size:13px; line-height:1.45; }
     .ai-status.ok { border-color:#27543a; background:#102016; color:#c8f0d6; }
@@ -97,6 +102,12 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
     .ai-chat-answer { border:1px solid #2d2d2d; background:#101010; border-radius:10px; padding:10px 12px; font-size:13px; line-height:1.5; color:#e0e0e0; white-space:pre-wrap; }
     .ai-inline { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
     .ai-inline input[type="checkbox"] { width:16px; height:16px; margin:0; accent-color:#d1b462; }
+    .toast-stack { position:fixed; right:16px; bottom:16px; z-index:9999; display:grid; gap:8px; width:min(360px,calc(100vw - 24px)); pointer-events:none; }
+    .toast { border:1px solid #2f2f2f; background:#111111; color:#e7e7e7; border-radius:12px; padding:10px 12px; box-shadow:0 6px 24px rgba(0,0,0,.35); font-size:13px; line-height:1.4; opacity:0; transform:translateY(8px); animation:toast-in .18s ease forwards; }
+    .toast.ok { border-color:#2d5f45; background:#102318; color:#c9f0d7; }
+    .toast.warn { border-color:#70591f; background:#221b0d; color:#f5dd9b; }
+    .toast.error { border-color:#7b2f2f; background:#2c1313; color:#ffc4c4; }
+    @keyframes toast-in { to { opacity:1; transform:translateY(0); } }
     @keyframes spin { from { transform:rotate(0deg); } to { transform:rotate(360deg); } }
     .split-title { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
     .split-title h3 { margin:0; font-size:16px; text-transform:uppercase; letter-spacing:.05em; }
@@ -165,21 +176,54 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
       </div>
     </main>
   </div>
+  <div id="boToastStack" class="toast-stack" aria-live="polite" aria-atomic="true"></div>
   <script>
     (function () {
       const modeButtons = Array.from(document.querySelectorAll("[data-mode]"));
+      const toastStack = document.getElementById("boToastStack");
+
+      function toast(message, level) {
+        if (!toastStack || !message) {
+          return;
+        }
+        const item = document.createElement("div");
+        item.className = "toast " + (level || "");
+        item.textContent = String(message);
+        toastStack.appendChild(item);
+        window.setTimeout(function () {
+          item.style.opacity = "0";
+          item.style.transform = "translateY(8px)";
+          window.setTimeout(function () {
+            item.remove();
+          }, 220);
+        }, 2600);
+      }
+
+      window.pulsoToast = toast;
+
       if (!modeButtons.length) {
         return;
       }
+
       const storageKey = "pulso_bo_mode";
       const savedMode = localStorage.getItem(storageKey) || "default";
       document.body.dataset.mode = savedMode;
+
+      function paintActive(mode) {
+        modeButtons.forEach(function (entry) {
+          const active = (entry.getAttribute("data-mode") || "") === mode;
+          entry.classList.toggle("is-active", active);
+        });
+      }
+      paintActive(savedMode);
 
       modeButtons.forEach(function (button) {
         button.addEventListener("click", function () {
           const nextMode = button.getAttribute("data-mode") || "default";
           document.body.dataset.mode = nextMode;
           localStorage.setItem(storageKey, nextMode);
+          paintActive(nextMode);
+          toast("Modo " + nextMode + " activado.", "ok");
         });
       });
     })();
@@ -386,8 +430,8 @@ export function renderNewsForm(params: {
         <div id="ia" class="ai-box">
           <div class="ai-head">
             <div>
-              <h3 class="ai-title">Asistente IA Editorial</h3>
-              <p class="ai-sub">Genera un borrador con tu linea editorial y valida el draft antes de publicar. Usa Ollama local + Qwen3 + wrapper de agenda (noticias internas + externas).</p>
+              <h3 class="ai-title">Generacion IA de Noticia</h3>
+              <p class="ai-sub">Escribe el brief y usa <strong>Genera con IA</strong>. Se autocompleta titulo, volanta, bajada, cuerpo, tags, seccion y metadatos para que luego solo revises y publiques.</p>
             </div>
             <span class="ai-badge" id="aiConnBadge">Chequeando IA...</span>
           </div>
@@ -396,16 +440,21 @@ export function renderNewsForm(params: {
             <textarea id="aiBrief" rows="3" placeholder="Ej: cierre de alianzas en PBA, impacto en intendentes del conurbano y lectura nacional para 2026."></textarea>
           </div>
           <div class="ai-actions">
-            <button type="button" id="aiGenerateBtn">Generar borrador IA</button>
-            <button type="button" id="aiAskBtn">Preguntar IA</button>
-            <button type="button" id="aiReviewBtn">Evaluar borrador actual</button>
-            <button type="button" id="aiApplyBtn">Aplicar sugerencias</button>
+            <button type="button" id="aiGenerateBtn" class="primary ai-main-action">⚡ Genera con IA</button>
           </div>
-          <label class="ai-inline" style="font-size:12px; color:#bfbfbf;">
-            <input type="checkbox" id="aiAskAutoApply" />
-            Si la respuesta incluye draft, autocompletar formulario.
-          </label>
-          <div id="aiStatus" class="ai-status">Completa un brief y usa "Generar borrador IA".</div>
+          <details class="ai-advanced">
+            <summary>Herramientas IA avanzadas</summary>
+            <div class="ai-actions">
+              <button type="button" id="aiAskBtn">💬 Preguntar IA</button>
+              <button type="button" id="aiReviewBtn">🛡️ Validar borrador</button>
+              <button type="button" id="aiApplyBtn">✅ Aplicar sugerencias</button>
+            </div>
+            <label class="ai-inline" style="font-size:12px; color:#bfbfbf;">
+              <input type="checkbox" id="aiAskAutoApply" />
+              Si la respuesta incluye draft, autocompletar formulario.
+            </label>
+          </details>
+          <div id="aiStatus" class="ai-status">Completa un brief y usa "Genera con IA".</div>
           <div id="aiAnswer" class="ai-chat-answer" style="display:none;"></div>
           <div id="aiReview" class="ai-review" style="display:none;"></div>
           <p class="muted">La validacion final sigue siendo obligatoria al guardar. Si la IA marca REJECT, el guardado se bloquea.</p>
@@ -514,6 +563,12 @@ export function renderNewsForm(params: {
               review: reviewBtn,
               apply: applyBtn,
             };
+
+            function notify(message, level) {
+              if (typeof window.pulsoToast === "function") {
+                window.pulsoToast(message, level || "");
+              }
+            }
 
             function setStatus(message, level) {
               statusEl.textContent = message;
@@ -687,7 +742,38 @@ export function renderNewsForm(params: {
               });
               if (isBusy && label) {
                 setStatus(label, "warn");
+                notify(label, "warn");
               }
+            }
+
+            function plainTextFromHtml(input) {
+              const holder = document.createElement("div");
+              holder.innerHTML = String(input || "");
+              return (holder.textContent || holder.innerText || "").replace(/\s+/g, " ").trim();
+            }
+
+            function ensureDraftCompleteness(brief) {
+              const safeBrief = String(brief || "").trim();
+              if (!value("title")) {
+                const fallbackTitle = safeBrief.slice(0, 110) || "Actualizacion politica en desarrollo";
+                setFieldValue("title", fallbackTitle);
+              }
+              if (!value("slug")) {
+                setFieldValue("slug", slugify(value("title")));
+              }
+              if (!value("body")) {
+                const fallbackBody = "<p>" + escapeHtml(safeBrief || "Completar desarrollo editorial.") + "</p>";
+                bodyEditor.innerHTML = fallbackBody;
+                setFieldValue("body", fallbackBody);
+              }
+              if (!value("excerpt")) {
+                const bodyText = plainTextFromHtml(value("body"));
+                setFieldValue("excerpt", bodyText.slice(0, 220));
+              }
+              if (!value("authorName")) {
+                setFieldValue("authorName", "Redaccion Pulso Pais");
+              }
+              updateMetrics();
             }
 
             function slugify(value) {
@@ -897,11 +983,12 @@ export function renderNewsForm(params: {
               const brief = briefEl.value.trim();
               if (brief.length < 12) {
                 setStatus("El brief debe tener al menos 12 caracteres.", "error");
+                notify("Escribe un brief mas completo para generar con IA.", "error");
                 return;
               }
 
               try {
-                setBusy(true, "Consultando IA y generando borrador...", "generate");
+                setBusy(true, "Solicitud recibida: generando borrador con IA...", "generate");
                 const payload = buildAssistPayload(brief);
                 const response = await fetch("/backoffice/ai/assist", {
                   method: "POST",
@@ -919,6 +1006,7 @@ export function renderNewsForm(params: {
                 const suggestion = result.suggestion || {};
                 lastSuggestions = suggestion;
                 applySuggestion(suggestion);
+                ensureDraftCompleteness(brief);
                 setCanApply(Boolean(suggestion && typeof suggestion === "object"));
 
                 const noteText = Array.isArray(suggestion.notes) && suggestion.notes.length > 0
@@ -929,8 +1017,10 @@ export function renderNewsForm(params: {
                   "Borrador IA aplicado (" + (suggestion.model || "modelo desconocido") + ")" + noteText + contextHint(result.context),
                   "ok",
                 );
+                notify("Formulario autocompletado por IA.", "ok");
               } catch (error) {
                 setStatus(error instanceof Error ? error.message : "Error al generar borrador IA.", "error");
+                notify("Fallo la generacion IA. Revisa estado y reintenta.", "error");
               } finally {
                 setBusy(false);
               }
@@ -940,6 +1030,7 @@ export function renderNewsForm(params: {
               const brief = briefEl.value.trim();
               if (brief.length < 12) {
                 setStatus("Escribe una consulta de al menos 12 caracteres para la IA.", "error");
+                notify("La consulta es demasiado corta.", "error");
                 return;
               }
 
@@ -977,16 +1068,21 @@ export function renderNewsForm(params: {
                   const autoApply = Boolean(askAutoApply && "checked" in askAutoApply && askAutoApply.checked);
                   if (autoApply || Boolean(answerPayload.shouldApplyDraft)) {
                     applySuggestion(draft);
+                    ensureDraftCompleteness(brief);
                     setStatus("Consulta resuelta y draft aplicado automaticamente." + contextHint(result.context), "ok");
+                    notify("Respuesta IA aplicada al formulario.", "ok");
                   } else {
                     setStatus("Consulta resuelta. Hay un draft disponible para aplicar." + contextHint(result.context), "ok");
+                    notify("La IA devolvio un draft listo para aplicar.", "ok");
                   }
                 } else {
                   setCanApply(Boolean(lastSuggestions));
                   setStatus("Consulta resuelta por IA." + contextHint(result.context), "ok");
+                  notify("Consulta IA respondida.", "ok");
                 }
               } catch (error) {
                 setStatus(error instanceof Error ? error.message : "Error al consultar la IA.", "error");
+                notify("No se pudo completar la consulta IA.", "error");
               } finally {
                 setBusy(false);
               }
@@ -1033,8 +1129,10 @@ export function renderNewsForm(params: {
 
                 const level = (review.decision || "REVIEW") === "ALLOW" ? "ok" : (review.decision === "REJECT" ? "error" : "warn");
                 setStatus("Evaluacion completada: " + (review.decision || "REVIEW") + contextHint(result.context), level);
+                notify("Revision IA completada: " + (review.decision || "REVIEW"), level);
               } catch (error) {
                 setStatus(error instanceof Error ? error.message : "Error en evaluacion IA.", "error");
+                notify("No se pudo evaluar el borrador.", "error");
               } finally {
                 setBusy(false);
               }
@@ -1043,17 +1141,26 @@ export function renderNewsForm(params: {
             applyBtn.addEventListener("click", function () {
               if (!lastSuggestions) {
                 setStatus("Primero ejecuta 'Evaluar borrador actual' para recibir sugerencias.", "warn");
+                notify("No hay sugerencias para aplicar todavia.", "warn");
                 return;
               }
               applyBtn.classList.add("is-running");
               applySuggestion(lastSuggestions);
+              ensureDraftCompleteness(briefEl.value.trim());
               window.setTimeout(function () {
                 applyBtn.classList.remove("is-running");
               }, 350);
               setStatus("Sugerencias de evaluacion aplicadas al formulario.", "ok");
+              notify("Sugerencias aplicadas al formulario.", "ok");
             });
 
-            form.addEventListener("submit", syncBody);
+            form.addEventListener("submit", function () {
+              syncBody();
+              notify("Solicitud recibida. Guardando noticia...", "warn");
+            });
+            form.addEventListener("invalid", function () {
+              notify("Faltan campos obligatorios antes de guardar.", "error");
+            }, true);
             bodyEditor.addEventListener("input", syncBody);
             bodyEditor.addEventListener("blur", syncBody);
 
@@ -1224,8 +1331,11 @@ export function renderPollForm(params: {
     .map(
       (candidate, index) => `<article style="border:1px solid #2a2a2a; border-radius:10px; background:#111111; padding:10px; display:flex; align-items:center; gap:10px;">
         <span style="display:inline-grid; place-items:center; width:24px; height:24px; border-radius:999px; background:${escapeHtml(candidate.colorHex)}; color:#111; font-weight:700; font-size:11px;">${index + 1}</span>
-        <strong style="font-size:14px; line-height:1.2;">${escapeHtml(candidate.label)}</strong>
-        <span style="margin-left:auto; color:#c7c7c7; font-size:15px;">${escapeHtml(candidate.emoji)}</span>
+        <span style="display:inline-grid; place-items:center; width:28px; height:28px; border-radius:8px; border:1px solid #2f2f2f; background:#161616; font-size:13px;">${escapeHtml(candidate.emoji)}</span>
+        <div style="display:grid; gap:2px;">
+          <strong style="font-size:14px; line-height:1.2;">${escapeHtml(candidate.label)}</strong>
+          <span style="font-size:11px; color:${escapeHtml(candidate.colorHex)}; letter-spacing:.04em; text-transform:uppercase;">Color editorial ${escapeHtml(candidate.colorHex)}</span>
+        </div>
       </article>`,
     )
     .join("");
@@ -1240,7 +1350,24 @@ export function renderPollForm(params: {
           <span class="mini-tag">Opinion de la comunidad</span>
         </div>
         <p class="muted" style="margin-bottom:14px;">Modulo pensado para links de Instagram, entrevistas y seguimiento de conversion a voto. Las 10 opciones se mantienen en orden fijo para consistencia historica.</p>
-        <form method="post" action="${action}">
+        <div class="ai-box">
+          <div class="ai-head">
+            <div>
+              <h3 class="ai-title">Generacion IA de Encuesta</h3>
+              <p class="ai-sub">Describe la encuesta que necesitas y usa <strong>Genera con IA encuesta</strong>. Se autocompletan titulo, pregunta, CTA, contexto, fechas y estado.</p>
+            </div>
+            <span class="ai-badge" id="pollAiConnBadge">Chequeando IA...</span>
+          </div>
+          <div class="field">
+            <label for="pollAiBrief">Brief para IA</label>
+            <textarea id="pollAiBrief" rows="3" placeholder="Ej: encuesta nacional para entrevista en Instagram sobre confianza presidencial 2027, tono firme y neutral."></textarea>
+          </div>
+          <div class="ai-actions">
+            <button type="button" id="pollAiGenerateBtn" class="primary ai-main-action">⚡ Genera con IA encuesta</button>
+          </div>
+          <div id="pollAiStatus" class="ai-status">Completa un brief y genera la encuesta con IA.</div>
+        </div>
+        <form id="poll-form" method="post" action="${action}">
           <div class="cms-layout">
             <section class="editor-stack">
               <div class="editor-card">
@@ -1252,6 +1379,11 @@ export function renderPollForm(params: {
                   <div class="field"><label for="footerCta">CTA inferior</label><input id="footerCta" name="footerCta" value="${getValue(data?.footerCta ?? "Vota y explica por que")}" /></div>
                 </div>
                 <div class="field"><label for="description">Contexto corto</label><textarea id="description" name="description" rows="3">${getValue(data?.description)}</textarea></div>
+                <div class="field">
+                  <label for="customSheetCode">Hoja personalizada (codigo opcional)</label>
+                  <textarea id="customSheetCode" name="customSheetCode" rows="7" placeholder="La IA puede generar HTML/CSS/JS para una hoja embebible de encuesta.">${getValue(data?.customSheetCode)}</textarea>
+                  <p class="hint">Este bloque no altera la encuesta guardada. Es para copiar y pegar en una hoja personalizada.</p>
+                </div>
               </div>
 
               <div class="editor-card">
@@ -1293,6 +1425,266 @@ export function renderPollForm(params: {
             </aside>
           </div>
         </form>
+        <script>
+          (function () {
+            const form = document.getElementById("poll-form");
+            const briefEl = document.getElementById("pollAiBrief");
+            const generateBtn = document.getElementById("pollAiGenerateBtn");
+            const statusEl = document.getElementById("pollAiStatus");
+            const connBadge = document.getElementById("pollAiConnBadge");
+            if (!form || !briefEl || !generateBtn || !statusEl || !connBadge) {
+              return;
+            }
+
+            function notify(message, level) {
+              if (typeof window.pulsoToast === "function") {
+                window.pulsoToast(message, level || "");
+              }
+            }
+
+            function field(name) {
+              return form.querySelector('[name="' + name + '"]');
+            }
+
+            function value(name) {
+              const el = field(name);
+              if (!el || typeof el.value !== "string") {
+                return "";
+              }
+              return el.value.trim();
+            }
+
+            function checked(name) {
+              const el = field(name);
+              return Boolean(el && "checked" in el && el.checked);
+            }
+
+            function setFieldValue(name, nextValue) {
+              const el = field(name);
+              if (!el || typeof el.value !== "string") {
+                return;
+              }
+              el.value = nextValue ?? "";
+            }
+
+            function setSelectValue(name, nextValue) {
+              const el = field(name);
+              if (!el || el.tagName !== "SELECT" || !nextValue) {
+                return;
+              }
+              const option = el.querySelector('option[value="' + nextValue + '"]');
+              if (option) {
+                el.value = nextValue;
+              }
+            }
+
+            function setCheckboxValue(name, nextValue) {
+              const el = field(name);
+              if (!el || !("checked" in el)) {
+                return;
+              }
+              el.checked = Boolean(nextValue);
+            }
+
+            function slugify(value) {
+              return String(value || "")
+                .normalize("NFD")
+                .replace(/[\u0300-\u036f]/g, "")
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/g, "-")
+                .replace(/^-+|-+$/g, "")
+                .slice(0, 120);
+            }
+
+            function setStatus(message, level) {
+              statusEl.textContent = message;
+              statusEl.className = "ai-status " + level;
+            }
+
+            function toLocalDatetime(input) {
+              if (!input) return "";
+              const parsed = new Date(input);
+              if (Number.isNaN(parsed.getTime())) return "";
+              const offset = parsed.getTimezoneOffset();
+              const local = new Date(parsed.getTime() - offset * 60000);
+              return local.toISOString().slice(0, 16);
+            }
+
+            async function readJson(response) {
+              const contentType = response.headers.get("content-type") || "";
+              if (contentType.includes("application/json")) {
+                return response.json();
+              }
+              const rawText = await response.text();
+              return { error: rawText || "Respuesta invalida del servidor." };
+            }
+
+            function contextHint(context) {
+              if (!context || typeof context !== "object") {
+                return "";
+              }
+              const internal = Number(context.internalCount ?? 0);
+              const external = Number(context.externalCount ?? 0);
+              if (!internal && !external) {
+                return "";
+              }
+              return " | Wrapper: " + internal + " internas + " + external + " externas";
+            }
+
+            function applySuggestion(suggestion, brief) {
+              if (!suggestion || typeof suggestion !== "object") {
+                return;
+              }
+              if (suggestion.title) setFieldValue("title", suggestion.title);
+              if (suggestion.slug) setFieldValue("slug", suggestion.slug);
+              if (!value("slug")) {
+                setFieldValue("slug", slugify(value("title")));
+              }
+              if (suggestion.question) setFieldValue("question", suggestion.question);
+              if (suggestion.hookLabel) setFieldValue("hookLabel", suggestion.hookLabel);
+              if (suggestion.footerCta) setFieldValue("footerCta", suggestion.footerCta);
+              if (suggestion.description !== undefined && suggestion.description !== null) setFieldValue("description", suggestion.description);
+              if (suggestion.interviewUrl !== undefined && suggestion.interviewUrl !== null) setFieldValue("interviewUrl", suggestion.interviewUrl);
+              if (suggestion.coverImageUrl !== undefined && suggestion.coverImageUrl !== null) setFieldValue("coverImageUrl", suggestion.coverImageUrl);
+              if (suggestion.customSheetCode !== undefined && suggestion.customSheetCode !== null) setFieldValue("customSheetCode", suggestion.customSheetCode);
+              if (suggestion.status) setSelectValue("status", suggestion.status);
+              if (suggestion.startsAt) setFieldValue("startsAt", toLocalDatetime(suggestion.startsAt));
+              if (suggestion.endsAt) setFieldValue("endsAt", toLocalDatetime(suggestion.endsAt));
+              if (suggestion.publishedAt) setFieldValue("publishedAt", toLocalDatetime(suggestion.publishedAt));
+              if (Object.prototype.hasOwnProperty.call(suggestion, "isFeatured")) {
+                setCheckboxValue("isFeatured", suggestion.isFeatured);
+              }
+              if (!value("title")) {
+                setFieldValue("title", String(brief || "").slice(0, 110) || "Encuesta digital Pulso Pais");
+              }
+              if (!value("question")) {
+                setFieldValue("question", "¿A quien le confiarias el pais en 2027?");
+              }
+              if (!value("hookLabel")) {
+                setFieldValue("hookLabel", "Encuesta Nacional");
+              }
+              if (!value("footerCta")) {
+                setFieldValue("footerCta", "Vota y explica por que");
+              }
+              if (!value("slug")) {
+                setFieldValue("slug", slugify(value("title")));
+              }
+            }
+
+            async function checkAiHealth() {
+              try {
+                const response = await fetch("/backoffice/ai/health", { headers: { accept: "application/json" } });
+                const payload = await readJson(response);
+                if (!response.ok) {
+                  throw new Error(payload.error || "No se pudo consultar estado de IA.");
+                }
+                const health = payload.health || {};
+                const connected = Boolean(health.enabled && health.aiReachable && health.guidelinesLoaded);
+                const provider = health.primaryProvider ? String(health.primaryProvider).toUpperCase() : "IA";
+                if (connected) {
+                  connBadge.textContent = provider + " activa";
+                  connBadge.style.borderColor = "#2d5f45";
+                  connBadge.style.color = "#b6f3ca";
+                  connBadge.style.background = "#122318";
+                  setStatus("IA lista para generar encuesta (" + (health.model || "modelo") + ").", "ok");
+                } else {
+                  connBadge.textContent = "IA con alertas";
+                  connBadge.style.borderColor = "#70591f";
+                  connBadge.style.color = "#f5dd96";
+                  connBadge.style.background = "#221b0d";
+                  setStatus("La IA no esta totalmente operativa.", "warn");
+                }
+              } catch (error) {
+                connBadge.textContent = "IA sin conexion";
+                connBadge.style.borderColor = "#7b2f2f";
+                connBadge.style.color = "#ffc4c4";
+                connBadge.style.background = "#2c1313";
+                setStatus(error instanceof Error ? error.message : "No se pudo verificar IA.", "error");
+              }
+            }
+
+            generateBtn.addEventListener("click", async function () {
+              const brief = briefEl.value.trim();
+              if (brief.length < 12) {
+                setStatus("El brief debe tener al menos 12 caracteres.", "error");
+                notify("Escribe un brief mas claro para generar la encuesta.", "error");
+                return;
+              }
+              generateBtn.disabled = true;
+              generateBtn.classList.add("is-running");
+              setStatus("Solicitud recibida: generando encuesta con IA...", "warn");
+              notify("Generando encuesta con IA...", "warn");
+              try {
+                const response = await fetch("/backoffice/ai/polls/generate", {
+                  method: "POST",
+                  headers: {
+                    "content-type": "application/json",
+                    accept: "application/json",
+                  },
+                  body: JSON.stringify({
+                    brief: brief,
+                    currentTitle: value("title"),
+                    currentSlug: value("slug"),
+                    currentQuestion: value("question"),
+                    currentHookLabel: value("hookLabel"),
+                    currentFooterCta: value("footerCta"),
+                    currentDescription: value("description"),
+                    currentInterviewUrl: value("interviewUrl"),
+                    currentCoverImageUrl: value("coverImageUrl"),
+                    currentStatus: value("status"),
+                    currentPublishedAt: value("publishedAt"),
+                    currentStartsAt: value("startsAt"),
+                    currentEndsAt: value("endsAt"),
+                    currentIsFeatured: checked("isFeatured"),
+                  }),
+                });
+                const result = await readJson(response);
+                if (!response.ok) {
+                  throw new Error(result.error || "No se pudo generar la encuesta.");
+                }
+                const suggestion = result.suggestion || {};
+                applySuggestion(suggestion, brief);
+                const noteText = Array.isArray(suggestion.notes) && suggestion.notes.length > 0
+                  ? " | " + suggestion.notes[0]
+                  : "";
+                setStatus("Encuesta autocompletada con IA (" + (suggestion.model || "modelo") + ")" + noteText + contextHint(result.context), "ok");
+                notify("Borrador de encuesta aplicado al formulario.", "ok");
+              } catch (error) {
+                setStatus(error instanceof Error ? error.message : "Error al generar encuesta con IA.", "error");
+                notify("No se pudo generar la encuesta con IA.", "error");
+              } finally {
+                generateBtn.disabled = false;
+                generateBtn.classList.remove("is-running");
+              }
+            });
+
+            const titleInput = field("title");
+            const slugInput = field("slug");
+            let slugManuallyEdited = value("slug").length > 0;
+            if (slugInput) {
+              slugInput.addEventListener("input", function () {
+                slugManuallyEdited = slugInput.value.trim().length > 0;
+              });
+            }
+            if (titleInput) {
+              titleInput.addEventListener("input", function () {
+                if (slugManuallyEdited) {
+                  return;
+                }
+                setFieldValue("slug", slugify(titleInput.value));
+              });
+            }
+
+            form.addEventListener("submit", function () {
+              notify("Solicitud recibida. Guardando encuesta...", "warn");
+            });
+            form.addEventListener("invalid", function () {
+              notify("Faltan campos obligatorios antes de guardar la encuesta.", "error");
+            }, true);
+
+            checkAiHealth();
+          })();
+        </script>
       </div>
     </div>`,
   );
@@ -1305,7 +1697,7 @@ export function renderIaLab(): string {
       <div class="card">
         <h2 style="margin:0 0 10px; font-size:24px;">IA Lab</h2>
         <p style="margin:0 0 12px; color:#b6b6b6; line-height:1.45;">
-          Espacio tecnico para verificar conexion con Ollama local, modelo activo y wrapper de contexto editorial.
+          Espacio tecnico para verificar conexion con Gemini (primario), fallback Ollama local, modelo activo y wrapper de contexto editorial.
           <strong> Nueva Nota </strong> es para produccion; <strong>IA Lab</strong> es para diagnostico rapido.
         </p>
         <div class="actions" style="margin-bottom:10px;">

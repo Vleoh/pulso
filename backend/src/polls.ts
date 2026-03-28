@@ -34,6 +34,7 @@ export type NormalizedPollInput = {
   hookLabel: string;
   footerCta: string;
   description: string | null;
+  customSheetCode: string | null;
   interviewUrl: string | null;
   coverImageUrl: string | null;
   status: PollStatus;
@@ -122,6 +123,7 @@ export function normalizePollInput(raw: Record<string, unknown>): NormalizedPoll
     hookLabel: readString(raw.hookLabel) || "Encuesta Nacional",
     footerCta: readString(raw.footerCta) || "Vota y explica por que",
     description: asNullable(readString(raw.description)),
+    customSheetCode: asNullable(readString(raw.customSheetCode)),
     interviewUrl: asNullable(readString(raw.interviewUrl)),
     coverImageUrl: asNullable(readString(raw.coverImageUrl)),
     status: statusRaw,
@@ -191,6 +193,7 @@ export type PollPublicView = {
   hookLabel: string;
   footerCta: string;
   description: string | null;
+  customSheetCode: string | null;
   interviewUrl: string | null;
   coverImageUrl: string | null;
   startsAt: string | null;
@@ -217,6 +220,7 @@ export function toPollPublicView(
     hookLabel: poll.hookLabel,
     footerCta: poll.footerCta,
     description: poll.description,
+    customSheetCode: poll.customSheetCode,
     interviewUrl: poll.interviewUrl,
     coverImageUrl: poll.coverImageUrl,
     startsAt: poll.startsAt ? poll.startsAt.toISOString() : null,

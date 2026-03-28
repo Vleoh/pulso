@@ -409,6 +409,9 @@ export function PollExperience({ initialPoll, initialSelectedOptionId, apiBaseUr
           <h1>{readableQuestion}</h1>
           {readableDescription && <p className="poll-description">{readableDescription}</p>}
           <div className="poll-head-actions">
+            <a className="poll-link-btn poll-home-link" href="/">
+              Volver al sitio
+            </a>
             {poll.interviewUrl ? (
               <a className="poll-link-btn" href={poll.interviewUrl} target="_blank" rel="noreferrer">
                 Ver entrevista

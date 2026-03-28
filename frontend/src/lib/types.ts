@@ -134,6 +134,7 @@ export type PollItem = {
   hookLabel: string;
   footerCta: string;
   description: string | null;
+  customSheetCode: string | null;
   interviewUrl: string | null;
   coverImageUrl: string | null;
   startsAt: string | null;

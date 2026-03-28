@@ -28,6 +28,7 @@ import {
   applyEditorialSuggestions,
   askEditorialWithAi,
   evaluateEditorialWithAi,
+  generatePollDraftWithAi,
   generateDraftWithAi,
   getEditorialAiHealth,
   type EditorialReview,
@@ -142,6 +143,32 @@ function buildEditorialAssistInput(raw: Record<string, unknown>) {
       isRadar: readBoolean(raw.isRadar),
     },
     currentTags,
+  };
+}
+
+function buildPollAssistInput(raw: Record<string, unknown>) {
+  const brief = readString(raw.brief);
+  if (brief.length < 12) {
+    throw new Error("El brief para IA de encuesta debe tener al menos 12 caracteres.");
+  }
+
+  const statusRaw = readString(raw.currentStatus).toUpperCase();
+
+  return {
+    brief,
+    currentTitle: readString(raw.currentTitle) || null,
+    currentSlug: readString(raw.currentSlug) || null,
+    currentQuestion: readString(raw.currentQuestion) || null,
+    currentHookLabel: readString(raw.currentHookLabel) || null,
+    currentFooterCta: readString(raw.currentFooterCta) || null,
+    currentDescription: readString(raw.currentDescription) || null,
+    currentInterviewUrl: readString(raw.currentInterviewUrl) || null,
+    currentCoverImageUrl: readString(raw.currentCoverImageUrl) || null,
+    currentStatus: isPollStatus(statusRaw) ? statusRaw : null,
+    currentPublishedAt: readString(raw.currentPublishedAt) || null,
+    currentStartsAt: readString(raw.currentStartsAt) || null,
+    currentEndsAt: readString(raw.currentEndsAt) || null,
+    currentIsFeatured: readBoolean(raw.currentIsFeatured),
   };
 }
 
@@ -764,6 +791,7 @@ app.post("/api/admin/polls", apiGuard, async (request, response, next) => {
         hookLabel: normalized.hookLabel,
         footerCta: normalized.footerCta,
         description: normalized.description,
+        customSheetCode: normalized.customSheetCode,
         interviewUrl: normalized.interviewUrl,
         coverImageUrl: normalized.coverImageUrl,
         status: normalized.status,
@@ -815,6 +843,7 @@ app.put("/api/admin/polls/:id", apiGuard, async (request, response, next) => {
         hookLabel: normalized.hookLabel,
         footerCta: normalized.footerCta,
         description: normalized.description,
+        customSheetCode: normalized.customSheetCode,
         interviewUrl: normalized.interviewUrl,
         coverImageUrl: normalized.coverImageUrl,
         status: normalized.status,
@@ -1168,6 +1197,17 @@ app.post("/backoffice/ai/review", boGuard, async (request, response, next) => {
   }
 });
 
+app.post("/backoffice/ai/polls/generate", boGuard, async (request, response, next) => {
+  try {
+    const assistInput = buildPollAssistInput(request.body as Record<string, unknown>);
+    const context = await buildAiNewsContext(prisma);
+    const suggestion = await generatePollDraftWithAi(assistInput, context.contextText);
+    response.json({ suggestion, context: context.meta });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/backoffice/ai/context", boGuard, async (_request, response, next) => {
   try {
     const context = await buildAiNewsContext(prisma);
@@ -1235,7 +1275,7 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
       </div>
       <div class="card">
         <h2 style="margin:0 0 8px; font-size:22px;">Control de Portada</h2>
-        <p style="margin:0 0 14px; color:#a9a9a9; line-height:1.5;">Gestiona titulares, radar electoral, publinotas y cobertura federal. El front de Vercel consume la API publica <code>/api/home</code> en tiempo real. En <strong>Nueva Nota</strong> y <strong>Editar</strong> tenes el Asistente IA (generar borrador + evaluar + aplicar sugerencias).</p>
+        <p style="margin:0 0 14px; color:#a9a9a9; line-height:1.5;">Gestiona titulares, radar electoral, publinotas y cobertura federal. El front de Vercel consume la API publica <code>/api/home</code> en tiempo real. En <strong>Nueva Nota</strong>, <strong>Editar</strong> y <strong>Nueva Encuesta</strong> tenes asistencia IA para autocompletar campos clave y validar el borrador.</p>
         <form id="theme-control" method="post" action="/backoffice/settings/theme" style="display:grid; gap:10px; max-width:620px;">
           <label for="homeTheme" style="color:#cfcfcf; text-transform:uppercase; letter-spacing:.08em; font-size:12px; font-weight:600;">Tema visual del home</label>
           <div style="display:flex; gap:10px; flex-wrap:wrap;">

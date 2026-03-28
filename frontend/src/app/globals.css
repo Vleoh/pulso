@@ -3132,6 +3132,17 @@ a {
   border-color: #c5a44f;
 }
 
+.poll-home-link {
+  border-color: #3b3b3b;
+  color: #dadada;
+  background: #121212;
+}
+
+.poll-home-link:hover {
+  border-color: #5e5e5e;
+  color: #ffffff;
+}
+
 .poll-status {
   border: 1px solid #3b3b3b;
   border-radius: 999px;
