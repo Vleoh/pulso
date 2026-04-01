@@ -1,15 +1,21 @@
 import type { Metadata } from "next";
-import { Barlow_Condensed, Source_Sans_3 } from "next/font/google";
+import { Inter, Newsreader, Work_Sans } from "next/font/google";
 import "./globals.css";
 
-const headline = Barlow_Condensed({
+const headline = Newsreader({
   variable: "--font-headline",
-  weight: ["500", "600", "700", "800"],
+  weight: ["400", "500", "700", "800"],
   subsets: ["latin"],
 });
 
-const body = Source_Sans_3({
+const body = Work_Sans({
   variable: "--font-body",
+  weight: ["400", "500", "600", "700"],
+  subsets: ["latin"],
+});
+
+const label = Inter({
+  variable: "--font-label",
   weight: ["400", "500", "600", "700"],
   subsets: ["latin"],
 });
@@ -26,7 +32,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="es" className={`${headline.variable} ${body.variable}`}>
+    <html lang="es" className={`${headline.variable} ${body.variable} ${label.variable}`}>
       <body>{children}</body>
     </html>
   );

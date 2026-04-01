@@ -1,4 +1,4 @@
-﻿import Image from "next/image";
+import Image from "next/image";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { EngagementBar } from "@/components/EngagementBar";
@@ -8,20 +8,6 @@ import type { FeedItem, NewsSection, PollItem } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
-type IconName =
-  | "pulse"
-  | "radar"
-  | "nation"
-  | "province"
-  | "economy"
-  | "opinion"
-  | "interview"
-  | "global"
-  | "weather"
-  | "market"
-  | "map"
-  | "trend";
-
 type EngagementControls = {
   commentsEnabled: boolean;
   reactionsEnabled: boolean;
@@ -30,38 +16,33 @@ type EngagementControls = {
 
 const SECTION_LABEL: Record<NewsSection, string> = {
   NACION: "Nacion",
-  PROVINCIAS: "Provincias",
+  PROVINCIAS: "Buenos Aires",
   MUNICIPIOS: "Municipios",
   OPINION: "Opinion",
   ENTREVISTAS: "Entrevistas",
-  PUBLINOTAS: "Publinotas",
-  RADAR_ELECTORAL: "Radar",
+  PUBLINOTAS: "Patrocinado",
+  RADAR_ELECTORAL: "Elecciones",
   ECONOMIA: "Economia",
-  INTERNACIONALES: "Internacionales",
-  DISTRITOS: "Distritos",
+  INTERNACIONALES: "Mundo",
+  DISTRITOS: "Regionales",
 };
 
-function UiIcon({ name, className = "" }: { name: IconName; className?: string }) {
-  const paths: Record<IconName, string> = {
-    pulse: "M2 8h3l1.4-3.5 2.2 7 2-4h5.4",
-    radar: "M8 2v2M8 12v2M2 8h2M12 8h2M4 4l1.4 1.4M10.6 10.6L12 12M12 4l-1.4 1.4M4 12l1.4-1.4",
-    nation: "M2.5 4.5h11v7h-11zM4.2 6.3h7.6M4.2 8h7.6M4.2 9.7h7.6",
-    province: "M2.3 8 5.5 2.6 10.5 3l3.2 5-3 5.4-5.3.2z",
-    economy: "M2 12V4m4 8V2m4 10V6m4 6V8",
-    opinion: "M2.6 8.8c2.1-1.2 2.8-3.6 3-5.3.3 1.2 1.3 3.2 3.5 3.9 1.8.6 3.2 1.6 3.2 3.3 0 1.7-1.4 2.8-3.1 2.8-1.9 0-3-.8-4.1-.8-1 0-2 .8-3.8.8-1.8 0-3.1-1.1-3.1-2.8 0-1 .4-1.5 1.4-1.9z",
-    interview: "M2.5 4.2h6v5.6h-6zM8.5 6.1l4-2.2v6.2l-4-2.2",
-    global: "M8 2c3.3 0 6 2.7 6 6s-2.7 6-6 6-6-2.7-6-6 2.7-6 6-6zm0 0c1.8 1.6 2.8 3.6 2.8 6S9.8 12.4 8 14c-1.8-1.6-2.8-3.6-2.8-6S6.2 3.6 8 2zM2.5 8h11",
-    weather: "M4 10h7a2.5 2.5 0 0 0 .2-5 3.3 3.3 0 0 0-6.2 1.3A2 2 0 0 0 4 10z",
-    market: "M2 12V4m4 8V2m4 10V6m4 6V8",
-    map: "M2 3l3-1 3 1 3-1 1 1v9l-3 1-3-1-3 1-1-1z",
-    trend: "M2 11l3-3 2 2 5-5",
-  };
+const NAV_ITEMS: Array<{ label: string; section?: NewsSection }> = [
+  { label: "Nacion", section: "NACION" },
+  { label: "Buenos Aires", section: "PROVINCIAS" },
+  { label: "Elecciones", section: "RADAR_ELECTORAL" },
+  { label: "Economia", section: "ECONOMIA" },
+  { label: "Opinion", section: "OPINION" },
+  { label: "Mundo", section: "INTERNACIONALES" },
+  { label: "Deportes" },
+];
 
-  return (
-    <svg viewBox="0 0 16 16" className={`ui-icon ${className}`} aria-hidden="true">
-      <path d={paths[name]} fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
+function sanitizeDisplayText(input: string): string {
+  return input
+    .replace(/\uFFFD/g, "")
+    .replace(/Â/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function stripCategoryPrefix(input: string, section?: NewsSection | string): string {
@@ -86,33 +67,42 @@ function stripCategoryPrefix(input: string, section?: NewsSection | string): str
   if (section) {
     labels.push(String(section).replaceAll("_", " ").toLowerCase());
   }
-  const matcher = `(?:${Array.from(new Set(labels)).map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`;
-  const normalized = input
+  const escapedLabels = Array.from(new Set(labels)).map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const matcher = `(?:${escapedLabels.join("|")})`;
+
+  return input
     .replace(new RegExp(`^\\s*${matcher}\\s*[:\\-|]\\s*`, "i"), "")
     .replace(new RegExp(`^\\s*\\[?${matcher}\\]?\\s+`, "i"), "")
     .replace(/\s+/g, " ")
     .trim();
-  return normalized || input;
 }
 
-function titleForDisplay(item: Pick<FeedItem, "title" | "section">): string {
-  return stripCategoryPrefix(item.title, item.section);
+function cleanTitle(item: Pick<FeedItem, "title" | "section">): string {
+  const cleaned = stripCategoryPrefix(sanitizeDisplayText(item.title), item.section);
+  return cleaned || sanitizeDisplayText(item.title);
 }
 
-function shortTitle(title: string, max = 120): string {
-  const normalized = title.replace(/\s+/g, " ").trim();
+function shortText(input: string, max = 120): string {
+  const normalized = sanitizeDisplayText(input);
   if (normalized.length <= max) {
     return normalized;
   }
   return `${normalized.slice(0, max - 3).trimEnd()}...`;
 }
 
-function formatHeaderDate(dateIso: string): string {
-  const date = new Date(dateIso);
-  const weekday = date.toLocaleDateString("es-AR", { weekday: "short" }).replace(".", "");
-  const day = date.toLocaleDateString("es-AR", { day: "2-digit" });
-  const month = date.toLocaleDateString("es-AR", { month: "short" }).replace(".", "");
-  return `${weekday} ${day} ${month}`.toUpperCase();
+function excerptFor(item: FeedItem): string {
+  if (item.excerpt && item.excerpt.trim().length > 0) {
+    return sanitizeDisplayText(item.excerpt);
+  }
+  return "Cobertura en desarrollo desde la mesa de situacion de Pulso Pais.";
+}
+
+function authorFor(item: FeedItem): string | null {
+  const candidate = (item as { authorName?: string | null }).authorName;
+  if (candidate && candidate.trim().length > 0) {
+    return sanitizeDisplayText(candidate);
+  }
+  return null;
 }
 
 function formatDate(dateIso: string): string {
@@ -122,6 +112,14 @@ function formatDate(dateIso: string): string {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function formatHeaderDate(dateIso: string): string {
+  const date = new Date(dateIso);
+  const weekday = date.toLocaleDateString("es-AR", { weekday: "short" }).replace(".", "");
+  const day = date.toLocaleDateString("es-AR", { day: "2-digit" });
+  const month = date.toLocaleDateString("es-AR", { month: "short" }).replace(".", "");
+  return `${weekday} ${day} ${month}`.toUpperCase();
 }
 
 function formatMoney(value: number | null, currency: string): string {
@@ -147,13 +145,13 @@ function relativeMinutes(dateIso: string): string {
   const diff = Date.now() - new Date(dateIso).getTime();
   const minutes = Math.max(1, Math.floor(diff / (1000 * 60)));
   if (minutes < 60) {
-    return `${minutes} min`;
+    return `Hace ${minutes} min`;
   }
   const hours = Math.floor(minutes / 60);
   if (hours < 24) {
-    return `${hours} h`;
+    return `Hace ${hours} h`;
   }
-  return `${Math.floor(hours / 24)} d`;
+  return `Hace ${Math.floor(hours / 24)} d`;
 }
 
 function dedupe(items: FeedItem[]): FeedItem[] {
@@ -167,54 +165,12 @@ function dedupe(items: FeedItem[]): FeedItem[] {
   });
 }
 
-function isRecent(dateIso: string, maxDays = 10): boolean {
-  const timestamp = new Date(dateIso).getTime();
-  if (Number.isNaN(timestamp)) {
-    return false;
-  }
-  return Date.now() - timestamp <= maxDays * 24 * 60 * 60 * 1000;
+function fillList(primary: FeedItem[], fallback: FeedItem[], max: number): FeedItem[] {
+  return dedupe([...primary, ...fallback]).slice(0, max);
 }
 
-function sectionClass(section: NewsSection): string {
-  switch (section) {
-    case "RADAR_ELECTORAL":
-      return "tone-radar";
-    case "ECONOMIA":
-      return "tone-economy";
-    case "PROVINCIAS":
-    case "DISTRITOS":
-    case "MUNICIPIOS":
-      return "tone-federal";
-    case "OPINION":
-      return "tone-opinion";
-    case "ENTREVISTAS":
-      return "tone-interview";
-    case "INTERNACIONALES":
-      return "tone-global";
-    default:
-      return "tone-main";
-  }
-}
-
-function iconBySection(section: NewsSection): IconName {
-  switch (section) {
-    case "RADAR_ELECTORAL":
-      return "radar";
-    case "ECONOMIA":
-      return "economy";
-    case "OPINION":
-      return "opinion";
-    case "ENTREVISTAS":
-      return "interview";
-    case "INTERNACIONALES":
-      return "global";
-    case "PROVINCIAS":
-    case "MUNICIPIOS":
-    case "DISTRITOS":
-      return "province";
-    default:
-      return "nation";
-  }
+function findSports(items: FeedItem[]): FeedItem | null {
+  return items.find((item) => /deporte|futbol|liga|seleccion|partido|torneo|ascenso/i.test(item.title)) ?? null;
 }
 
 type StoryLinkData = { href: string; external: boolean } | null;
@@ -256,522 +212,732 @@ function StoryAnchor({
   );
 }
 
-function FeedCard({ item, engagementControls }: { item: FeedItem; engagementControls: EngagementControls }) {
-  const headline = shortTitle(titleForDisplay(item), 110);
+function UiIcon({ name }: { name: "menu" | "search" | "user" | "arrow-right" | "home" | "bookmark" | "money" }) {
+  if (name === "menu") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 6h16M4 12h16M4 18h16" />
+      </svg>
+    );
+  }
+  if (name === "search") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="11" cy="11" r="7" />
+        <path d="M20 20l-3.5-3.5" />
+      </svg>
+    );
+  }
+  if (name === "user") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="12" cy="8" r="4" />
+        <path d="M4 20a8 8 0 0 1 16 0" />
+      </svg>
+    );
+  }
+  if (name === "arrow-right") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M5 12h14" />
+        <path d="M13 5l7 7-7 7" />
+      </svg>
+    );
+  }
+  if (name === "bookmark") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M6 4h12v16l-6-4-6 4z" />
+      </svg>
+    );
+  }
+  if (name === "home") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M3 11l9-7 9 7" />
+        <path d="M6 10v10h12V10" />
+      </svg>
+    );
+  }
+  if (name === "money") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 3v18" />
+        <path d="M16 7c0-1.7-1.8-3-4-3s-4 1.3-4 3 1.8 3 4 3 4 1.3 4 3-1.8 3-4 3-4-1.3-4-3" />
+      </svg>
+    );
+  }
   return (
-    <article className="mf-feed-card">
-      <div className="mf-feed-media">
-        <StoryAnchor item={item} className="story-link story-link-media">
-          {item.imageUrl ? (
-            <Image src={item.imageUrl} alt={headline} fill sizes="(max-width: 700px) 36vw, 180px" className="mf-feed-image" />
-          ) : (
-            <div className="mf-feed-placeholder" />
-          )}
-        </StoryAnchor>
-      </div>
-      <div className="mf-feed-body">
-        <p className={`mf-badge ${sectionClass(item.section)}`}>
-          <UiIcon name={iconBySection(item.section)} />
-          {SECTION_LABEL[item.section]}
-        </p>
-        <h3>
-          <StoryAnchor item={item} className="story-link-headline">
-            {headline}
-          </StoryAnchor>
-        </h3>
-        {item.excerpt && <p className="mf-excerpt">{item.excerpt}</p>}
-        <div className="mf-meta">
-          <span>{item.sourceName ?? "Pulso Pais"}</span>
-          <span>{relativeMinutes(item.publishedAt)}</span>
-        </div>
-        <EngagementBar itemId={item.id} title={headline} compact controls={engagementControls} />
-      </div>
-    </article>
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M4 12h16" />
+      <path d="M12 4v16" />
+    </svg>
   );
 }
 
-function countSections(items: FeedItem[]): NewsSection[] {
-  const map = new Map<NewsSection, number>();
-  items.forEach((item) => {
-    map.set(item.section, (map.get(item.section) ?? 0) + 1);
-  });
-  return Array.from(map.entries())
-    .sort((a, b) => b[1] - a[1])
-    .map(([section]) => section)
-    .slice(0, 5);
-}
-
-function DesktopNewsCard({
+function DesktopArticleCard({
   item,
+  controls,
   compact = false,
-  engagementControls,
 }: {
   item: FeedItem;
+  controls: EngagementControls;
   compact?: boolean;
-  engagementControls: EngagementControls;
 }) {
-  const headline = titleForDisplay(item);
+  const title = cleanTitle(item);
   return (
-    <article className={`news-card ${compact ? "compact" : ""}`} data-section={item.section}>
-      <div className="news-image-wrap">
-        <StoryAnchor item={item} className="story-link story-link-media">
-          {item.imageUrl ? (
-            <Image src={item.imageUrl} alt={headline} fill sizes="(max-width: 700px) 100vw, 33vw" className="news-image" />
-          ) : (
-            <div className="news-image-placeholder" />
-          )}
-        </StoryAnchor>
-      </div>
-      <div className="news-content">
-        <p className="news-kicker">
-          <UiIcon name={iconBySection(item.section)} className="kicker-icon" />
-          {SECTION_LABEL[item.section]}
-        </p>
+    <article className={`cp-article-card ${compact ? "compact" : ""}`}>
+      <StoryAnchor item={item} className="cp-article-media">
+        {item.imageUrl ? (
+          <Image src={item.imageUrl} alt={title} fill sizes="(max-width: 1100px) 100vw, 30vw" className="cp-image" />
+        ) : (
+          <div className="cp-image-fallback" />
+        )}
+      </StoryAnchor>
+      <div className="cp-article-body">
+        <p className="cp-kicker">{sanitizeDisplayText(item.kicker ?? SECTION_LABEL[item.section])}</p>
         <h3>
-          <StoryAnchor item={item} className="story-link-headline">
-            {headline}
+          <StoryAnchor item={item} className="cp-story-link">
+            {shortText(title, compact ? 86 : 104)}
           </StoryAnchor>
         </h3>
-        {item.excerpt && <p className="news-excerpt">{item.excerpt}</p>}
-        <div className="news-meta">
-          <span>{item.sourceName ?? "Pulso Pais"}</span>
+        <p>{shortText(excerptFor(item), compact ? 130 : 170)}</p>
+        <div className="cp-meta-line">
+          <span>{sanitizeDisplayText(item.sourceName ?? authorFor(item) ?? "Pulso Pais")}</span>
           <span>{formatDate(item.publishedAt)}</span>
         </div>
-        <EngagementBar itemId={item.id} title={headline} compact={compact} controls={engagementControls} />
+        <EngagementBar itemId={item.id} title={title} compact controls={controls} />
       </div>
     </article>
   );
 }
 
-function DesktopHome({
+function OpinionCard({ item, controls }: { item: FeedItem; controls: EngagementControls }) {
+  const title = cleanTitle(item);
+  return (
+    <article className="cp-opinion-card">
+      <div className="cp-opinion-top">
+        <div className="cp-opinion-avatar" />
+        <div>
+          <span>{sanitizeDisplayText(authorFor(item) ?? "Redaccion Pulso Pais")}</span>
+          <small>{sanitizeDisplayText(item.kicker ?? "Analisis politico")}</small>
+        </div>
+      </div>
+      <h4>
+        <StoryAnchor item={item} className="cp-story-link">
+          {shortText(title, 94)}
+        </StoryAnchor>
+      </h4>
+      <p>{shortText(excerptFor(item), 150)}</p>
+      <EngagementBar itemId={item.id} title={title} compact controls={controls} />
+    </article>
+  );
+}
+
+function MobileStoryCard({ item, controls }: { item: FeedItem; controls: EngagementControls }) {
+  const title = cleanTitle(item);
+  return (
+    <article className="cp-m-story">
+      <StoryAnchor item={item} className="cp-m-story-media">
+        {item.imageUrl ? (
+          <Image src={item.imageUrl} alt={title} fill sizes="100vw" className="cp-image" />
+        ) : (
+          <div className="cp-image-fallback" />
+        )}
+      </StoryAnchor>
+      <div className="cp-m-story-body">
+        <p>{sanitizeDisplayText(item.kicker ?? SECTION_LABEL[item.section])}</p>
+        <h3>
+          <StoryAnchor item={item} className="cp-story-link">
+            {shortText(title, 88)}
+          </StoryAnchor>
+        </h3>
+        <span>{relativeMinutes(item.publishedAt)}</span>
+        <EngagementBar itemId={item.id} title={title} compact controls={controls} />
+      </div>
+    </article>
+  );
+}
+
+function DesktopEdition({
   hero,
-  heroTitle,
-  stream,
-  radar,
-  featuredPoll,
-  theme,
-  tickerItems,
-  backofficeUrl,
-  weatherLabel,
+  topStories,
+  opinionStories,
+  buenosAiresStories,
+  interviewStory,
+  electionStory,
+  sportsStory,
+  provinces,
+  poll,
   markets,
-  federal,
-  engagementControls,
+  weatherLabel,
+  ticker,
+  controls,
+  backofficeUrl,
 }: {
   hero: FeedItem | null;
-  heroTitle: string;
-  stream: FeedItem[];
-  radar: FeedItem[];
-  featuredPoll: PollItem | null;
-  theme: "premium" | "classic" | "social" | "editorial";
-  tickerItems: string[];
-  backofficeUrl: string;
+  topStories: FeedItem[];
+  opinionStories: FeedItem[];
+  buenosAiresStories: FeedItem[];
+  interviewStory: FeedItem | null;
+  electionStory: FeedItem | null;
+  sportsStory: FeedItem | null;
+  provinces: Array<{ province: string; headline: string; section: string; sourceUrl: string | null }>;
+  poll: PollItem | null;
+  markets: Array<{ symbol: string; label: string; price: number | null; changePct: number | null; currency: string }>;
   weatherLabel: string;
-  markets: Array<{ symbol: string; label: string; price: number | null; changePct: number | null; currency: string; trend: "up" | "down" | "flat" }>;
-  federal: Array<{ province: string; headline: string; section: string }>;
-  engagementControls: EngagementControls;
+  ticker: string;
+  controls: EngagementControls;
+  backofficeUrl: string;
 }) {
-  const sideCards = stream.slice(0, 3);
-  const quickRead = stream.slice(3, 9);
-  const themeClass = theme === "premium" ? "" : `theme-${theme}`;
-
   return (
-    <main className={`home ${themeClass}`.trim()}>
-      <section className="ticker">
-        <div className="ticker-label">Urgente</div>
-        <div className="ticker-track">
-          {[...tickerItems, ...tickerItems].map((item, index) => (
-            <p key={`${item}-${index}`}>{stripCategoryPrefix(item)}</p>
+    <main className="cp-home">
+      <section className="cp-ticker-top">
+        <div className="cp-shell cp-ticker-row">
+          {markets.slice(0, 2).map((market) => (
+            <p key={market.symbol}>
+              <strong>{sanitizeDisplayText(market.label)}</strong> {formatMoney(market.price, market.currency)}
+            </p>
           ))}
+          <p>{sanitizeDisplayText(weatherLabel)}</p>
+          <span className="cp-breaking-dot" aria-hidden="true" />
+          <p>{shortText(stripCategoryPrefix(sanitizeDisplayText(ticker)), 84)}</p>
         </div>
       </section>
 
-      <header className="top-header container">
-        <div className="brand">
-          <Image src="/logo.png" alt="Pulso Pais" width={240} height={62} priority className="brand-logo" />
-          <span>Politica, poder y territorio</span>
+      <header className="cp-shell cp-header">
+        <div className="cp-header-icons">
+          <button type="button" aria-label="Menu">
+            <UiIcon name="menu" />
+          </button>
+          <button type="button" aria-label="Buscar">
+            <UiIcon name="search" />
+          </button>
         </div>
-        <div className="header-center">
-          <p className="header-center-tag">Mesa de situacion</p>
-          <h2>Radar nacional en vivo</h2>
-          <p>{tickerItems[0] ? stripCategoryPrefix(tickerItems[0]) : "Actualizacion permanente de agenda politica."}</p>
+
+        <div className="cp-brand">
+          <Image src="/logo.png" alt="Pulso Pais" width={230} height={74} priority className="cp-brand-logo" />
+          <p>El diario de la situacion</p>
         </div>
-        <div className="header-right">
-          <p>{formatHeaderDate(hero?.publishedAt ?? new Date().toISOString())}</p>
-          <UserSessionNav />
+
+        <div className="cp-header-actions">
+          <span>{formatHeaderDate(hero?.publishedAt ?? new Date().toISOString())}</span>
+          <button type="button">Newsletter</button>
+          <button type="button" className="primary">
+            Suscribirse
+          </button>
           <a href={backofficeUrl} target="_blank" rel="noreferrer">
             Backoffice
           </a>
+          <UserSessionNav />
         </div>
       </header>
 
-      <nav className="main-nav">
-        <div className="container nav-scroll">
-          <Link href="/noticias?section=NACION" className="nav-link">
-            <UiIcon name="nation" className="nav-icon" />
-            Nacion
+      <nav className="cp-shell cp-nav">
+        {NAV_ITEMS.map((item, index) => (
+          <Link
+            key={item.label}
+            href={item.section ? `/noticias?section=${item.section}` : "/noticias"}
+            className={index === 0 ? "active" : ""}
+          >
+            {item.label}
           </Link>
-          <Link href="/noticias?section=PROVINCIAS" className="nav-link">
-            <UiIcon name="province" className="nav-icon" />
-            Provincias
-          </Link>
-          <Link href="/noticias?section=RADAR_ELECTORAL" className="nav-link">
-            <UiIcon name="radar" className="nav-icon" />
-            Radar Electoral
-          </Link>
-          <Link href="/noticias?section=OPINION" className="nav-link">
-            <UiIcon name="opinion" className="nav-icon" />
-            Opinion
-          </Link>
-          <Link href="/noticias?section=ECONOMIA" className="nav-link">
-            <UiIcon name="economy" className="nav-icon" />
-            Economia
-          </Link>
-          <Link href="/noticias" className="nav-link">
-            <UiIcon name="pulse" className="nav-icon" />
-            Ultimas
-          </Link>
-          {featuredPoll ? (
-            <a href={`/encuestas/${featuredPoll.slug}`} className="nav-poll-link" target="_blank" rel="noopener noreferrer">
-              <UiIcon name="trend" className="nav-icon" />
-              Encuestas
-            </a>
-          ) : null}
-        </div>
+        ))}
       </nav>
 
-      <section className="container hero-grid">
-        {hero && (
-          <article className="hero-main" data-section={hero.section}>
-            <div className="hero-image-wrap">
-              <StoryAnchor item={hero} className="story-link story-link-media">
-                {hero.imageUrl ? (
-                  <Image src={hero.imageUrl} alt={heroTitle} fill priority className="hero-image" />
-                ) : (
-                  <div className="hero-image-placeholder" />
-                )}
-              </StoryAnchor>
-            </div>
-            <div className="hero-content">
-              <p className="hero-kicker">
-                <UiIcon name={iconBySection(hero.section)} className="kicker-icon" />
-                {hero.kicker ?? SECTION_LABEL[hero.section]}
-              </p>
+      <section className="cp-shell cp-hero-grid">
+        {hero ? (
+          <article className="cp-hero-main">
+            <StoryAnchor item={hero} className="cp-hero-image">
+              {hero.imageUrl ? (
+                <Image src={hero.imageUrl} alt={cleanTitle(hero)} fill sizes="(max-width: 1200px) 100vw, 66vw" className="cp-image" />
+              ) : (
+                <div className="cp-image-fallback" />
+              )}
+            </StoryAnchor>
+            <div className="cp-hero-body">
+              <p>{sanitizeDisplayText(hero.kicker ?? "Nacion")}</p>
               <h1>
-                <StoryAnchor item={hero} className="story-link-headline">
-                  {heroTitle}
+                <StoryAnchor item={hero} className="cp-story-link">
+                  {cleanTitle(hero)}
                 </StoryAnchor>
               </h1>
-              {hero.excerpt && <p>{hero.excerpt}</p>}
-              <div className="hero-meta">
-                <span>{hero.sourceName ?? "Pulso Pais"}</span>
+              <h2>{excerptFor(hero)}</h2>
+              <div className="cp-meta-line">
+                <span>{sanitizeDisplayText(authorFor(hero) ?? hero.sourceName ?? "Redaccion Pulso Pais")}</span>
                 <span>{formatDate(hero.publishedAt)}</span>
               </div>
-              <EngagementBar itemId={hero.id} title={heroTitle} controls={engagementControls} />
+              <EngagementBar itemId={hero.id} title={cleanTitle(hero)} controls={controls} />
             </div>
           </article>
-        )}
-        <div className="hero-side">
-          {sideCards.map((item) => (
-            <DesktopNewsCard key={item.id} item={item} compact engagementControls={engagementControls} />
+        ) : null}
+
+        <aside className="cp-hero-side">
+          <div className="cp-most-read">
+            <h3>Lo mas leido</h3>
+            {topStories.map((story, index) => (
+              <article key={story.id} className="cp-most-read-item">
+                <span>{String(index + 1).padStart(2, "0")}</span>
+                <h4>
+                  <StoryAnchor item={story} className="cp-story-link">
+                    {shortText(cleanTitle(story), 78)}
+                  </StoryAnchor>
+                </h4>
+              </article>
+            ))}
+          </div>
+          <div className="cp-ad-tile">
+            <small>Espacio publicitario</small>
+            <h4>Tu futuro comienza aqui.</h4>
+            <p>Inverti en el mercado local con una plataforma lider para inversores argentinos.</p>
+            <button type="button">Saber mas</button>
+          </div>
+        </aside>
+      </section>
+
+      {interviewStory ? (
+        <section className="cp-shell cp-interview">
+          <div className="cp-interview-copy">
+            <p>La entrevista del dia</p>
+            <h3>
+              "La crisis actual no es solo economica, es de representacion politica profunda."
+            </h3>
+            <span>{sanitizeDisplayText(authorFor(interviewStory) ?? "Elena Martinez de Hoz")}</span>
+            <StoryAnchor item={interviewStory} className="cp-read-btn">
+              Leer entrevista completa
+            </StoryAnchor>
+          </div>
+          <div className="cp-interview-image">
+            {interviewStory.imageUrl ? (
+              <Image
+                src={interviewStory.imageUrl}
+                alt={cleanTitle(interviewStory)}
+                fill
+                sizes="(max-width: 1200px) 50vw, 35vw"
+                className="cp-image"
+              />
+            ) : (
+              <div className="cp-image-fallback" />
+            )}
+          </div>
+        </section>
+      ) : null}
+
+      <section className="cp-shell cp-opinion">
+        <div className="cp-section-head">
+          <h3>Opinion & Analisis</h3>
+          <Link href="/noticias?section=OPINION">Ver todas</Link>
+        </div>
+        <div className="cp-opinion-grid">
+          {opinionStories.map((item) => (
+            <OpinionCard key={item.id} item={item} controls={controls} />
           ))}
         </div>
       </section>
 
-      <section className="container signal-band">
-        <article className="weather-gadget">
-          <p>
-            <UiIcon name="weather" className="inline-icon" />
-            Clima
-          </p>
-          <h3>{weatherLabel}</h3>
-        </article>
-        <article className="market-gadget">
-          <p>
-            <UiIcon name="market" className="inline-icon" />
-            Mercados
-          </p>
-          <div className="market-grid">
+      <section className="cp-shell cp-feed-grid">
+        <div className="cp-main-feed">
+          <div className="cp-section-head">
+            <h3>Buenos Aires</h3>
+            <Link href="/noticias?section=PROVINCIAS">Ver mas</Link>
+          </div>
+
+          <div className="cp-two-col">
+            {buenosAiresStories.map((item) => (
+              <DesktopArticleCard key={item.id} item={item} controls={controls} compact />
+            ))}
+          </div>
+
+          <article className="cp-sponsored">
+            <small>Patrocinado</small>
+            <h4>Descubri una nueva forma de invertir en real estate desde $10.000</h4>
+            <p>Propuesta comercial integrada en portada sin romper la lectura editorial.</p>
+            <button type="button">Ver oportunidades</button>
+          </article>
+
+          {electionStory ? (
+            <article className="cp-election-feature">
+              <div className="cp-election-media">
+                {electionStory.imageUrl ? (
+                  <Image src={electionStory.imageUrl} alt={cleanTitle(electionStory)} fill sizes="(max-width: 1200px) 100vw, 24vw" className="cp-image" />
+                ) : (
+                  <div className="cp-image-fallback" />
+                )}
+              </div>
+              <div className="cp-election-copy">
+                <p>Elecciones</p>
+                <h4>
+                  <StoryAnchor item={electionStory} className="cp-story-link">
+                    {shortText(cleanTitle(electionStory), 88)}
+                  </StoryAnchor>
+                </h4>
+                <span>{formatDate(electionStory.publishedAt)}</span>
+              </div>
+            </article>
+          ) : null}
+        </div>
+
+        <aside className="cp-side-feed">
+          <div className="cp-market-panel">
+            <h4>Mercado & Finanzas</h4>
             {markets.slice(0, 4).map((market) => (
-              <div key={market.symbol} className={`market-item ${market.trend}`}>
-                <strong>{market.label}</strong>
-                <span>{formatMoney(market.price, market.currency)}</span>
-                <em>{formatChange(market.changePct)}</em>
+              <div key={market.symbol} className="cp-market-row">
+                <span>{sanitizeDisplayText(market.label)}</span>
+                <div>
+                  <strong>{formatMoney(market.price, market.currency)}</strong>
+                  <small>{formatChange(market.changePct)}</small>
+                </div>
               </div>
             ))}
           </div>
+
+          <div className="cp-newsletter">
+            <p>Recibi las noticias que importan en tu correo.</p>
+            <input type="email" placeholder="Tu email" />
+            <button type="button">Suscribirme gratis</button>
+          </div>
+
+          {sportsStory ? <DesktopArticleCard item={sportsStory} controls={controls} compact /> : null}
+
+          {poll ? (
+            <article className="cp-poll-box">
+              <small>Encuesta en vivo</small>
+              <h4>{shortText(sanitizeDisplayText(poll.question), 74)}</h4>
+              <span>{poll.metrics.totalVotes} votos acumulados</span>
+              <a href={`/encuestas/${poll.slug}`} target="_blank" rel="noreferrer">
+                Abrir encuesta
+              </a>
+            </article>
+          ) : null}
+        </aside>
+      </section>
+
+      <section className="cp-shell cp-province-strip">
+        <div className="cp-section-head">
+          <h3>Provincia por Provincia</h3>
+          <Link href="/noticias?section=DISTRITOS">Explorar</Link>
+        </div>
+        <div className="cp-province-grid">
+          {provinces.map((entry) => (
+            <article key={entry.province}>
+              <span>{sanitizeDisplayText(entry.province)}</span>
+              <h4>{shortText(stripCategoryPrefix(sanitizeDisplayText(entry.headline)), 74)}</h4>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <footer className="cp-footer">
+        <div className="cp-shell cp-footer-inner">
+          <div>
+            <h3>Pulso Pais</h3>
+            <p>Informacion rigurosa para tiempos complejos. Independencia editorial y cobertura federal real.</p>
+          </div>
+          <div>
+            <h4>Editorial</h4>
+            <a href="#">Staff</a>
+            <a href="#">Codigo de etica</a>
+            <a href="#">Archivo</a>
+          </div>
+          <div>
+            <h4>Soporte</h4>
+            <a href="#">Contacto</a>
+            <a href="#">Anunciantes</a>
+            <a href="#">Ayuda</a>
+          </div>
+          <div>
+            <h4>Legal</h4>
+            <a href="#">Terminos</a>
+            <a href="#">Privacidad</a>
+            <a href="#">Cookies</a>
+          </div>
+        </div>
+        <div className="cp-shell cp-footer-bottom">
+          <p>© 2026 Pulso Pais Argentina. Todos los derechos reservados.</p>
+          <p>Disenado para la situation room.</p>
+        </div>
+      </footer>
+    </main>
+  );
+}
+
+function MobileEdition({
+  hero,
+  stream,
+  provinces,
+  interviewStory,
+  opinionStories,
+  sportsStory,
+  poll,
+  markets,
+  weatherLabel,
+  controls,
+}: {
+  hero: FeedItem | null;
+  stream: FeedItem[];
+  provinces: Array<{ province: string; headline: string; section: string; sourceUrl: string | null }>;
+  interviewStory: FeedItem | null;
+  opinionStories: FeedItem[];
+  sportsStory: FeedItem | null;
+  poll: PollItem | null;
+  markets: Array<{ symbol: string; label: string; price: number | null; changePct: number | null; currency: string }>;
+  weatherLabel: string;
+  controls: EngagementControls;
+}) {
+  const firstMarket = markets[0];
+
+  return (
+    <main className="cp-mobile">
+      <header className="cp-m-header">
+        <div className="cp-m-top">
+          <button type="button" aria-label="Menu">
+            <UiIcon name="menu" />
+          </button>
+          <Image src="/logo.png" alt="Pulso Pais" width={126} height={42} className="cp-m-logo" priority />
+          <div>
+            <button type="button" aria-label="Buscar">
+              <UiIcon name="search" />
+            </button>
+            <button type="button" aria-label="Cuenta">
+              <UiIcon name="user" />
+            </button>
+          </div>
+        </div>
+        <nav className="cp-m-nav">
+          {NAV_ITEMS.slice(0, 5).map((item) => (
+            <Link key={item.label} href={item.section ? `/noticias?section=${item.section}` : "/noticias"}>
+              {item.label}
+            </Link>
+          ))}
+        </nav>
+      </header>
+
+      <section className="cp-m-urgent">
+        <span>Urgente</span>
+        <p>{hero ? shortText(cleanTitle(hero), 66) : "Cobertura federal en vivo."}</p>
+      </section>
+
+      <section className="cp-m-chip-row">
+        {firstMarket ? (
+          <article>
+            <small>{sanitizeDisplayText(firstMarket.label)}</small>
+            <strong>{formatMoney(firstMarket.price, firstMarket.currency)}</strong>
+          </article>
+        ) : null}
+        <article>
+          <small>Clima CABA</small>
+          <strong>{sanitizeDisplayText(weatherLabel)}</strong>
         </article>
       </section>
 
-      {featuredPoll ? (
-        <section className="container">
-          <article className="home-poll-cta">
-            <p>Encuesta en vivo</p>
-            <h3>{featuredPoll.question}</h3>
-            <span>{featuredPoll.metrics.totalVotes} votos acumulados</span>
-            <a href={`/encuestas/${featuredPoll.slug}`} target="_blank" rel="noopener noreferrer">
-              Abrir encuesta
-            </a>
-          </article>
+      <section className="cp-m-feed">
+        {hero ? <MobileStoryCard item={hero} controls={controls} /> : null}
+        {stream.slice(0, 2).map((item) => (
+          <MobileStoryCard key={item.id} item={item} controls={controls} />
+        ))}
+      </section>
+
+      <section className="cp-m-ad">
+        <small>Publicidad</small>
+        <h3>Inverti en el futuro con Banco Nacion</h3>
+        <button type="button">Conocer mas</button>
+      </section>
+
+      {sportsStory ? (
+        <section className="cp-m-sports">
+          <StoryAnchor item={sportsStory} className="cp-m-sports-media">
+            {sportsStory.imageUrl ? (
+              <Image src={sportsStory.imageUrl} alt={cleanTitle(sportsStory)} fill sizes="100vw" className="cp-image" />
+            ) : (
+              <div className="cp-image-fallback" />
+            )}
+          </StoryAnchor>
+          <h3>
+            <StoryAnchor item={sportsStory} className="cp-story-link">
+              {shortText(cleanTitle(sportsStory), 80)}
+            </StoryAnchor>
+          </h3>
         </section>
       ) : null}
 
-      <section className="container split-grid">
-        <article className="radar">
-          <div className="section-head">
-            <h2>
-              <UiIcon name="radar" className="head-icon" />
-              Radar Electoral
-            </h2>
-          </div>
-          <div className="list-grid">
-            {radar.map((item) => (
-              <DesktopNewsCard key={item.id} item={item} compact engagementControls={engagementControls} />
-            ))}
-          </div>
-        </article>
-        <article className="federal">
-          <div className="section-head">
-            <h2>
-              <UiIcon name="map" className="head-icon" />
-              Pulso Federal
-            </h2>
-          </div>
-          <div className="federal-grid">
-            {federal.slice(0, 12).map((item) => (
-              <article key={item.province} className="federal-item">
-                <p>{item.province}</p>
-                <h4>{shortTitle(stripCategoryPrefix(item.headline), 75)}</h4>
-                <span>{item.section}</span>
-              </article>
-            ))}
-          </div>
-        </article>
+      <section className="cp-m-provinces">
+        <div className="cp-section-head">
+          <h3>Provincia por Provincia</h3>
+          <span>
+            <UiIcon name="arrow-right" />
+          </span>
+        </div>
+        <div className="cp-m-province-row">
+          {provinces.map((entry) => (
+            <article key={entry.province}>
+              <small>{sanitizeDisplayText(entry.province)}</small>
+              <p>{shortText(stripCategoryPrefix(sanitizeDisplayText(entry.headline)), 54)}</p>
+            </article>
+          ))}
+        </div>
       </section>
 
-      <section className="container social-consume-grid">
-        <article className="social-feed">
-          <div className="section-head">
-            <h2>
-              <UiIcon name="trend" className="head-icon" />
-              Flujo de Lectura
-            </h2>
-          </div>
-          <div className="social-feed-list">
-            {quickRead.map((item) => (
-              <DesktopNewsCard key={item.id} item={item} compact engagementControls={engagementControls} />
-            ))}
-          </div>
+      <section className="cp-m-dark-zone">
+        {interviewStory ? (
+          <article className="cp-m-interview">
+            <small>Exclusivo</small>
+            <h3>Entrevistas</h3>
+            <div className="cp-m-interview-card">
+              <StoryAnchor item={interviewStory} className="cp-m-interview-media">
+                {interviewStory.imageUrl ? (
+                  <Image src={interviewStory.imageUrl} alt={cleanTitle(interviewStory)} fill sizes="100vw" className="cp-image" />
+                ) : (
+                  <div className="cp-image-fallback" />
+                )}
+              </StoryAnchor>
+              <h4>
+                <StoryAnchor item={interviewStory} className="cp-story-link">
+                  {shortText(cleanTitle(interviewStory), 78)}
+                </StoryAnchor>
+              </h4>
+            </div>
+          </article>
+        ) : null}
+
+        <article className="cp-m-opinion">
+          <h3>Opinion</h3>
+          {opinionStories.slice(0, 2).map((item) => (
+            <div key={item.id} className="cp-m-opinion-item">
+              <div className="cp-opinion-avatar" />
+              <div>
+                <small>{sanitizeDisplayText(authorFor(item) ?? "Redaccion")}</small>
+                <h4>
+                  <StoryAnchor item={item} className="cp-story-link">
+                    {shortText(cleanTitle(item), 64)}
+                  </StoryAnchor>
+                </h4>
+              </div>
+            </div>
+          ))}
         </article>
+
+        {poll ? (
+          <article className="cp-m-poll">
+            <small>Encuesta en vivo</small>
+            <h4>{shortText(sanitizeDisplayText(poll.question), 70)}</h4>
+            <a href={`/encuestas/${poll.slug}`} target="_blank" rel="noreferrer">
+              Votar ahora
+            </a>
+          </article>
+        ) : null}
       </section>
+
+      <footer className="cp-m-footer">
+        <h3>Pulso Pais</h3>
+        <div>
+          <a href="#">Editorial</a>
+          <a href="#">Staff</a>
+          <a href="#">Anunciantes</a>
+          <a href="#">Contacto</a>
+          <a href="#">Terminos</a>
+          <a href="#">Privacidad</a>
+        </div>
+        <p>© 2026 Pulso Pais Argentina.</p>
+      </footer>
+
+      <nav className="cp-m-bottom-nav">
+        <Link href="/">
+          <UiIcon name="home" />
+          Inicio
+        </Link>
+        <Link href="/noticias">
+          <UiIcon name="menu" />
+          Secciones
+        </Link>
+        <Link href="/noticias?section=ECONOMIA">
+          <UiIcon name="money" />
+          Dolar
+        </Link>
+        <Link href="/cuenta">
+          <UiIcon name="bookmark" />
+          Guardados
+        </Link>
+        <Link href="/cuenta">
+          <UiIcon name="user" />
+          Perfil
+        </Link>
+      </nav>
     </main>
   );
 }
 
 export default async function Home() {
   const [home, featuredPoll] = await Promise.all([getHomeData(), getFeaturedPoll()]);
+
   const backofficeUrl =
     process.env.NEXT_PUBLIC_BACKOFFICE_URL ??
     (process.env.NODE_ENV === "production"
       ? "https://pulso-backend-kgtc.onrender.com/backoffice"
       : "http://localhost:8080/backoffice");
 
-  const internalItems = dedupe([
+  const allItems = dedupe([
     ...(home.hero ? [home.hero] : []),
-    ...home.latest,
     ...home.secondary,
+    ...home.latest,
     ...home.radarElectoral,
-    ...home.interviews,
     ...home.opinion,
+    ...home.interviews,
+    ...home.sponsored,
+    ...home.externalPulse,
   ]);
-  const externalRecent = home.externalPulse.filter((item) => isRecent(item.publishedAt, 7)).slice(0, 8);
-  const sourceItems = dedupe([...internalItems, ...externalRecent]);
 
-  const hero = home.hero ?? sourceItems[0] ?? null;
-  const stream = sourceItems.filter((item) => item.id !== hero?.id).slice(0, 18);
-  const radar = dedupe([...home.radarElectoral, ...stream.filter((item) => item.section === "RADAR_ELECTORAL")]).slice(0, 6);
-  const quickList = dedupe([...home.latest, ...home.opinion, ...externalRecent]).slice(0, 7);
-  const visibleSections = countSections(sourceItems);
-  const tickerItems = home.ticker.length > 0 ? home.ticker.slice(0, 6) : internalItems.slice(0, 6).map((item) => item.title);
-  const heroTitle = hero ? titleForDisplay(hero) : "Pulso Pais en actualizacion permanente";
-  const engagementControls: EngagementControls = {
-    commentsEnabled: home.engagement?.commentsEnabled ?? true,
-    reactionsEnabled: home.engagement?.reactionsEnabled ?? true,
-    analysisEnabled: home.engagement?.analysisEnabled ?? true,
+  const hero = home.hero ?? allItems[0] ?? null;
+  const rest = allItems.filter((item) => item.id !== hero?.id);
+
+  const mostRead = fillList(dedupe([...home.latest, ...home.externalPulse]), rest, 3);
+  const opinionStories = fillList(dedupe([...home.opinion, ...rest.filter((item) => item.section === "OPINION")]), rest, 3);
+  const buenosAiresStories = fillList(rest.filter((item) => item.province === "BUENOS_AIRES" || item.province === "CABA"), rest, 2);
+  const interviewStory = home.interviews[0] ?? rest.find((item) => item.section === "ENTREVISTAS") ?? rest[0] ?? null;
+  const electionStory = home.radarElectoral[0] ?? rest.find((item) => item.section === "RADAR_ELECTORAL") ?? rest[1] ?? null;
+  const sportsStory = findSports(rest);
+
+  const controls: EngagementControls = {
+    commentsEnabled: home.engagement.commentsEnabled,
+    reactionsEnabled: home.engagement.reactionsEnabled,
+    analysisEnabled: home.engagement.analysisEnabled,
   };
+
+  const ticker = sanitizeDisplayText(home.ticker[0] ?? (hero ? cleanTitle(hero) : "Pulso Pais en vivo."));
+  const weatherLabel = `${sanitizeDisplayText(home.social.weather.location)} ${home.social.weather.temperatureC ?? "--"}C`;
+  const mobileStream = fillList(dedupe([...home.latest, ...home.radarElectoral, ...home.externalPulse]), rest, 5);
 
   return (
     <>
-      <div className="pp-mobile-only">
-        <main className="mf-home">
-          <section className="mf-ticker">
-            <div className="mf-shell mf-ticker-inner">
-              <span className="mf-ticker-label">
-                <UiIcon name="pulse" />
-                En Vivo
-              </span>
-              <div className="mf-ticker-track">
-                {tickerItems.map((item, index) => (
-                  <p key={`${item}-${index}`}>{stripCategoryPrefix(item)}</p>
-                ))}
-              </div>
-            </div>
-          </section>
-
-          <header className="mf-shell mf-header">
-            <a href="/" className="mf-brand" aria-label="Pulso Pais Inicio">
-              <Image src="/logo.png" alt="Pulso Pais" width={160} height={52} priority className="mf-logo" />
-              <span>Politica, poder y territorio</span>
-            </a>
-            <div className="mf-header-meta">
-              <p>{formatHeaderDate(home.generatedAt)}</p>
-              <UserSessionNav compact />
-              <a href={backofficeUrl} target="_blank" rel="noreferrer">
-                Backoffice
-              </a>
-            </div>
-          </header>
-
-          <section className="mf-shell mf-topics" aria-label="Secciones principales">
-            {visibleSections.map((section) => (
-              <span key={section} className={`mf-topic ${sectionClass(section)}`}>
-                <UiIcon name={iconBySection(section)} />
-                {SECTION_LABEL[section]}
-              </span>
-            ))}
-          </section>
-
-          <div className="mf-shell mf-layout">
-            <section className="mf-main">
-              <article className="mf-hero-card">
-                <div className="mf-hero-media">
-                  {hero ? (
-                    <StoryAnchor item={hero} className="story-link story-link-media">
-                      {hero.imageUrl ? (
-                        <Image src={hero.imageUrl} alt={heroTitle} fill priority sizes="(max-width: 900px) 100vw, 62vw" className="mf-feed-image" />
-                      ) : (
-                        <div className="mf-feed-placeholder" />
-                      )}
-                    </StoryAnchor>
-                  ) : (
-                    <div className="mf-feed-placeholder" />
-                  )}
-                </div>
-                <div className="mf-hero-body">
-                  <p className={`mf-badge ${hero ? sectionClass(hero.section) : "tone-main"}`}>
-                    <UiIcon name={hero ? iconBySection(hero.section) : "nation"} />
-                    {hero ? SECTION_LABEL[hero.section] : "Nacion"}
-                  </p>
-                  <h1>{hero ? <StoryAnchor item={hero} className="story-link-headline">{heroTitle}</StoryAnchor> : heroTitle}</h1>
-                  {hero?.excerpt && <p className="mf-hero-excerpt">{hero.excerpt}</p>}
-                  <div className="mf-meta">
-                    <span>{hero?.sourceName ?? "Pulso Pais"}</span>
-                    <span>{hero ? formatDate(hero.publishedAt) : formatDate(home.generatedAt)}</span>
-                  </div>
-                  {hero && <EngagementBar itemId={hero.id} title={heroTitle} controls={engagementControls} />}
-                </div>
-              </article>
-
-              <section className="mf-block">
-                <div className="mf-block-head">
-                  <h2>Ultimas Noticias</h2>
-                  <span>{stream.length} notas</span>
-                </div>
-                <div className="mf-card-list">
-                  {stream.map((item) => (
-                    <FeedCard key={item.id} item={item} engagementControls={engagementControls} />
-                  ))}
-                </div>
-              </section>
-
-              {featuredPoll ? (
-                <section className="mf-block">
-                  <div className="mf-block-head">
-                    <h2>Encuesta en Vivo</h2>
-                    <span>{featuredPoll.metrics.totalVotes} votos</span>
-                  </div>
-                  <article className="mf-poll-card">
-                    <p>{featuredPoll.hookLabel || "Encuesta Nacional"}</p>
-                    <h3>{featuredPoll.question}</h3>
-                    <a href={`/encuestas/${featuredPoll.slug}`} target="_blank" rel="noopener noreferrer">
-                      Votar ahora
-                    </a>
-                  </article>
-                </section>
-              ) : null}
-
-              {radar.length > 0 && (
-                <section className="mf-block">
-                  <div className="mf-block-head">
-                    <h2>Radar Electoral</h2>
-                    <span>seguimiento</span>
-                  </div>
-                  <div className="mf-mini-list">
-                    {radar.map((item) => (
-                      <article key={item.id} className="mf-mini-item">
-                        <p className={`mf-badge ${sectionClass(item.section)}`}>
-                          <UiIcon name="radar" />
-                          Radar
-                        </p>
-                        <h3>
-                          <StoryAnchor item={item} className="story-link-headline">
-                            {shortTitle(titleForDisplay(item), 105)}
-                          </StoryAnchor>
-                        </h3>
-                        <div className="mf-meta">
-                          <span>{item.sourceName ?? "Pulso Pais"}</span>
-                          <span>{relativeMinutes(item.publishedAt)}</span>
-                        </div>
-                      </article>
-                    ))}
-                  </div>
-                </section>
-              )}
-            </section>
-
-            <aside className="mf-aside">
-              <section className="mf-side-card">
-                <h3>Agenda Rapida</h3>
-                <ol>
-                  {quickList.map((item) => (
-                    <li key={item.id}>
-                      <StoryAnchor item={item} className="story-link-headline">
-                        {shortTitle(titleForDisplay(item), 95)}
-                      </StoryAnchor>
-                    </li>
-                  ))}
-                </ol>
-              </section>
-
-              <section className="mf-side-card">
-                <h3>Pulso Federal</h3>
-                <div className="mf-federal-grid">
-                  {home.federalHighlights.slice(0, 8).map((item) => (
-                    <article key={item.province}>
-                      <strong>{item.province}</strong>
-                      <p>{shortTitle(stripCategoryPrefix(item.headline), 90)}</p>
-                    </article>
-                  ))}
-                </div>
-              </section>
-            </aside>
-          </div>
-        </main>
-      </div>
-
-      <div className="pp-desktop-only">
-        <DesktopHome
+      <div className="cp-desktop-only">
+        <DesktopEdition
           hero={hero}
-          heroTitle={heroTitle}
-          stream={stream}
-          radar={radar}
-          featuredPoll={featuredPoll}
-          theme={home.theme}
-          tickerItems={tickerItems}
-          backofficeUrl={backofficeUrl}
-          weatherLabel={`${home.social.weather.location} - ${home.social.weather.temperatureC ?? "--"} C`}
+          topStories={mostRead}
+          opinionStories={opinionStories}
+          buenosAiresStories={buenosAiresStories}
+          interviewStory={interviewStory}
+          electionStory={electionStory}
+          sportsStory={sportsStory}
+          provinces={home.federalHighlights.slice(0, 8)}
+          poll={featuredPoll}
           markets={home.social.markets}
-          federal={home.federalHighlights}
-          engagementControls={engagementControls}
+          weatherLabel={weatherLabel}
+          ticker={ticker}
+          controls={controls}
+          backofficeUrl={backofficeUrl}
+        />
+      </div>
+      <div className="cp-mobile-only">
+        <MobileEdition
+          hero={hero}
+          stream={mobileStream}
+          provinces={home.federalHighlights.slice(0, 6)}
+          interviewStory={interviewStory}
+          opinionStories={opinionStories}
+          sportsStory={sportsStory}
+          poll={featuredPoll}
+          markets={home.social.markets}
+          weatherLabel={weatherLabel}
+          controls={controls}
         />
       </div>
     </>

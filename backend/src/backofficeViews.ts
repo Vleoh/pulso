@@ -10,6 +10,9 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>${escapeHtml(title)} | Pulso Pais Backoffice</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,500;6..72,700;6..72,800&display=swap" rel="stylesheet" />
   <style>
     :root { --bg:#090909; --card:#131313; --line:#262626; --muted:#9d9d9d; --text:#f8f8f8; --gold:#c6a24a; --gold-soft:#e5c46f; }
     * { box-sizing:border-box; }
@@ -123,6 +126,62 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
     body[data-mode="focus"] .sidebar .mode-card,
     body[data-mode="focus"] .sidebar .side-nav a span { display:none; }
     body[data-mode="focus"] .layout { grid-template-columns:82px minmax(0,1fr); }
+    /* Light editorial skin (Cronista Dorado) */
+    :root { --bg:#efefec; --card:#ffffff; --line:#ddddda; --muted:#6e6e6e; --text:#171717; --gold:#f2b705; --gold-soft:#8f6900; }
+    body { background:var(--bg); color:var(--text); font-family:Inter, "Segoe UI", Arial, sans-serif; }
+    .sidebar { border-right:1px solid #d9d9d5; background:#f7f7f5; }
+    .side-brand { border-color:#dadad7; background:#ffffff; }
+    .side-brand strong { font-family:Newsreader, Georgia, serif; color:#111111; }
+    .side-nav a { border-color:#d8d8d4; background:#ffffff; color:#3b3b3b; }
+    .side-nav a:hover { border-color:#d0a72f; color:#7c5f00; }
+    .mode-card { border-color:#d9d9d5; background:#ffffff; }
+    .mode-card p { color:#7a7a7a; }
+    .mode-actions button { background:#f2f2f0; color:#3a3a3a; border-color:#d8d8d3; }
+    .mode-actions button.is-active { border-color:#d0a72f; background:#fff7dd; color:#7c5f00; box-shadow:none; }
+    .top { border-bottom:1px solid #dcdcd8; }
+    .brand strong { font-family:Newsreader, Georgia, serif; color:#111111; font-size:44px; letter-spacing:0; text-transform:none; line-height:0.95; }
+    .brand span { color:#866700; letter-spacing:.12em; font-size:10px; }
+    .button, button { border-color:#d8d8d4; background:#ffffff; color:#2c2c2c; border-radius:10px; }
+    .button.primary, button.primary { background:#f2b705; color:#121212; border-color:#d1a32d; }
+    .button:hover, button:hover { border-color:#cba43a; color:#7b5f00; }
+    .button.primary:hover, button.primary:hover { color:#121212; }
+    button.is-running { border-color:#d1a32d; background:#fff4cf; color:#7b5f00; box-shadow:none; }
+    .card { background:#ffffff; border-color:#ddddda; }
+    .flash { border-color:#d0aa36; background:#fff7df; color:#6f5600; }
+    .error { border-color:#c56a6a; background:#ffe9e9; color:#8f2424; }
+    thead th { color:#6a6a6a; border-bottom-color:#ddddda; }
+    tbody td { border-bottom-color:#ededea; }
+    .pill { border-color:#d8d8d4; }
+    .pill.draft { color:#525252; border-color:#cfcfcb; background:#f5f5f2; }
+    .pill.gold { color:#876800; border-color:#d5b24f; background:#fff4d0; }
+    form .field label { color:#5f5f5f; }
+    input, textarea, select { border-color:#d8d8d4; background:#ffffff; color:#1f1f1f; }
+    textarea { background:#ffffff; }
+    input:focus, textarea:focus, select:focus { outline:2px solid rgba(198,162,74,.28); border-color:#d0a72f; }
+    .checks label { border-color:#d8d8d4; background:#ffffff; color:#2d2d2d; }
+    .danger { border-color:#bd6b6b; color:#8e3030; background:#ffe9e9; }
+    .ai-box { border-color:#d9be73; background:#fff8e4; }
+    .ai-sub { color:#5a5a5a; }
+    .ai-badge { border-color:#d2a933; background:#f9edc2; color:#765900; }
+    .ai-advanced { border-color:#dddcd8; background:#fafaf8; }
+    .ai-advanced summary { color:#3b3b3b; }
+    .ai-status { border-color:#d8d8d4; background:#f9f9f6; color:#4d4d4d; }
+    .ai-review { border-color:#dddcd8; background:#fafaf8; }
+    .ai-review strong { color:#555555; }
+    .ai-review p { color:#242424; }
+    .table-count { color:#777777; }
+    .editor-card { border-color:#dddcd8; background:#fafaf8; }
+    .editor-toolbar { border-color:#d8d8d4; background:#f2f2ef; }
+    .editor-surface { border-color:#d8d8d4; background:#ffffff; color:#212121; }
+    .editor-surface pre { background:#f5f5f3; border-color:#ddddda; color:#1f1f1f; }
+    .editor-surface blockquote { border-left-color:#cfa73a; color:#444444; }
+    .editor-metrics { color:#777777; }
+    .editor-preview { border-color:#d6d6d2; background:#ffffff; color:#7e7e7e; }
+    .field .hint { color:#777777; }
+    .ai-chat-answer { border-color:#dddcd8; background:#ffffff; color:#2a2a2a; }
+    .toast { border-color:#d8d8d4; background:#ffffff; color:#2b2b2b; box-shadow:0 6px 24px rgba(0,0,0,.12); }
+    .split-title h3 { color:#191919; }
+    .mini-tag { border-color:#d4ac40; color:#7c5f00; background:#fff4d0; }
     @media (max-width:1100px) {
       .layout { grid-template-columns:1fr; }
       .sidebar { position:static; height:auto; border-right:0; border-bottom:1px solid var(--line); grid-template-columns:1fr; }
@@ -242,14 +301,20 @@ export function renderLogin(errorMessage?: string): string {
 <html lang="es"><head>
   <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Login | Pulso Pais Backoffice</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,500;6..72,700;6..72,800&display=swap" rel="stylesheet" />
   <style>
-    body { margin:0; min-height:100vh; background:radial-gradient(circle at top,#1a1a1a,#090909 65%); display:grid; place-items:center; color:#f3f3f3; font-family:Segoe UI,Arial,sans-serif; }
-    .card { width:min(440px,92vw); border:1px solid #292929; background:linear-gradient(180deg,#141414,#101010); border-radius:16px; padding:24px; box-sizing:border-box; }
-    h1 { margin:0 0 4px; letter-spacing:.08em; font-size:24px; text-transform:uppercase; } p { margin:0 0 18px; color:#b3b3b3; font-size:14px; line-height:1.45; }
-    form { display:grid; gap:12px; } input { width:100%; border:1px solid #323232; background:#0f0f0f; color:#f5f5f5; border-radius:10px; padding:12px; font-size:14px; box-sizing:border-box; }
-    button { border:0; border-radius:10px; background:linear-gradient(120deg,#b58f3f,#dec26f); color:#101010; font-weight:700; letter-spacing:.06em; text-transform:uppercase; font-size:12px; padding:12px; cursor:pointer; }
-    .error { background:#2b1414; border:1px solid #613030; color:#ef9f9f; border-radius:10px; padding:10px 12px; font-size:13px; margin-bottom:8px; }
-    .hint { margin-top:12px; font-size:12px; color:#8c8c8c; }
+    body { margin:0; min-height:100vh; background:#efefec; display:grid; place-items:center; color:#161616; font-family:Inter, "Segoe UI", Arial, sans-serif; }
+    .card { width:min(460px,92vw); border:1px solid #d9d9d5; background:#ffffff; border-radius:16px; padding:24px; box-sizing:border-box; }
+    h1 { margin:0 0 4px; letter-spacing:0; font-size:44px; line-height:.95; font-family:Newsreader, Georgia, serif; }
+    p { margin:0 0 18px; color:#666; font-size:14px; line-height:1.45; }
+    form { display:grid; gap:12px; }
+    input { width:100%; border:1px solid #d8d8d4; background:#fff; color:#151515; border-radius:10px; padding:12px; font-size:14px; box-sizing:border-box; }
+    input:focus { outline:2px solid rgba(198,162,74,.3); border-color:#d0a72f; }
+    button { border:1px solid #d0a72f; border-radius:10px; background:#f2b705; color:#101010; font-weight:700; letter-spacing:.06em; text-transform:uppercase; font-size:12px; padding:12px; cursor:pointer; }
+    .error { background:#ffe9e9; border:1px solid #c56a6a; color:#8f2424; border-radius:10px; padding:10px 12px; font-size:13px; margin-bottom:8px; }
+    .hint { margin-top:12px; font-size:12px; color:#747474; }
   </style>
 </head>
 <body>

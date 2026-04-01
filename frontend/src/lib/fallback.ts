@@ -4,7 +4,7 @@ const now = new Date().toISOString();
 
 export const fallbackHomeData: HomePayload = {
   generatedAt: now,
-  theme: "premium",
+  theme: "editorial",
   engagement: {
     commentsEnabled: true,
     reactionsEnabled: true,

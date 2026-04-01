@@ -4,10 +4,10 @@ export const HOME_ENGAGEMENT_REACTIONS_KEY = "home_engagement_reactions_enabled"
 export const HOME_ENGAGEMENT_ANALYSIS_KEY = "home_engagement_analysis_enabled";
 
 export const HOME_THEME_OPTIONS = [
-  { value: "premium", label: "Pulso Premium (actual)" },
-  { value: "classic", label: "Clasico Editorial (referencia)" },
-  { value: "social", label: "Social Newsroom (cards + interaccion)" },
-  { value: "editorial", label: "Editorial Negro/Oro (modelo Pulso)" },
+  { value: "editorial", label: "Cronista Dorado (default)" },
+  { value: "classic", label: "Clasico Editorial" },
+  { value: "social", label: "Social Newsroom" },
+  { value: "premium", label: "Pulso Premium" },
 ] as const;
 
 export type HomeTheme = (typeof HOME_THEME_OPTIONS)[number]["value"];
@@ -37,6 +37,9 @@ const DEFAULT_HOME_ENGAGEMENT_SETTINGS: HomeEngagementSettings = {
 
 export function normalizeHomeTheme(value: string): HomeTheme {
   const normalized = value.trim().toLowerCase();
+  if (normalized === "premium") {
+    return "premium";
+  }
   if (normalized === "editorial") {
     return "editorial";
   }
@@ -46,7 +49,7 @@ export function normalizeHomeTheme(value: string): HomeTheme {
   if (normalized === "classic") {
     return "classic";
   }
-  return "premium";
+  return "editorial";
 }
 
 function siteSettingDelegate(prisma: PrismaLike) {
@@ -76,7 +79,7 @@ export async function getHomeTheme(prisma: PrismaLike): Promise<HomeTheme> {
     where: { key: HOME_THEME_KEY },
     select: { value: true },
   });
-  return normalizeHomeTheme(setting?.value ?? "premium");
+  return normalizeHomeTheme(setting?.value ?? "editorial");
 }
 
 export async function setHomeTheme(prisma: PrismaLike, value: HomeTheme): Promise<HomeTheme> {

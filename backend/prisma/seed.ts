@@ -1,6 +1,7 @@
 ﻿import { NewsSection, NewsStatus, PollStatus, Province } from "@prisma/client";
 import { prisma } from "../src/prismaClient";
 import { FIXED_CANDIDATE_OPTIONS } from "../src/polls";
+import { HOME_THEME_KEY } from "../src/siteSettings";
 
 const now = new Date();
 
@@ -118,6 +119,12 @@ const seedNews = [
 ];
 
 async function main(): Promise<void> {
+  await prisma.siteSetting.upsert({
+    where: { key: HOME_THEME_KEY },
+    update: { value: "editorial" },
+    create: { key: HOME_THEME_KEY, value: "editorial" },
+  });
+
   for (const news of seedNews) {
     await prisma.news.upsert({
       where: { slug: news.slug },
@@ -195,4 +202,5 @@ main()
     await prisma.$disconnect();
     process.exit(1);
   });
+
 
