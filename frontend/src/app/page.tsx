@@ -37,6 +37,8 @@ const NAV_ITEMS: Array<{ label: string; section?: NewsSection }> = [
   { label: "Deportes" },
 ];
 
+const LOGO_SRC = "/logo.png?v=20260401b";
+
 function sanitizeDisplayText(input: string): string {
   return input
     .replace(/\uFFFD/g, "")
@@ -416,7 +418,7 @@ function DesktopEdition({
         </div>
 
         <div className="cp-brand">
-          <Image src="/logo.png" alt="Pulso Pais" width={230} height={74} priority className="cp-brand-logo" />
+          <Image src={LOGO_SRC} alt="Pulso Pais" width={230} height={74} priority className="cp-brand-logo" />
           <p>El diario de la situacion</p>
         </div>
 
@@ -693,7 +695,7 @@ function MobileEdition({
           <button type="button" aria-label="Menu">
             <UiIcon name="menu" />
           </button>
-          <Image src="/logo.png" alt="Pulso Pais" width={126} height={42} className="cp-m-logo" priority />
+          <Image src={LOGO_SRC} alt="Pulso Pais" width={126} height={42} className="cp-m-logo" priority />
           <div>
             <button type="button" aria-label="Buscar">
               <UiIcon name="search" />

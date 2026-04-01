@@ -463,6 +463,16 @@ export function renderNewsForm(params: {
   action: string;
   data?: Partial<News>;
   error?: string;
+  aiResearch?: {
+    enabled: boolean;
+    hotNewsLimit: number;
+    fetchArticleText: boolean;
+    cropImage: boolean;
+    cropWidth: number;
+    cropHeight: number;
+    internalizeSourceLinks: boolean;
+    campaignLine: string;
+  };
 }): string {
   const { mode, action, data, error } = params;
 
@@ -477,6 +487,16 @@ export function renderNewsForm(params: {
   const section = data?.section ?? "NACION";
   const status = data?.status ?? "DRAFT";
   const tags = (data?.tags ?? []).join(", ");
+  const aiResearch = {
+    enabled: params.aiResearch?.enabled ?? true,
+    hotNewsLimit: params.aiResearch?.hotNewsLimit ?? 12,
+    fetchArticleText: params.aiResearch?.fetchArticleText ?? true,
+    cropImage: params.aiResearch?.cropImage ?? true,
+    cropWidth: params.aiResearch?.cropWidth ?? 1200,
+    cropHeight: params.aiResearch?.cropHeight ?? 675,
+    internalizeSourceLinks: params.aiResearch?.internalizeSourceLinks ?? true,
+    campaignLine: params.aiResearch?.campaignLine ?? "",
+  };
 
   const sectionOptions = SECTION_OPTIONS.map(
     (option) => `<option value="${option.value}" ${section === option.value ? "selected" : ""}>${escapeHtml(option.label)}</option>`,
@@ -518,15 +538,33 @@ export function renderNewsForm(params: {
             <label for="aiBrief">Brief para IA</label>
             <textarea id="aiBrief" rows="3" placeholder="Ej: cierre de alianzas en PBA, impacto en intendentes del conurbano y lectura nacional para 2026."></textarea>
           </div>
-          <div class="ai-actions">
-            <button type="button" id="aiGenerateBtn" class="primary ai-main-action">⚡ Genera con IA</button>
+          <div class="field">
+            <label for="aiCampaignLine">Bajada editorial / campana activa</label>
+            <textarea id="aiCampaignLine" rows="2" placeholder="Ej: instalar liderazgo territorial en conurbano y mostrar gestion con foco empleo.">${getValue(
+              aiResearch.campaignLine,
+            )}</textarea>
+            <p class="hint">Esta linea guia el enfoque final de la nota cuando uses el agente periodista.</p>
           </div>
+          <div class="ai-actions">
+            <button type="button" id="aiGenerateBtn" class="primary ai-main-action">&#9889; Genera con IA</button>
+            <button
+              type="button"
+              id="aiResearchBtn"
+              class="ai-main-action"
+              ${aiResearch.enabled ? "" : "disabled"}
+              title="${aiResearch.enabled ? "Investigar agenda caliente y generar nota propia" : "Agente periodista desactivado en panel"}"
+            >&#128269; Investigar y generar nota propia</button>
+          </div>
+          <label class="ai-inline" style="font-size:12px; color:#bfbfbf;">
+            <input type="checkbox" id="aiResearchIncludeCampaign" ${aiResearch.campaignLine ? "checked" : ""} />
+            Incluir bajada/campana activa en esta corrida.
+          </label>
           <details class="ai-advanced">
             <summary>Herramientas IA avanzadas</summary>
             <div class="ai-actions">
-              <button type="button" id="aiAskBtn">💬 Preguntar IA</button>
-              <button type="button" id="aiReviewBtn">🛡️ Validar borrador</button>
-              <button type="button" id="aiApplyBtn">✅ Aplicar sugerencias</button>
+              <button type="button" id="aiAskBtn">&#128172; Preguntar IA</button>
+              <button type="button" id="aiReviewBtn">&#128737; Validar borrador</button>
+              <button type="button" id="aiApplyBtn">&#9989; Aplicar sugerencias</button>
             </div>
             <label class="ai-inline" style="font-size:12px; color:#bfbfbf;">
               <input type="checkbox" id="aiAskAutoApply" />
@@ -617,11 +655,14 @@ export function renderNewsForm(params: {
           (function () {
             const form = document.getElementById("news-form");
             const briefEl = document.getElementById("aiBrief");
+            const campaignLineEl = document.getElementById("aiCampaignLine");
             const generateBtn = document.getElementById("aiGenerateBtn");
+            const researchBtn = document.getElementById("aiResearchBtn");
             const askBtn = document.getElementById("aiAskBtn");
             const reviewBtn = document.getElementById("aiReviewBtn");
             const applyBtn = document.getElementById("aiApplyBtn");
             const askAutoApply = document.getElementById("aiAskAutoApply");
+            const includeCampaignEl = document.getElementById("aiResearchIncludeCampaign");
             const statusEl = document.getElementById("aiStatus");
             const connBadge = document.getElementById("aiConnBadge");
             const answerEl = document.getElementById("aiAnswer");
@@ -632,12 +673,13 @@ export function renderNewsForm(params: {
             let lastSuggestions = null;
             let canApply = false;
 
-            if (!form || !briefEl || !generateBtn || !askBtn || !reviewBtn || !applyBtn || !statusEl || !answerEl || !reviewEl || !bodyEditor || !toolbar || !imagePreview || !connBadge) {
+            if (!form || !briefEl || !generateBtn || !researchBtn || !askBtn || !reviewBtn || !applyBtn || !statusEl || !answerEl || !reviewEl || !bodyEditor || !toolbar || !imagePreview || !connBadge || !campaignLineEl || !includeCampaignEl) {
               return;
             }
 
             const buttons = {
               generate: generateBtn,
+              research: researchBtn,
               ask: askBtn,
               review: reviewBtn,
               apply: applyBtn,
@@ -930,8 +972,12 @@ export function renderNewsForm(params: {
 
             function buildAssistPayload(brief) {
               syncBody();
+              const includeCampaign = Boolean(includeCampaignEl && "checked" in includeCampaignEl && includeCampaignEl.checked);
+              const campaignLine = includeCampaign ? String(campaignLineEl.value || "").trim() : "";
               return {
                 brief: brief,
+                campaignLine: campaignLine,
+                includeCampaignLine: includeCampaign,
                 sectionHint: value("section"),
                 provinceHint: value("province"),
                 isSponsored: checked("isSponsored"),
@@ -1100,6 +1146,63 @@ export function renderNewsForm(params: {
               } catch (error) {
                 setStatus(error instanceof Error ? error.message : "Error al generar borrador IA.", "error");
                 notify("Fallo la generacion IA. Revisa estado y reintenta.", "error");
+              } finally {
+                setBusy(false);
+              }
+            });
+
+            researchBtn.addEventListener("click", async function () {
+              const brief = briefEl.value.trim();
+              if (brief.length < 12) {
+                setStatus("El brief debe tener al menos 12 caracteres.", "error");
+                notify("Escribe un brief mas completo para investigar y generar.", "error");
+                return;
+              }
+              if (researchBtn.disabled) {
+                setStatus("El agente periodista esta desactivado en panel de backoffice.", "warn");
+                notify("Activa el agente periodista en el panel para usar esta funcion.", "warn");
+                return;
+              }
+
+              try {
+                setBusy(true, "Solicitud recibida: investigando agenda caliente...", "research");
+                const payload = buildAssistPayload(brief);
+                const response = await fetch("/backoffice/ai/research-assist", {
+                  method: "POST",
+                  headers: {
+                    "content-type": "application/json",
+                    accept: "application/json",
+                  },
+                  body: JSON.stringify(payload),
+                });
+                const result = await readJson(response);
+                if (!response.ok) {
+                  throw new Error(result.error || "No se pudo investigar y generar la nota.");
+                }
+
+                const suggestion = result.suggestion || {};
+                lastSuggestions = suggestion;
+                applySuggestion(suggestion);
+                ensureDraftCompleteness(brief);
+                setCanApply(Boolean(suggestion && typeof suggestion === "object"));
+
+                const firstSource = Array.isArray(result.sources) && result.sources.length > 0 ? result.sources[0] : null;
+                const sourceHint = firstSource && firstSource.sourceName
+                  ? " | Fuente caliente: " + firstSource.sourceName
+                  : "";
+                answerEl.style.display = "none";
+                setStatus(
+                  "Nota propia generada tras investigacion IA (" +
+                    (suggestion.model || "modelo desconocido") +
+                    ")" +
+                    sourceHint +
+                    contextHint(result.context),
+                  "ok",
+                );
+                notify("Investigacion completada y noticia propia autocompletada.", "ok");
+              } catch (error) {
+                setStatus(error instanceof Error ? error.message : "Error al investigar y generar noticia.", "error");
+                notify("No se pudo completar la investigacion periodistica IA.", "error");
               } finally {
                 setBusy(false);
               }
@@ -1603,7 +1706,7 @@ export function renderPollForm(params: {
             <textarea id="pollAiBrief" rows="3" placeholder="Ej: encuesta nacional para entrevista en Instagram sobre confianza presidencial 2027, tono firme y neutral."></textarea>
           </div>
           <div class="ai-actions">
-            <button type="button" id="pollAiGenerateBtn" class="primary ai-main-action">⚡ Genera con IA encuesta</button>
+            <button type="button" id="pollAiGenerateBtn" class="primary ai-main-action">&#9889; Genera con IA encuesta</button>
           </div>
           <div id="pollAiStatus" class="ai-status">Completa un brief y genera la encuesta con IA.</div>
         </div>
@@ -1798,7 +1901,7 @@ export function renderPollForm(params: {
                 setFieldValue("title", String(brief || "").slice(0, 110) || "Encuesta digital Pulso Pais");
               }
               if (!value("question")) {
-                setFieldValue("question", "¿A quien le confiarias el pais en 2027?");
+                setFieldValue("question", "A quien le confiarias el pais en 2027?");
               }
               if (!value("hookLabel")) {
                 setFieldValue("hookLabel", "Encuesta Nacional");
@@ -2020,3 +2123,4 @@ export function renderIaLab(): string {
     </div>`,
   );
 }
+

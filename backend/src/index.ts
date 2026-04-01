@@ -41,13 +41,16 @@ import {
 } from "./editorialAi";
 import { buildAiNewsContext } from "./newsContextWrapper";
 import {
+  getAiResearchSettings,
   getHomeEngagementSettings,
   getHomeTheme,
   HOME_THEME_OPTIONS,
   normalizeHomeTheme,
+  setAiResearchSettings,
   setHomeEngagementSettings,
   setHomeTheme,
 } from "./siteSettings";
+import { buildCroppedImageUrl, buildNewsResearchContext, sourceFeedToText } from "./newsResearchAgent";
 import {
   FIXED_CANDIDATE_OPTIONS,
   fixedCandidateTemplateForLabel,
@@ -191,6 +194,48 @@ function buildEditorialAssistInput(raw: Record<string, unknown>) {
       isRadar: readBoolean(raw.isRadar),
     },
     currentTags,
+  };
+}
+
+function selectedCampaignLine(raw: Record<string, unknown>, fallbackLine: string): string | null {
+  const includeCampaignLine = readBoolean(raw.includeCampaignLine);
+  if (!includeCampaignLine) {
+    return null;
+  }
+  const requested = readString(raw.campaignLine);
+  if (requested.length > 0) {
+    return requested.slice(0, 260);
+  }
+  const fallback = fallbackLine.trim();
+  return fallback.length > 0 ? fallback.slice(0, 260) : null;
+}
+
+function postProcessResearchedSuggestion(
+  suggestion: Awaited<ReturnType<typeof generateDraftWithAi>>,
+  settings: Awaited<ReturnType<typeof getAiResearchSettings>>,
+  leadSource: { sourceName: string | null; sourceUrl: string; imageUrl: string | null } | null,
+): Awaited<ReturnType<typeof generateDraftWithAi>> {
+  const notes = Array.isArray(suggestion.notes) ? suggestion.notes.slice(0, 7) : [];
+  notes.unshift("Borrador generado con agente periodista (agenda caliente + reescritura propia).");
+
+  const finalImage =
+    suggestion.imageUrl || leadSource?.imageUrl
+      ? settings.cropImage && (suggestion.imageUrl || leadSource?.imageUrl)
+        ? buildCroppedImageUrl(suggestion.imageUrl || leadSource?.imageUrl || "", settings.cropWidth, settings.cropHeight)
+        : suggestion.imageUrl || leadSource?.imageUrl || null
+      : null;
+
+  const finalSourceName =
+    suggestion.sourceName ||
+    leadSource?.sourceName ||
+    (settings.internalizeSourceLinks ? "Pulso Pais (elaboracion propia sobre fuentes abiertas)" : "Pulso Pais IA");
+
+  return {
+    ...suggestion,
+    imageUrl: finalImage,
+    sourceName: finalSourceName,
+    sourceUrl: settings.internalizeSourceLinks ? null : suggestion.sourceUrl || leadSource?.sourceUrl || null,
+    notes: notes.slice(0, 8),
   };
 }
 
@@ -703,7 +748,7 @@ function renderBatchNewsForm(params: { state?: Partial<BatchNewsFormState>; erro
           <span class="mini-tag">Batch CMS</span>
         </div>
         <p style="margin:0; color:#a9a9a9; line-height:1.5;">
-          Crea muchas noticias en una sola corrida IA. Puedes forzar porcentaje de campaña (ej. 30%) y completar el resto con agenda general.
+          Crea muchas noticias en una sola corrida IA. Puedes forzar porcentaje de campana (ej. 30%) y completar el resto con agenda general.
         </p>
         ${error}
         ${summary}
@@ -714,33 +759,33 @@ function renderBatchNewsForm(params: { state?: Partial<BatchNewsFormState>; erro
               <input id="totalItems" name="totalItems" type="number" min="1" max="40" value="${current.totalItems}" required />
             </div>
             <div class="field">
-              <label for="campaignPercent">Porcentaje campaña (%)</label>
+              <label for="campaignPercent">Porcentaje campana (%)</label>
               <input id="campaignPercent" name="campaignPercent" type="number" min="0" max="100" value="${current.campaignPercent}" required />
               <p id="batchSplit" class="hint"></p>
             </div>
           </div>
           <div class="field">
-            <label for="campaignTopic">Tema de campaña (bloque estratégico)</label>
+            <label for="campaignTopic">Tema de campana (bloque estrategico)</label>
             <textarea id="campaignTopic" name="campaignTopic" rows="3" placeholder="Ej: cierre de alianzas y armados seccionales en PBA para 2027." required>${currentErrorSafe(
               current.campaignTopic,
             )}</textarea>
           </div>
           <div class="field">
             <label for="generalBrief">Brief general para el resto de noticias</label>
-            <textarea id="generalBrief" name="generalBrief" rows="4" placeholder="Ej: agenda nacional, económica, provincias clave, municipios y radar electoral de la semana." required>${currentErrorSafe(
+            <textarea id="generalBrief" name="generalBrief" rows="4" placeholder="Ej: agenda nacional, economica, provincias clave, municipios y radar electoral de la semana." required>${currentErrorSafe(
               current.generalBrief,
             )}</textarea>
           </div>
           <div class="cols-2">
             <div class="field">
-              <label for="publishStatus">Estado de publicación</label>
+              <label for="publishStatus">Estado de publicacion</label>
               <select id="publishStatus" name="publishStatus">
                 <option value="DRAFT" ${current.publishStatus === NewsStatus.DRAFT ? "selected" : ""}>DRAFT</option>
                 <option value="PUBLISHED" ${current.publishStatus === NewsStatus.PUBLISHED ? "selected" : ""}>PUBLISHED</option>
               </select>
             </div>
             <div class="field">
-              <label for="sectionHint">Sección sugerida base</label>
+              <label for="sectionHint">Seccion sugerida base</label>
               <select id="sectionHint" name="sectionHint">${sectionOptions}</select>
             </div>
           </div>
@@ -784,7 +829,7 @@ function renderBatchNewsForm(params: { state?: Partial<BatchNewsFormState>; erro
               const pct = Math.max(0, Math.min(100, Number(percentInput.value || 0)));
               const campaign = Math.round((total * pct) / 100);
               const normal = total - campaign;
-              target.textContent = "Distribucion estimada: " + campaign + " campaña / " + normal + " agenda general.";
+              target.textContent = "Distribucion estimada: " + campaign + " campana / " + normal + " agenda general.";
             }
             totalInput.addEventListener("input", refresh);
             percentInput.addEventListener("input", refresh);
@@ -1862,6 +1907,49 @@ app.post("/api/admin/ai/assist", apiGuard, async (request, response, next) => {
   }
 });
 
+app.post("/api/admin/ai/research-assist", apiGuard, async (request, response, next) => {
+  try {
+    const raw = request.body as Record<string, unknown>;
+    const assistInput = buildEditorialAssistInput(raw);
+    const settings = await getAiResearchSettings(prisma);
+    if (!settings.enabled) {
+      response.status(400).json({ error: "El agente periodista esta desactivado en configuracion." });
+      return;
+    }
+
+    const research = await buildNewsResearchContext({
+      brief: assistInput.brief,
+      limit: settings.hotNewsLimit,
+      fetchArticleText: settings.fetchArticleText,
+      campaignLine: selectedCampaignLine(raw, settings.campaignLine),
+    });
+    const context = await buildAiNewsContext(prisma);
+    const sourceList = sourceFeedToText(research.sources, 10);
+    const mergedContext = [
+      context.contextText,
+      "",
+      research.contextText,
+      sourceList ? `\nFUENTES INVESTIGADAS (referencia):\n${sourceList}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    const suggestion = await generateDraftWithAi(assistInput, mergedContext);
+    const finalSuggestion = postProcessResearchedSuggestion(suggestion, settings, research.lead);
+    response.json({
+      suggestion: finalSuggestion,
+      context: context.meta,
+      sources: research.sources,
+      research: {
+        lead: research.lead,
+        settings,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/admin/ai/ask", apiGuard, async (request, response, next) => {
   try {
     const assistInput = buildEditorialAssistInput(request.body as Record<string, unknown>);
@@ -2064,6 +2152,49 @@ app.post("/backoffice/ai/assist", boGuard, async (request, response, next) => {
   }
 });
 
+app.post("/backoffice/ai/research-assist", boGuard, async (request, response, next) => {
+  try {
+    const raw = request.body as Record<string, unknown>;
+    const assistInput = buildEditorialAssistInput(raw);
+    const settings = await getAiResearchSettings(prisma);
+    if (!settings.enabled) {
+      response.status(400).json({ error: "El agente periodista esta desactivado en panel." });
+      return;
+    }
+
+    const research = await buildNewsResearchContext({
+      brief: assistInput.brief,
+      limit: settings.hotNewsLimit,
+      fetchArticleText: settings.fetchArticleText,
+      campaignLine: selectedCampaignLine(raw, settings.campaignLine),
+    });
+    const context = await buildAiNewsContext(prisma);
+    const sourceList = sourceFeedToText(research.sources, 10);
+    const mergedContext = [
+      context.contextText,
+      "",
+      research.contextText,
+      sourceList ? `\nFUENTES INVESTIGADAS (referencia):\n${sourceList}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    const suggestion = await generateDraftWithAi(assistInput, mergedContext);
+    const finalSuggestion = postProcessResearchedSuggestion(suggestion, settings, research.lead);
+    response.json({
+      suggestion: finalSuggestion,
+      context: context.meta,
+      sources: research.sources,
+      research: {
+        lead: research.lead,
+        settings,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/backoffice/ai/ask", boGuard, async (request, response, next) => {
   try {
     const assistInput = buildEditorialAssistInput(request.body as Record<string, unknown>);
@@ -2142,13 +2273,14 @@ app.get("/backoffice/ai/health", boGuard, async (_request, response, next) => {
 
 app.get("/backoffice", boGuard, async (request, response, next) => {
   try {
-    const [news, homeTheme, engagementSettings, pollRows] = await Promise.all([
+    const [news, homeTheme, engagementSettings, aiResearchSettings, pollRows] = await Promise.all([
       prisma.news.findMany({
         orderBy: [{ updatedAt: "desc" }],
         take: 300,
       }),
       getHomeTheme(prisma),
       getHomeEngagementSettings(prisma),
+      getAiResearchSettings(prisma),
       buildBackofficePollRows(),
     ]);
 
@@ -2221,6 +2353,50 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
           </div>
           <p style="margin:0; color:#8e8e8e; font-size:12px; line-height:1.4;">Si desactivas un modulo, el front deja de mostrar ese boton en todas las tarjetas y portadas al refrescar.</p>
         </form>
+        <form method="post" action="/backoffice/settings/ai-research" style="display:grid; gap:10px; margin-top:18px; max-width:860px;">
+          <label style="color:#cfcfcf; text-transform:uppercase; letter-spacing:.08em; font-size:12px; font-weight:600;">Agente periodista IA (investigacion + nota propia)</label>
+          <div class="checks" style="grid-template-columns:repeat(3,minmax(0,1fr));">
+            <label>
+              <input type="checkbox" name="enabled" ${aiResearchSettings.enabled ? "checked" : ""} />
+              Activar agente periodista
+            </label>
+            <label>
+              <input type="checkbox" name="fetchArticleText" ${aiResearchSettings.fetchArticleText ? "checked" : ""} />
+              Leer texto de fuentes
+            </label>
+            <label>
+              <input type="checkbox" name="internalizeSourceLinks" ${aiResearchSettings.internalizeSourceLinks ? "checked" : ""} />
+              Publicar sin link externo
+            </label>
+            <label>
+              <input type="checkbox" name="cropImage" ${aiResearchSettings.cropImage ? "checked" : ""} />
+              Recorte automatico de imagen
+            </label>
+          </div>
+          <div class="cols-2">
+            <div class="field">
+              <label for="hotNewsLimit" style="color:#b5b5b5;">Fuentes calientes maximas</label>
+              <input id="hotNewsLimit" name="hotNewsLimit" type="number" min="3" max="20" value="${aiResearchSettings.hotNewsLimit}" />
+            </div>
+            <div class="field">
+              <label for="cropWidth" style="color:#b5b5b5;">Recorte (ancho x alto)</label>
+              <div style="display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px;">
+                <input id="cropWidth" name="cropWidth" type="number" min="480" max="2400" value="${aiResearchSettings.cropWidth}" />
+                <input id="cropHeight" name="cropHeight" type="number" min="320" max="1800" value="${aiResearchSettings.cropHeight}" />
+              </div>
+            </div>
+          </div>
+          <div class="field">
+            <label for="campaignLine" style="color:#b5b5b5;">Bajada/campana activa por defecto</label>
+            <textarea id="campaignLine" name="campaignLine" rows="2" placeholder="Ej: instalar gobernabilidad territorial y agenda federal pro-inversion.">${currentErrorSafe(
+              aiResearchSettings.campaignLine,
+            )}</textarea>
+          </div>
+          <div style="display:flex; gap:10px; flex-wrap:wrap;">
+            <button class="primary" type="submit">Guardar agente periodista</button>
+          </div>
+          <p style="margin:0; color:#8e8e8e; font-size:12px; line-height:1.4;">Cuando esta activo, el boton "Investigar y generar nota propia" analiza agenda caliente, propone enfoque propio y puede recortar imagen al formato editorial.</p>
+        </form>
       </div>
       ${renderNewsTable(news, { frontendBaseUrl: normalizedFrontendBaseUrl() })}
     </div>`;
@@ -2253,6 +2429,30 @@ app.post("/backoffice/settings/engagement", boGuard, async (request, response, n
         `Interacciones actualizadas - comentarios:${settings.commentsEnabled ? "ON" : "OFF"} reacciones:${
           settings.reactionsEnabled ? "ON" : "OFF"
         } analisis:${settings.analysisEnabled ? "ON" : "OFF"}`,
+      )}`,
+    );
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/backoffice/settings/ai-research", boGuard, async (request, response, next) => {
+  try {
+    const settings = await setAiResearchSettings(prisma, {
+      enabled: readBoolean(request.body.enabled),
+      hotNewsLimit: Number(readString(request.body.hotNewsLimit) || "12"),
+      fetchArticleText: readBoolean(request.body.fetchArticleText),
+      cropImage: readBoolean(request.body.cropImage),
+      cropWidth: Number(readString(request.body.cropWidth) || "1200"),
+      cropHeight: Number(readString(request.body.cropHeight) || "675"),
+      internalizeSourceLinks: readBoolean(request.body.internalizeSourceLinks),
+      campaignLine: readString(request.body.campaignLine),
+    });
+    response.redirect(
+      `/backoffice?ok=${encodeURIComponent(
+        `Agente periodista actualizado - estado:${settings.enabled ? "ON" : "OFF"} fuentes:${settings.hotNewsLimit} crop:${
+          settings.cropImage ? `${settings.cropWidth}x${settings.cropHeight}` : "OFF"
+        }`,
       )}`,
     );
   } catch (error) {
@@ -2303,7 +2503,7 @@ app.post("/backoffice/news/batch", boGuard, async (request, response, next) => {
 
   try {
     if (campaignTopic.length < 8) {
-      throw new Error("El tema de campaña debe tener al menos 8 caracteres.");
+      throw new Error("El tema de campana debe tener al menos 8 caracteres.");
     }
     if (generalBrief.length < 12) {
       throw new Error("El brief general debe tener al menos 12 caracteres.");
@@ -2403,13 +2603,19 @@ app.post("/backoffice/news/batch", boGuard, async (request, response, next) => {
   }
 });
 
-app.get("/backoffice/news/new", boGuard, (_request, response) => {
-  response.send(
-    renderNewsForm({
-      mode: "create",
-      action: "/backoffice/news",
-    }),
-  );
+app.get("/backoffice/news/new", boGuard, async (_request, response, next) => {
+  try {
+    const aiResearch = await getAiResearchSettings(prisma);
+    response.send(
+      renderNewsForm({
+        mode: "create",
+        action: "/backoffice/news",
+        aiResearch,
+      }),
+    );
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.get("/backoffice/ia-lab", boGuard, (_request, response) => {
@@ -2805,12 +3011,14 @@ app.post("/backoffice/news", boGuard, async (request, response, next) => {
     response.redirect(`/backoffice?ok=${encodeURIComponent(`Noticia creada - IA ${review.decision}`)}`);
   } catch (error) {
     if (error instanceof Error) {
+      const aiResearch = await getAiResearchSettings(prisma);
       response.status(400).send(
         renderNewsForm({
           mode: "create",
           action: "/backoffice/news",
           error: error.message,
           data: request.body,
+          aiResearch,
         }),
       );
       return;
@@ -2832,11 +3040,13 @@ app.get("/backoffice/news/:id/edit", boGuard, async (request, response, next) =>
       return;
     }
 
+    const aiResearch = await getAiResearchSettings(prisma);
     response.send(
       renderNewsForm({
         mode: "edit",
         action: `/backoffice/news/${news.id}`,
         data: news,
+        aiResearch,
       }),
     );
   } catch (error) {
@@ -2879,12 +3089,14 @@ app.post("/backoffice/news/:id", boGuard, async (request, response, next) => {
     response.redirect(`/backoffice?ok=${encodeURIComponent(`Noticia actualizada - IA ${review.decision}`)}`);
   } catch (error) {
     if (error instanceof Error) {
+      const aiResearch = await getAiResearchSettings(prisma);
       response.status(400).send(
         renderNewsForm({
           mode: "edit",
           action: `/backoffice/news/${request.params.id}`,
           error: error.message,
           data: request.body,
+          aiResearch,
         }),
       );
       return;
@@ -2946,3 +3158,4 @@ const shutdown = async () => {
 
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
+
