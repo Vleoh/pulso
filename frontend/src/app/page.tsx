@@ -37,7 +37,7 @@ const NAV_ITEMS: Array<{ label: string; section?: NewsSection }> = [
   { label: "Deportes" },
 ];
 
-const LOGO_SRC = "/logo.png?v=20260401b";
+const LOGO_SRC = "/logo-home-20260401.png";
 
 function sanitizeDisplayText(input: string): string {
   return input
