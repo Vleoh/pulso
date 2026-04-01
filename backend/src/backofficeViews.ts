@@ -25,11 +25,6 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
     .side-nav { display:grid; gap:6px; }
     .side-nav a { border:1px solid #272727; border-radius:10px; background:#121212; color:#d9d9d9; text-decoration:none; font-size:12px; text-transform:uppercase; letter-spacing:.07em; padding:10px 11px; font-weight:600; }
     .side-nav a:hover { border-color:#5e4c25; color:var(--gold-soft); }
-    .mode-card { border:1px solid #2d2d2d; border-radius:12px; background:#111111; padding:11px; display:grid; gap:8px; }
-    .mode-card p { margin:0; font-size:11px; color:#9f9f9f; text-transform:uppercase; letter-spacing:.09em; }
-    .mode-actions { display:flex; gap:6px; flex-wrap:wrap; }
-    .mode-actions button { flex:1; min-width:70px; font-size:11px; padding:7px 8px; text-transform:uppercase; letter-spacing:.06em; }
-    .mode-actions button.is-active { border-color:#7f672d; background:#2b2110; color:#f7dda1; box-shadow:0 0 0 1px rgba(198,162,74,.25) inset; }
     .main { min-width:0; }
     .wrap { width:min(1220px,94vw); margin:0 auto; padding:24px 0 64px; }
     .top { display:flex; align-items:center; justify-content:space-between; margin-bottom:26px; border-bottom:1px solid var(--line); padding-bottom:18px; gap:12px; flex-wrap:wrap; }
@@ -115,17 +110,6 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
     .split-title { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
     .split-title h3 { margin:0; font-size:16px; text-transform:uppercase; letter-spacing:.05em; }
     .mini-tag { display:inline-flex; align-items:center; border:1px solid #423518; border-radius:999px; padding:4px 8px; color:#e0c779; font-size:10px; letter-spacing:.08em; text-transform:uppercase; background:#1a160d; }
-    body[data-mode="compact"] .card { padding:12px; }
-    body[data-mode="compact"] .button, body[data-mode="compact"] button { padding:8px 10px; font-size:12px; }
-    body[data-mode="compact"] .news-table tbody td { padding:8px 6px; }
-    body[data-mode="compact"] .editor-surface { min-height:190px; font-size:14px; }
-    body[data-mode="compact"] .cms-layout { grid-template-columns:minmax(0,1.4fr) minmax(300px,0.6fr); }
-    body[data-mode="focus"] .sidebar { width:72px; padding:14px 8px; }
-    body[data-mode="focus"] .sidebar .side-brand span,
-    body[data-mode="focus"] .sidebar .side-brand strong,
-    body[data-mode="focus"] .sidebar .mode-card,
-    body[data-mode="focus"] .sidebar .side-nav a span { display:none; }
-    body[data-mode="focus"] .layout { grid-template-columns:82px minmax(0,1fr); }
     /* Light editorial skin (Cronista Dorado) */
     :root { --bg:#efefec; --card:#ffffff; --line:#ddddda; --muted:#6e6e6e; --text:#171717; --gold:#f2b705; --gold-soft:#8f6900; }
     body { background:var(--bg); color:var(--text); font-family:Inter, "Segoe UI", Arial, sans-serif; }
@@ -134,10 +118,6 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
     .side-brand strong { font-family:Newsreader, Georgia, serif; color:#111111; }
     .side-nav a { border-color:#d8d8d4; background:#ffffff; color:#3b3b3b; }
     .side-nav a:hover { border-color:#d0a72f; color:#7c5f00; }
-    .mode-card { border-color:#d9d9d5; background:#ffffff; }
-    .mode-card p { color:#7a7a7a; }
-    .mode-actions button { background:#f2f2f0; color:#3a3a3a; border-color:#d8d8d3; }
-    .mode-actions button.is-active { border-color:#d0a72f; background:#fff7dd; color:#7c5f00; box-shadow:none; }
     .top { border-bottom:1px solid #dcdcd8; }
     .brand strong { font-family:Newsreader, Georgia, serif; color:#111111; font-size:44px; letter-spacing:0; text-transform:none; line-height:0.95; }
     .brand span { color:#866700; letter-spacing:.12em; font-size:10px; }
@@ -186,7 +166,6 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
       .layout { grid-template-columns:1fr; }
       .sidebar { position:static; height:auto; border-right:0; border-bottom:1px solid var(--line); grid-template-columns:1fr; }
       .side-nav { grid-template-columns:repeat(2,minmax(0,1fr)); }
-      .mode-actions { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); }
     }
     @media (max-width:900px) {
       .cols-2, .checks, .table-tools, .cms-layout { grid-template-columns:1fr; }
@@ -212,14 +191,6 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
         <a href="/backoffice/ia-lab"><span>IA Lab</span></a>
         <a href="/backoffice/ai/context" target="_blank" rel="noreferrer"><span>Wrapper IA</span></a>
       </nav>
-      <div class="mode-card">
-        <p>Modo de trabajo</p>
-        <div class="mode-actions">
-          <button type="button" data-mode="default">Default</button>
-          <button type="button" data-mode="focus">Focus</button>
-          <button type="button" data-mode="compact">Compact</button>
-        </div>
-      </div>
     </aside>
     <main class="main">
       <div class="wrap">
@@ -242,7 +213,6 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
   <div id="boToastStack" class="toast-stack" aria-live="polite" aria-atomic="true"></div>
   <script>
     (function () {
-      const modeButtons = Array.from(document.querySelectorAll("[data-mode]"));
       const toastStack = document.getElementById("boToastStack");
 
       function toast(message, level) {
@@ -263,32 +233,6 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
       }
 
       window.pulsoToast = toast;
-
-      if (!modeButtons.length) {
-        return;
-      }
-
-      const storageKey = "pulso_bo_mode";
-      const savedMode = localStorage.getItem(storageKey) || "default";
-      document.body.dataset.mode = savedMode;
-
-      function paintActive(mode) {
-        modeButtons.forEach(function (entry) {
-          const active = (entry.getAttribute("data-mode") || "") === mode;
-          entry.classList.toggle("is-active", active);
-        });
-      }
-      paintActive(savedMode);
-
-      modeButtons.forEach(function (button) {
-        button.addEventListener("click", function () {
-          const nextMode = button.getAttribute("data-mode") || "default";
-          document.body.dataset.mode = nextMode;
-          localStorage.setItem(storageKey, nextMode);
-          paintActive(nextMode);
-          toast("Modo " + nextMode + " activado.", "ok");
-        });
-      });
     })();
   </script>
 </body>
