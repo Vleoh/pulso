@@ -163,10 +163,16 @@ const AI_FILTER_ENABLED = (process.env.AI_FILTER_ENABLED ?? "true").toLowerCase(
 const AI_FILTER_ENFORCE = (process.env.AI_FILTER_ENFORCE ?? "true").toLowerCase() !== "false";
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY ?? "";
 const GEMINI_MODEL = process.env.GEMINI_MODEL ?? "gemini-2.0-flash";
+const GEMINI_FALLBACK_MODELS = (process.env.GEMINI_FALLBACK_MODELS ?? "gemini-2.0-flash-lite,gemini-1.5-flash-latest")
+  .split(",")
+  .map((item) => item.trim())
+  .filter(Boolean);
 const GEMINI_API_BASE = process.env.GEMINI_API_BASE ?? "https://generativelanguage.googleapis.com/v1beta";
 const AI_OLLAMA_URL = process.env.AI_OLLAMA_URL ?? "http://localhost:11434";
 const AI_MODEL = process.env.AI_MODEL ?? "qwen3";
 const AI_TIMEOUT_MS = Number(process.env.AI_TIMEOUT_MS ?? 20000);
+const GEMINI_RETRIES = Math.max(0, Math.min(4, Number(process.env.GEMINI_RETRIES ?? 2)));
+const GEMINI_RETRY_BASE_MS = Math.max(300, Math.min(5000, Number(process.env.GEMINI_RETRY_BASE_MS ?? 1200)));
 const AI_PROVIDER_ORDER = (process.env.AI_PROVIDER_ORDER ?? "gemini,ollama")
   .split(",")
   .map((item) => item.trim().toLowerCase())
@@ -186,6 +192,54 @@ let guidelineCache: {
   mtimeMs: number;
   content: string;
 } | null = null;
+
+const VALID_SECTIONS = new Set([
+  "NACION",
+  "PROVINCIAS",
+  "MUNICIPIOS",
+  "OPINION",
+  "ENTREVISTAS",
+  "PUBLINOTAS",
+  "RADAR_ELECTORAL",
+  "ECONOMIA",
+  "INTERNACIONALES",
+  "DISTRITOS",
+]);
+
+const VALID_PROVINCES = new Set([
+  "CABA",
+  "BUENOS_AIRES",
+  "CATAMARCA",
+  "CHACO",
+  "CHUBUT",
+  "CORDOBA",
+  "CORRIENTES",
+  "ENTRE_RIOS",
+  "FORMOSA",
+  "JUJUY",
+  "LA_PAMPA",
+  "LA_RIOJA",
+  "MENDOZA",
+  "MISIONES",
+  "NEUQUEN",
+  "RIO_NEGRO",
+  "SALTA",
+  "SAN_JUAN",
+  "SAN_LUIS",
+  "SANTA_CRUZ",
+  "SANTA_FE",
+  "SANTIAGO_DEL_ESTERO",
+  "TIERRA_DEL_FUEGO",
+  "TUCUMAN",
+]);
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isLocalOllamaUrl(url: string): boolean {
+  return /localhost|127\.0\.0\.1|0\.0\.0\.0/i.test(url);
+}
 
 function toAiDecision(input: string): AiDecision {
   const normalized = input.toUpperCase().trim();
@@ -512,72 +566,102 @@ async function runGeminiJson(params: {
     throw new Error("GEMINI_API_KEY no configurada.");
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
+  const modelsToTry = Array.from(new Set([GEMINI_MODEL, ...GEMINI_FALLBACK_MODELS])).filter(Boolean);
+  const modelErrors: string[] = [];
 
-  try {
-    const response = await fetch(
-      `${GEMINI_API_BASE}/models/${encodeURIComponent(GEMINI_MODEL)}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`,
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          systemInstruction: {
-            role: "system",
-            parts: [{ text: params.systemPrompt }],
-          },
-          contents: [
-            {
-              role: "user",
-              parts: [{ text: params.userPrompt }],
+  for (const modelName of modelsToTry) {
+    for (let attempt = 0; attempt <= GEMINI_RETRIES; attempt += 1) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
+
+      try {
+        const response = await fetch(
+          `${GEMINI_API_BASE}/models/${encodeURIComponent(modelName)}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`,
+          {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
             },
-          ],
-          generationConfig: {
-            temperature: params.temperature ?? 0.15,
-            responseMimeType: "application/json",
+            body: JSON.stringify({
+              systemInstruction: {
+                role: "system",
+                parts: [{ text: params.systemPrompt }],
+              },
+              contents: [
+                {
+                  role: "user",
+                  parts: [{ text: params.userPrompt }],
+                },
+              ],
+              generationConfig: {
+                temperature: params.temperature ?? 0.15,
+                responseMimeType: "application/json",
+              },
+            }),
+            signal: controller.signal,
           },
-        }),
-        signal: controller.signal,
-      },
-    );
+        );
 
-    if (!response.ok) {
-      const detail = await response.text();
-      throw new Error(`Gemini respondio ${response.status}: ${detail.slice(0, 320)}`);
-    }
+        if (!response.ok) {
+          const detail = await response.text();
+          const retryableStatus = response.status === 429 || response.status === 503 || response.status >= 500;
 
-    const payload = (await response.json()) as {
-      candidates?: Array<{
-        content?: {
-          parts?: Array<{ text?: string }>;
+          if (retryableStatus && attempt < GEMINI_RETRIES) {
+            await sleep(GEMINI_RETRY_BASE_MS * (attempt + 1));
+            continue;
+          }
+
+          modelErrors.push(`${modelName} -> ${response.status}: ${detail.slice(0, 240)}`);
+          break;
+        }
+
+        const payload = (await response.json()) as {
+          candidates?: Array<{
+            content?: {
+              parts?: Array<{ text?: string }>;
+            };
+          }>;
+          promptFeedback?: { blockReason?: string };
         };
-      }>;
-      promptFeedback?: { blockReason?: string };
-    };
 
-    const blockReason = payload.promptFeedback?.blockReason;
-    if (blockReason) {
-      throw new Error(`Gemini bloqueo la solicitud: ${blockReason}`);
+        const blockReason = payload.promptFeedback?.blockReason;
+        if (blockReason) {
+          modelErrors.push(`${modelName} -> bloqueo: ${blockReason}`);
+          break;
+        }
+
+        const raw =
+          payload.candidates?.[0]?.content?.parts
+            ?.map((part) => part.text ?? "")
+            .join("")
+            .trim() ?? "";
+
+        if (!raw) {
+          modelErrors.push(`${modelName} -> respuesta vacia`);
+          break;
+        }
+
+        const jsonPayload = extractJsonPayload(raw);
+        const parsed = JSON.parse(jsonPayload) as Record<string, unknown>;
+        return { parsed, modelUsed: modelName };
+      } catch (error) {
+        const message = (error as Error).message || "error desconocido";
+        const retryableError = /abort|timeout|temporar|temporarily|network|fetch/i.test(message);
+
+        if (retryableError && attempt < GEMINI_RETRIES) {
+          await sleep(GEMINI_RETRY_BASE_MS * (attempt + 1));
+          continue;
+        }
+
+        modelErrors.push(`${modelName} -> ${message}`);
+        break;
+      } finally {
+        clearTimeout(timeout);
+      }
     }
-
-    const raw =
-      payload.candidates?.[0]?.content?.parts
-        ?.map((part) => part.text ?? "")
-        .join("")
-        .trim() ?? "";
-
-    if (!raw) {
-      throw new Error("Gemini devolvio respuesta vacia.");
-    }
-
-    const jsonPayload = extractJsonPayload(raw);
-    const parsed = JSON.parse(jsonPayload) as Record<string, unknown>;
-    return { parsed, modelUsed: GEMINI_MODEL };
-  } finally {
-    clearTimeout(timeout);
   }
+
+  throw new Error(`Gemini no disponible (${modelErrors.join(" | ")})`);
 }
 
 async function runAiJson(params: {
@@ -1117,6 +1201,201 @@ function normalizeBatchOutput(
   };
 }
 
+function normalizeHintToken(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+  const normalized = value
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z_]/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_|_$/g, "");
+  return normalized || null;
+}
+
+function selectFallbackSection(input: EditorialAssistInput): string {
+  const candidates = [normalizeHintToken(input.sectionHint), normalizeHintToken(input.currentSection)];
+  for (const candidate of candidates) {
+    if (candidate && VALID_SECTIONS.has(candidate)) {
+      return candidate;
+    }
+  }
+  return "NACION";
+}
+
+function selectFallbackProvince(input: EditorialAssistInput): string | null {
+  const candidates = [normalizeHintToken(input.provinceHint), normalizeHintToken(input.currentProvince)];
+  for (const candidate of candidates) {
+    if (candidate && VALID_PROVINCES.has(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function fallbackTagsFromBrief(brief: string): string[] {
+  const stopwords = new Set([
+    "sobre",
+    "para",
+    "desde",
+    "entre",
+    "hasta",
+    "hacia",
+    "donde",
+    "cuando",
+    "porque",
+    "haber",
+    "esta",
+    "estan",
+    "este",
+    "esta",
+    "argentina",
+    "politica",
+    "nota",
+    "noticia",
+    "pais",
+  ]);
+
+  return brief
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .split(/\s+/)
+    .map((word) => word.trim())
+    .filter((word) => word.length >= 4 && !stopwords.has(word))
+    .slice(0, 5);
+}
+
+function buildEmergencyAssistDraft(input: EditorialAssistInput, cause: string): EditorialAssistDraft {
+  const brief = input.brief.trim().replace(/\s+/g, " ");
+  const shortBrief = brief.slice(0, 180);
+  const section = selectFallbackSection(input);
+  const province = selectFallbackProvince(input);
+  const title =
+    input.currentTitle?.trim() ||
+    `Pulso politico: ${shortBrief.length > 74 ? `${shortBrief.slice(0, 74).trimEnd()}...` : shortBrief}`;
+
+  const kicker = input.currentKicker?.trim() || (section === "RADAR_ELECTORAL" ? "Escenario electoral" : "Mesa de situacion");
+  const excerpt =
+    input.currentExcerpt?.trim() ||
+    `En desarrollo: ${shortBrief}. Esta version base se genero por contingencia tecnica y requiere edicion final antes de publicar.`;
+  const body =
+    input.currentBody?.trim() ||
+    [
+      `${shortBrief}.`,
+      "",
+      "La redaccion de Pulso Pais trabaja en ampliar esta cobertura con enfoque federal, fuentes verificadas y contexto politico nacional.",
+      "",
+      "Claves preliminares:",
+      "- Contexto y actores con impacto territorial.",
+      "- Riesgos de interpretacion y puntos a validar.",
+      "- Proximos movimientos institucionales esperados.",
+      "",
+      "Nota operativa: este borrador se autocompleto en modo contingencia por indisponibilidad temporal de los proveedores IA.",
+    ].join("\n");
+
+  const tags = input.currentTags.length > 0 ? input.currentTags.slice(0, 12) : fallbackTagsFromBrief(brief);
+
+  return {
+    title,
+    kicker,
+    excerpt,
+    body,
+    imageUrl: input.currentImageUrl?.trim() || null,
+    sourceName: input.currentSourceName?.trim() || "Pulso Pais Redaccion",
+    sourceUrl: input.currentSourceUrl?.trim() || null,
+    authorName: input.currentAuthorName?.trim() || "Equipo Pulso Pais",
+    tags,
+    section,
+    province,
+    status: NewsStatus.DRAFT,
+    publishedAt: null,
+    flags: {
+      isHero: input.currentFlags.isHero,
+      isFeatured: input.currentFlags.isFeatured,
+      isSponsored: input.currentFlags.isSponsored,
+      isInterview: input.currentFlags.isInterview,
+      isOpinion: input.currentFlags.isOpinion,
+      isRadar: input.currentFlags.isRadar || section === "RADAR_ELECTORAL",
+    },
+    notes: [
+      "Borrador de contingencia generado automaticamente.",
+      "Revisar datos, fuentes e imagen antes de publicar.",
+      `Detalle tecnico: ${cause.slice(0, 280)}`,
+    ],
+    publishNowRecommended: false,
+    model: "fallback-contingencia",
+  };
+}
+
+function buildEmergencyBatchOutput(input: EditorialBatchAssistInput, cause: string): EditorialBatchAssistOutput {
+  const totalItems = Math.max(1, Math.min(40, Math.floor(input.totalItems)));
+  const campaignPercent = Math.max(0, Math.min(100, Math.round(input.campaignPercent)));
+  const campaignSlots = Math.round((totalItems * campaignPercent) / 100);
+
+  const items: EditorialBatchAssistItem[] = Array.from({ length: totalItems }, (_unused, index) => {
+    const slot = index + 1;
+    const focus: "CAMPAIGN" | "GENERAL" = slot <= campaignSlots ? "CAMPAIGN" : "GENERAL";
+    const brief = focus === "CAMPAIGN" ? input.campaignTopic : input.generalBrief;
+
+    const draft = buildEmergencyAssistDraft(
+      {
+        brief,
+        sectionHint: input.sectionHint,
+        provinceHint: input.provinceHint,
+        isSponsored: false,
+        currentTitle: null,
+        currentKicker: null,
+        currentExcerpt: null,
+        currentBody: null,
+        currentImageUrl: null,
+        currentSourceName: "Pulso Pais Redaccion",
+        currentSourceUrl: null,
+        currentAuthorName: "Equipo Pulso Pais",
+        currentStatus: input.publishStatus,
+        currentPublishedAt: null,
+        currentSection: input.sectionHint,
+        currentProvince: input.provinceHint,
+        currentFlags: {
+          isHero: false,
+          isFeatured: false,
+          isSponsored: false,
+          isInterview: false,
+          isOpinion: false,
+          isRadar: focus === "CAMPAIGN",
+        },
+        currentTags: [],
+      },
+      cause,
+    );
+
+    draft.status = input.publishStatus;
+    if (focus === "CAMPAIGN") {
+      draft.tags = Array.from(new Set([...(draft.tags ?? []), "campana", "agenda-electoral"])).slice(0, 12);
+      draft.kicker = "Escenario electoral";
+      draft.flags.isRadar = true;
+    } else {
+      draft.tags = Array.from(new Set([...(draft.tags ?? []), "agenda", "federal"])).slice(0, 12);
+    }
+
+    if (!input.requireImageUrl) {
+      draft.imageUrl = null;
+    }
+
+    return {
+      slot,
+      focus,
+      draft,
+    };
+  });
+
+  return {
+    items,
+    summary: `Modo contingencia: lote generado sin proveedor IA disponible. Revisar y editar antes de publicar. Detalle: ${cause.slice(0, 220)}`,
+    model: "fallback-contingencia",
+  };
+}
+
 export async function generateDraftWithAi(
   input: EditorialAssistInput,
   newsContext: string | null = null,
@@ -1140,7 +1419,7 @@ export async function generateDraftWithAi(
     });
     return normalizeAssistDraft(parsed, modelUsed);
   } catch (error) {
-    throw new Error(`No se pudo generar borrador con IA (${(error as Error).message}).`);
+    return buildEmergencyAssistDraft(input, (error as Error).message);
   }
 }
 
@@ -1181,7 +1460,7 @@ export async function generateBatchDraftsWithAi(
     });
     return normalizeBatchOutput(parsed, modelUsed, totalItems);
   } catch (error) {
-    throw new Error(`No se pudo generar lote con IA (${(error as Error).message}).`);
+    return buildEmergencyBatchOutput(input, (error as Error).message);
   }
 }
 
@@ -1297,7 +1576,11 @@ export async function getEditorialAiHealth(): Promise<EditorialAiHealth> {
     health.aiReachable = health.geminiReachable || health.ollamaReachable;
 
     if (!health.aiReachable && !health.error) {
-      health.error = "No se pudo conectar ni a Gemini ni a Ollama.";
+      if (isLocalOllamaUrl(AI_OLLAMA_URL)) {
+        health.error = "No se pudo conectar a Gemini y Ollama local no es accesible desde Render/cloud.";
+      } else {
+        health.error = "No se pudo conectar ni a Gemini ni a Ollama.";
+      }
     } else if (!geminiConfigured && primaryProvider === "gemini" && !health.error) {
       health.error = "GEMINI_API_KEY no configurada. Se usa Ollama como fallback.";
     } else if (primaryProvider === "gemini" && !health.geminiReachable && health.ollamaReachable && !health.error) {
