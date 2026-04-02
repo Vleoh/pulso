@@ -2,6 +2,7 @@ import Image from "next/image";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { EngagementBar } from "@/components/EngagementBar";
+import { SmartImage } from "@/components/SmartImage";
 import { UserSessionNav } from "@/components/UserSessionNav";
 import { getFeaturedPoll, getHomeData } from "@/lib/api";
 import type { FeedItem, NewsSection, PollItem } from "@/lib/types";
@@ -290,11 +291,14 @@ function DesktopArticleCard({
   return (
     <article className={`cp-article-card ${compact ? "compact" : ""}`}>
       <StoryAnchor item={item} className="cp-article-media">
-        {item.imageUrl ? (
-          <Image src={item.imageUrl} alt={title} fill sizes="(max-width: 1100px) 100vw, 30vw" className="cp-image" />
-        ) : (
-          <div className="cp-image-fallback" />
-        )}
+        <SmartImage
+          src={item.imageUrl}
+          alt={title}
+          fill
+          sizes="(max-width: 1100px) 100vw, 30vw"
+          className="cp-image"
+          fallbackClassName="cp-image-fallback"
+        />
       </StoryAnchor>
       <div className="cp-article-body">
         <p className="cp-kicker">{sanitizeDisplayText(item.kicker ?? SECTION_LABEL[item.section])}</p>
@@ -341,11 +345,7 @@ function MobileStoryCard({ item, controls }: { item: FeedItem; controls: Engagem
   return (
     <article className="cp-m-story">
       <StoryAnchor item={item} className="cp-m-story-media">
-        {item.imageUrl ? (
-          <Image src={item.imageUrl} alt={title} fill sizes="100vw" className="cp-image" />
-        ) : (
-          <div className="cp-image-fallback" />
-        )}
+        <SmartImage src={item.imageUrl} alt={title} fill sizes="100vw" className="cp-image" fallbackClassName="cp-image-fallback" />
       </StoryAnchor>
       <div className="cp-m-story-body">
         <p>{sanitizeDisplayText(item.kicker ?? SECTION_LABEL[item.section])}</p>
@@ -451,11 +451,14 @@ function DesktopEdition({
         {hero ? (
           <article className="cp-hero-main">
             <StoryAnchor item={hero} className="cp-hero-image">
-              {hero.imageUrl ? (
-                <Image src={hero.imageUrl} alt={cleanTitle(hero)} fill sizes="(max-width: 1200px) 100vw, 66vw" className="cp-image" />
-              ) : (
-                <div className="cp-image-fallback" />
-              )}
+              <SmartImage
+                src={hero.imageUrl}
+                alt={cleanTitle(hero)}
+                fill
+                sizes="(max-width: 1200px) 100vw, 66vw"
+                className="cp-image"
+                fallbackClassName="cp-image-fallback"
+              />
             </StoryAnchor>
             <div className="cp-hero-body">
               <p>{sanitizeDisplayText(hero.kicker ?? "Nacion")}</p>
@@ -510,17 +513,14 @@ function DesktopEdition({
             </StoryAnchor>
           </div>
           <div className="cp-interview-image">
-            {interviewStory.imageUrl ? (
-              <Image
-                src={interviewStory.imageUrl}
-                alt={cleanTitle(interviewStory)}
-                fill
-                sizes="(max-width: 1200px) 50vw, 35vw"
-                className="cp-image"
-              />
-            ) : (
-              <div className="cp-image-fallback" />
-            )}
+            <SmartImage
+              src={interviewStory.imageUrl}
+              alt={cleanTitle(interviewStory)}
+              fill
+              sizes="(max-width: 1200px) 50vw, 35vw"
+              className="cp-image"
+              fallbackClassName="cp-image-fallback"
+            />
           </div>
         </section>
       ) : null}
@@ -560,11 +560,14 @@ function DesktopEdition({
           {electionStory ? (
             <article className="cp-election-feature">
               <div className="cp-election-media">
-                {electionStory.imageUrl ? (
-                  <Image src={electionStory.imageUrl} alt={cleanTitle(electionStory)} fill sizes="(max-width: 1200px) 100vw, 24vw" className="cp-image" />
-                ) : (
-                  <div className="cp-image-fallback" />
-                )}
+                <SmartImage
+                  src={electionStory.imageUrl}
+                  alt={cleanTitle(electionStory)}
+                  fill
+                  sizes="(max-width: 1200px) 100vw, 24vw"
+                  className="cp-image"
+                  fallbackClassName="cp-image-fallback"
+                />
               </div>
               <div className="cp-election-copy">
                 <p>Elecciones</p>
@@ -748,11 +751,14 @@ function MobileEdition({
       {sportsStory ? (
         <section className="cp-m-sports">
           <StoryAnchor item={sportsStory} className="cp-m-sports-media">
-            {sportsStory.imageUrl ? (
-              <Image src={sportsStory.imageUrl} alt={cleanTitle(sportsStory)} fill sizes="100vw" className="cp-image" />
-            ) : (
-              <div className="cp-image-fallback" />
-            )}
+            <SmartImage
+              src={sportsStory.imageUrl}
+              alt={cleanTitle(sportsStory)}
+              fill
+              sizes="100vw"
+              className="cp-image"
+              fallbackClassName="cp-image-fallback"
+            />
           </StoryAnchor>
           <h3>
             <StoryAnchor item={sportsStory} className="cp-story-link">
@@ -786,11 +792,14 @@ function MobileEdition({
             <h3>Entrevistas</h3>
             <div className="cp-m-interview-card">
               <StoryAnchor item={interviewStory} className="cp-m-interview-media">
-                {interviewStory.imageUrl ? (
-                  <Image src={interviewStory.imageUrl} alt={cleanTitle(interviewStory)} fill sizes="100vw" className="cp-image" />
-                ) : (
-                  <div className="cp-image-fallback" />
-                )}
+                <SmartImage
+                  src={interviewStory.imageUrl}
+                  alt={cleanTitle(interviewStory)}
+                  fill
+                  sizes="100vw"
+                  className="cp-image"
+                  fallbackClassName="cp-image-fallback"
+                />
               </StoryAnchor>
               <h4>
                 <StoryAnchor item={interviewStory} className="cp-story-link">

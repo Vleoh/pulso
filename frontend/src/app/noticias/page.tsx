@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
-import Image from "next/image";
 import Link from "next/link";
+import { SmartImage } from "@/components/SmartImage";
 import { getNewsList } from "@/lib/api";
 import type { FeedItem, NewsSection } from "@/lib/types";
 
@@ -55,7 +55,14 @@ function NewsHubCard({ item }: { item: FeedItem }) {
   const content = (
     <>
       <div className="news-hub-card-media">
-        {item.imageUrl ? <Image src={item.imageUrl} alt={item.title} fill sizes="(max-width: 900px) 100vw, 33vw" className="news-hub-card-image" /> : <div className="news-hub-card-placeholder" />}
+        <SmartImage
+          src={item.imageUrl}
+          alt={item.title}
+          fill
+          sizes="(max-width: 900px) 100vw, 33vw"
+          className="news-hub-card-image"
+          fallbackClassName="news-hub-card-placeholder"
+        />
       </div>
       <div className="news-hub-card-body">
         <p>{item.kicker ?? item.section.replaceAll("_", " ")}</p>
@@ -137,4 +144,3 @@ export default async function NewsHubPage({ searchParams }: NewsHubPageProps) {
     </main>
   );
 }
-
