@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { ReactNode } from "react";
@@ -33,6 +32,8 @@ const NAV_ITEMS: Array<{ label: string; section?: NewsSection }> = [
   { label: "Opinion", section: "OPINION" },
   { label: "Mundo", section: "INTERNACIONALES" },
 ];
+
+const GALLERY_BLOCK_REGEX = /\[\[GALERIA_FOTOS\]\]([\s\S]*?)\[\[\/GALERIA_FOTOS\]\]/i;
 
 type NewsDetailPageProps = {
   params: Promise<{ slug: string }>;
@@ -102,6 +103,32 @@ function cleanText(input: string): string {
     .replace(/\n{3,}/g, "\n\n")
     .replace(/\s{2,}/g, " ")
     .trim();
+}
+
+function extractGalleryFromBody(body: string | null): { bodyWithoutGallery: string | null; galleryUrls: string[] } {
+  if (!body || body.trim().length === 0) {
+    return { bodyWithoutGallery: null, galleryUrls: [] };
+  }
+
+  const match = body.match(GALLERY_BLOCK_REGEX);
+  if (!match) {
+    return { bodyWithoutGallery: body, galleryUrls: [] };
+  }
+
+  const galleryUrls = Array.from(
+    new Set(
+      match[1]
+        .split(/\r?\n/)
+        .map((line) => line.replace(/^-\s*/, "").trim())
+        .filter((line) => /^https?:\/\//i.test(line)),
+    ),
+  ).slice(0, 6);
+
+  const bodyWithoutGallery = body.replace(GALLERY_BLOCK_REGEX, "").replace(/\n{3,}/g, "\n\n").trim();
+  return {
+    bodyWithoutGallery: bodyWithoutGallery.length > 0 ? bodyWithoutGallery : null,
+    galleryUrls,
+  };
 }
 
 function storyLink(item: { slug: string | null; sourceUrl: string | null; isExternal?: boolean }): { href: string; external: boolean } | null {
@@ -213,7 +240,8 @@ export default async function NewsDetailPage({ params }: NewsDetailPageProps) {
   const mostRead = dedupeById([...payload.related, ...stream]).slice(0, 6);
   const sideStream = stream.slice(0, 3);
   const related = dedupeById(payload.related).slice(0, 6);
-  const paragraphs = detailParagraphs(payload.item.body, payload.item.excerpt);
+  const { bodyWithoutGallery, galleryUrls } = extractGalleryFromBody(payload.item.body);
+  const paragraphs = detailParagraphs(bodyWithoutGallery, payload.item.excerpt);
 
   return (
     <main className="news-detail-screen">
@@ -229,7 +257,7 @@ export default async function NewsDetailPage({ params }: NewsDetailPageProps) {
 
         <div className="cp-brand">
           <Link href="/" className="news-brand-link">
-            <Image src={LOGO_SRC} alt="Pulso Pais" width={230} height={74} priority className="cp-brand-logo" />
+            <img src={LOGO_SRC} alt="Pulso Pais" width={230} height={74} className="cp-brand-logo" />
           </Link>
           <p>El diario de la situacion</p>
         </div>
@@ -277,6 +305,23 @@ export default async function NewsDetailPage({ params }: NewsDetailPageProps) {
               fallbackClassName="news-related-placeholder"
             />
           </figure>
+
+          {galleryUrls.length > 0 ? (
+            <section className="news-detail-gallery" aria-label="Galeria de imagenes de la nota">
+              {galleryUrls.map((url, index) => (
+                <figure key={`${url}-${index}`} className="news-detail-gallery-item">
+                  <SmartImage
+                    src={url}
+                    alt={`Galeria ${index + 1}: ${cleanTitle({ title: payload.item.title, section: payload.item.section })}`}
+                    fill
+                    sizes="(max-width: 900px) 100vw, 46vw"
+                    className="news-related-image"
+                    fallbackClassName="news-related-placeholder"
+                  />
+                </figure>
+              ))}
+            </section>
+          ) : null}
 
           <section className="news-detail-body">
             {paragraphs.length > 0 ? (

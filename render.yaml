@@ -22,6 +22,8 @@ services:
         value: "8080"
       - key: CORS_ORIGINS
         value: https://tu-frontend.vercel.app,https://*.vercel.app
+      - key: FRONTEND_PUBLIC_URL
+        value: https://pulso-pais.vercel.app
       - key: ADMIN_EMAIL
         sync: false
       - key: ADMIN_PASSWORD
@@ -45,6 +47,10 @@ services:
       - key: AI_TIMEOUT_MS
         value: "30000"
       - key: AI_OLLAMA_URL
+        sync: false
+      - key: OPENWEATHER_API_KEY
+        sync: false
+      - key: FINNHUB_API_KEY
         sync: false
       - key: EDITORIAL_GUIDELINES_PATH
         value: ./editorial/pulso-pais-linea-editorial.txt

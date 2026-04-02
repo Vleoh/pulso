@@ -1,5 +1,6 @@
 import { getExternalNews } from "./externalNews";
 import { type FeedItem } from "./types";
+import { normalizeImageUrl } from "./utils";
 
 export type NewsResearchOptions = {
   brief: string;
@@ -156,24 +157,36 @@ function scoreByBrief(text: string, tokens: string[]): number {
 }
 
 function ensureAbsoluteUrl(input: string): string {
-  if (input.startsWith("http://") || input.startsWith("https://")) {
-    return input;
+  const normalized = input.trim();
+  if (normalized.startsWith("http://") || normalized.startsWith("https://")) {
+    return normalized;
   }
-  return `https://${input.replace(/^\/+/, "")}`;
+  return `https://${normalized.replace(/^\/+/, "")}`;
+}
+
+function toWsrvSourceParam(input: string): string {
+  const absolute = ensureAbsoluteUrl(input);
+  try {
+    const parsed = new URL(absolute);
+    const hostAndPath = `${parsed.hostname}${parsed.pathname}${parsed.search}`;
+    return parsed.protocol === "https:" ? `ssl:${hostAndPath}` : hostAndPath;
+  } catch {
+    return absolute;
+  }
 }
 
 export function buildCroppedImageUrl(imageUrl: string, width: number, height: number): string {
   const safeWidth = Math.max(480, Math.min(2400, Math.round(width)));
   const safeHeight = Math.max(320, Math.min(1800, Math.round(height)));
   const params = new URLSearchParams({
-    url: ensureAbsoluteUrl(imageUrl),
+    url: toWsrvSourceParam(imageUrl),
     w: String(safeWidth),
     h: String(safeHeight),
     fit: "cover",
     output: "jpg",
     q: "82",
   });
-  return `https://images.weserv.nl/?${params.toString()}`;
+  return `https://wsrv.nl/?${params.toString()}`;
 }
 
 type RankedSource = {
@@ -210,7 +223,7 @@ async function buildRankedSources(options: NewsResearchOptions): Promise<RankedS
     const withSnapshot = item.sourceUrl ? snapshotByUrl.get(item.sourceUrl) ?? null : null;
     const title = withSnapshot?.title || item.title;
     const excerpt = withSnapshot?.description || item.excerpt || null;
-    const imageUrl = withSnapshot?.imageUrl || item.imageUrl || null;
+    const imageUrl = normalizeImageUrl(withSnapshot?.imageUrl || item.imageUrl || null);
     const paragraphText = withSnapshot?.paragraphs.join(" || ") || "";
     const sourceText = `${title} ${excerpt ?? ""} ${paragraphText}`.trim();
     const score = scoreByBrief(sourceText, tokens);

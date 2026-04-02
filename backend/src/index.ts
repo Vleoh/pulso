@@ -27,7 +27,17 @@ import { toFeedItem, dedupeByKey } from "./feed";
 import { getExternalNews } from "./externalNews";
 import { getMarketData, getWeatherData } from "./signalData";
 import { PROVINCE_OPTIONS, SECTION_OPTIONS } from "./catalog";
-import { asNullable, isNewsSection, isNewsStatus, isPollStatus, isProvince, readString, readBoolean } from "./utils";
+import {
+  asNullable,
+  isNewsSection,
+  isNewsStatus,
+  isPollStatus,
+  isProvince,
+  normalizeHttpUrl,
+  normalizeImageUrl,
+  readString,
+  readBoolean,
+} from "./utils";
 import { prisma } from "./prismaClient";
 import {
   applyEditorialSuggestions,
@@ -82,7 +92,7 @@ const app = express();
 
 const PORT = Number(process.env.PORT ?? 8080);
 const NODE_ENV = process.env.NODE_ENV ?? "development";
-const IS_PRODUCTION = NODE_ENV === "production";
+const IS_PRODUCTION = NODE_ENV === "production" || Boolean(process.env.RENDER);
 
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL ?? "admin@pulsopais.local";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "cambiar-este-password";
@@ -95,9 +105,30 @@ const AUTH_RATE_LIMIT_WINDOW_MS = Math.max(30_000, Number(process.env.AUTH_RATE_
 const AUTH_RATE_LIMIT_MAX_ATTEMPTS = Math.max(3, Number(process.env.AUTH_RATE_LIMIT_MAX_ATTEMPTS ?? 20));
 const USER_EMAIL_CODE_SECRET = process.env.USER_EMAIL_CODE_SECRET ?? `${USER_SESSION_SECRET}-email-code`;
 const USER_EMAIL_CODE_TTL_MINUTES = Math.max(5, Math.min(60, Number(process.env.USER_EMAIL_CODE_TTL_MINUTES ?? 15)));
+
+function resolveFrontendPublicUrl(): string {
+  const fallback = IS_PRODUCTION ? "https://pulso-pais.vercel.app" : "http://localhost:3000";
+  const raw =
+    process.env.FRONTEND_PUBLIC_URL ?? process.env.NEXT_PUBLIC_FRONTEND_URL ?? process.env.VERCEL_URL ?? fallback;
+
+  const normalized = readString(raw);
+  if (!normalized) {
+    return fallback;
+  }
+
+  const hasLocalHost = /localhost|127\.0\.0\.1/i.test(normalized);
+  if (IS_PRODUCTION && hasLocalHost) {
+    return "https://pulso-pais.vercel.app";
+  }
+
+  if (normalized.startsWith("http://") || normalized.startsWith("https://")) {
+    return normalized;
+  }
+  return `https://${normalized}`;
+}
+
 const FALLBACK_FRONTEND_PUBLIC_URL = IS_PRODUCTION ? "https://pulso-pais.vercel.app" : "http://localhost:3000";
-const FRONTEND_PUBLIC_URL =
-  process.env.FRONTEND_PUBLIC_URL ?? process.env.NEXT_PUBLIC_FRONTEND_URL ?? process.env.VERCEL_URL ?? FALLBACK_FRONTEND_PUBLIC_URL;
+const FRONTEND_PUBLIC_URL = resolveFrontendPublicUrl() || FALLBACK_FRONTEND_PUBLIC_URL;
 const CORS_ORIGINS = (process.env.CORS_ORIGINS ?? "*,http://localhost:3000,http://127.0.0.1:3000,https://*.vercel.app")
   .split(",")
   .map((origin) => origin.trim())
@@ -110,6 +141,51 @@ const BATCH_NEWS_FALLBACK_IMAGES = [
   "https://images.unsplash.com/photo-1504711331083-9c895941bf81?auto=format&fit=crop&w=1600&q=80",
   "https://images.unsplash.com/photo-1464207687429-7505649dae38?auto=format&fit=crop&w=1600&q=80",
 ];
+const GALLERY_BLOCK_START = "[[GALERIA_FOTOS]]";
+const GALLERY_BLOCK_END = "[[/GALERIA_FOTOS]]";
+const GALLERY_BLOCK_REGEX = /\[\[GALERIA_FOTOS\]\][\s\S]*?\[\[\/GALERIA_FOTOS\]\]/gi;
+
+function uniqueNormalizedImageUrls(values: Array<string | null | undefined>, maxItems = 6): string[] {
+  const normalized = values.map((item) => normalizeImageUrl(item)).filter((item): item is string => Boolean(item));
+  return Array.from(new Set(normalized)).slice(0, maxItems);
+}
+
+function applyResearchImageTransform(
+  imageUrl: string | null,
+  settings: Awaited<ReturnType<typeof getAiResearchSettings>>,
+): string | null {
+  if (!imageUrl) {
+    return null;
+  }
+  if (!settings.cropImage) {
+    return imageUrl;
+  }
+  return buildCroppedImageUrl(imageUrl, settings.cropWidth, settings.cropHeight);
+}
+
+function fallbackResearchImage(seedText: string): string {
+  const source = seedText.trim().toLowerCase() || "pulso-pais";
+  let hash = 0;
+  for (const char of source) {
+    hash = (hash * 31 + char.charCodeAt(0)) % 2147483647;
+  }
+  return BATCH_NEWS_FALLBACK_IMAGES[Math.abs(hash) % BATCH_NEWS_FALLBACK_IMAGES.length] ?? BATCH_NEWS_FALLBACK_IMAGES[0] ?? "";
+}
+
+function appendGalleryBlockToBody(body: string | null | undefined, imageUrls: string[]): string | null {
+  const cleanedBody = readString(body).replace(GALLERY_BLOCK_REGEX, "").trim();
+  const gallery = Array.from(new Set(imageUrls.map((item) => item.trim()).filter(Boolean))).slice(0, 6);
+
+  if (gallery.length === 0) {
+    return cleanedBody.length > 0 ? cleanedBody : null;
+  }
+
+  const galleryBlock = [GALLERY_BLOCK_START, ...gallery.map((url) => `- ${url}`), GALLERY_BLOCK_END].join("\n");
+  if (!cleanedBody) {
+    return galleryBlock;
+  }
+  return `${cleanedBody}\n\n${galleryBlock}`;
+}
 
 function wildcardToRegExp(pattern: string): RegExp {
   const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
@@ -214,27 +290,47 @@ function postProcessResearchedSuggestion(
   suggestion: Awaited<ReturnType<typeof generateDraftWithAi>>,
   settings: Awaited<ReturnType<typeof getAiResearchSettings>>,
   leadSource: { sourceName: string | null; sourceUrl: string; imageUrl: string | null } | null,
+  sources: Array<{ imageUrl: string | null; sourceName: string | null; sourceUrl: string }>,
+  fallbackSeed: string,
 ): Awaited<ReturnType<typeof generateDraftWithAi>> {
   const notes = Array.isArray(suggestion.notes) ? suggestion.notes.slice(0, 7) : [];
   notes.unshift("Borrador generado con agente periodista (agenda caliente + reescritura propia).");
 
-  const finalImage =
-    suggestion.imageUrl || leadSource?.imageUrl
-      ? settings.cropImage && (suggestion.imageUrl || leadSource?.imageUrl)
-        ? buildCroppedImageUrl(suggestion.imageUrl || leadSource?.imageUrl || "", settings.cropWidth, settings.cropHeight)
-        : suggestion.imageUrl || leadSource?.imageUrl || null
-      : null;
+  const sourceImageCandidates = uniqueNormalizedImageUrls(sources.map((item) => item.imageUrl), 8);
+  const coverImageCandidates = uniqueNormalizedImageUrls(
+    [suggestion.imageUrl, leadSource?.imageUrl, ...sourceImageCandidates, fallbackResearchImage(fallbackSeed)],
+    8,
+  );
+  const coverImageRaw = coverImageCandidates[0] ?? null;
+  const finalImage = applyResearchImageTransform(coverImageRaw, settings);
+
+  const gallerySourceRaw = sourceImageCandidates.filter((url) => url !== coverImageRaw).slice(0, 4);
+  const galleryImages = gallerySourceRaw
+    .map((url) => applyResearchImageTransform(url, settings))
+    .filter((url): url is string => Boolean(url));
+
+  const finalBody = appendGalleryBlockToBody(suggestion.body ?? suggestion.excerpt ?? null, galleryImages);
+  if (finalImage) {
+    notes.push("Portada visual confirmada por agente periodista.");
+  }
+  if (galleryImages.length > 0) {
+    notes.push(`Galeria IA agregada (${galleryImages.length} fotos).`);
+  }
 
   const finalSourceName =
     suggestion.sourceName ||
     leadSource?.sourceName ||
+    sources[0]?.sourceName ||
     (settings.internalizeSourceLinks ? "Pulso Pais (elaboracion propia sobre fuentes abiertas)" : "Pulso Pais IA");
 
   return {
     ...suggestion,
     imageUrl: finalImage,
+    body: finalBody,
     sourceName: finalSourceName,
-    sourceUrl: settings.internalizeSourceLinks ? null : suggestion.sourceUrl || leadSource?.sourceUrl || null,
+    sourceUrl: settings.internalizeSourceLinks
+      ? null
+      : normalizeHttpUrl(suggestion.sourceUrl) || normalizeHttpUrl(leadSource?.sourceUrl) || normalizeHttpUrl(sources[0]?.sourceUrl) || null,
     notes: notes.slice(0, 8),
   };
 }
@@ -678,10 +774,9 @@ async function buildBackofficeUserRows(): Promise<BackofficeUserListItem[]> {
 }
 
 function normalizedFrontendBaseUrl(): string {
-  if (FRONTEND_PUBLIC_URL.startsWith("http://") || FRONTEND_PUBLIC_URL.startsWith("https://")) {
-    return FRONTEND_PUBLIC_URL;
-  }
-  return `https://${FRONTEND_PUBLIC_URL}`;
+  return FRONTEND_PUBLIC_URL.startsWith("http://") || FRONTEND_PUBLIC_URL.startsWith("https://")
+    ? FRONTEND_PUBLIC_URL
+    : `https://${FRONTEND_PUBLIC_URL}`;
 }
 
 function pollPublicUrl(slug: string): string {
@@ -1068,6 +1163,8 @@ app.get("/api/news/:slug", async (request, response, next) => {
     response.json({
       item: {
         ...item,
+        imageUrl: normalizeImageUrl(item.imageUrl),
+        sourceUrl: normalizeHttpUrl(item.sourceUrl),
         publishedAt: (item.publishedAt ?? item.createdAt).toISOString(),
         createdAt: item.createdAt.toISOString(),
         updatedAt: item.updatedAt.toISOString(),
@@ -1987,7 +2084,13 @@ app.post("/api/admin/ai/research-assist", apiGuard, async (request, response, ne
       .join("\n");
 
     const suggestion = await generateDraftWithAi(assistInput, mergedContext);
-    const finalSuggestion = postProcessResearchedSuggestion(suggestion, settings, research.lead);
+    const finalSuggestion = postProcessResearchedSuggestion(
+      suggestion,
+      settings,
+      research.lead,
+      research.sources,
+      assistInput.brief,
+    );
     response.json({
       suggestion: finalSuggestion,
       context: context.meta,
@@ -2232,7 +2335,13 @@ app.post("/backoffice/ai/research-assist", boGuard, async (request, response, ne
       .join("\n");
 
     const suggestion = await generateDraftWithAi(assistInput, mergedContext);
-    const finalSuggestion = postProcessResearchedSuggestion(suggestion, settings, research.lead);
+    const finalSuggestion = postProcessResearchedSuggestion(
+      suggestion,
+      settings,
+      research.lead,
+      research.sources,
+      assistInput.brief,
+    );
     response.json({
       suggestion: finalSuggestion,
       context: context.meta,
@@ -2587,6 +2696,7 @@ app.post("/backoffice/news/batch", boGuard, async (request, response, next) => {
     const context = await buildAiNewsContext(prisma);
     let mergedContext = context.contextText;
     let researchLead: { sourceName: string | null; sourceUrl: string; imageUrl: string | null } | null = null;
+    let researchSources: Array<{ sourceName: string | null; sourceUrl: string; imageUrl: string | null }> = [];
     let researchSourcesUsed = 0;
 
     if (useResearchAgent) {
@@ -2601,6 +2711,7 @@ app.post("/backoffice/news/batch", boGuard, async (request, response, next) => {
         campaignLine: selectedCampaignLine(request.body as Record<string, unknown>, includeCampaignLine ? campaignLine : ""),
       });
       researchLead = research.lead;
+      researchSources = research.sources;
       researchSourcesUsed = research.sources.length;
       const sourceList = sourceFeedToText(research.sources, 12);
       mergedContext = [context.contextText, "", research.contextText, sourceList ? `FUENTES INVESTIGADAS:\n${sourceList}` : ""]
@@ -2617,7 +2728,7 @@ app.post("/backoffice/news/batch", boGuard, async (request, response, next) => {
         sectionHint,
         provinceHint,
         publishStatus,
-        requireImageUrl,
+        requireImageUrl: requireImageUrl || useResearchAgent,
       },
       mergedContext,
     );
@@ -2635,26 +2746,46 @@ app.post("/backoffice/news/batch", boGuard, async (request, response, next) => {
         const fallbackTitle = item.focus === "CAMPAIGN" ? `Radar de campana ${index + 1}` : `Agenda politica ${index + 1}`;
         const fallbackKicker = item.focus === "CAMPAIGN" ? "Escenario Electoral" : "Mesa de situacion";
         const fallbackExcerpt = item.focus === "CAMPAIGN" ? safeCampaignTopic : safeGeneralBrief;
-        const baseImage = draft.imageUrl ?? researchLead?.imageUrl ?? "";
-        const finalImage = baseImage
-          ? useResearchAgent && aiResearchSettings.cropImage
-            ? buildCroppedImageUrl(baseImage, aiResearchSettings.cropWidth, aiResearchSettings.cropHeight)
-            : baseImage
-          : requireImageUrl
-            ? fallbackBatchImageByIndex(index)
-            : "";
-        const finalSourceName = draft.sourceName ?? researchLead?.sourceName ?? defaultSourceName;
+        const sourceItem = researchSources.length > 0 ? researchSources[index % researchSources.length] : null;
+        const sourceGalleryCandidates =
+          researchSources.length > 0
+            ? [researchSources[(index + 1) % researchSources.length], researchSources[(index + 2) % researchSources.length]]
+            : [];
+        const baseImage = uniqueNormalizedImageUrls(
+          [
+            draft.imageUrl,
+            sourceItem?.imageUrl ?? null,
+            researchLead?.imageUrl ?? null,
+            requireImageUrl || useResearchAgent ? fallbackBatchImageByIndex(index) : null,
+          ],
+          1,
+        )[0] ?? "";
+        const finalImage = applyResearchImageTransform(baseImage || null, aiResearchSettings) ?? "";
+        const galleryImages = uniqueNormalizedImageUrls(
+          sourceGalleryCandidates.map((entry) => entry?.imageUrl ?? null),
+          3,
+        )
+          .filter((url) => url !== baseImage)
+          .map((url) => applyResearchImageTransform(url, aiResearchSettings))
+          .filter((url): url is string => Boolean(url));
+
+        const finalSourceName = draft.sourceName ?? sourceItem?.sourceName ?? researchLead?.sourceName ?? defaultSourceName;
         const finalSourceUrl =
           useResearchAgent && aiResearchSettings.internalizeSourceLinks
             ? ""
-            : draft.sourceUrl ?? researchLead?.sourceUrl ?? defaultSourceUrl;
+            : normalizeHttpUrl(draft.sourceUrl) ??
+              normalizeHttpUrl(sourceItem?.sourceUrl) ??
+              normalizeHttpUrl(researchLead?.sourceUrl) ??
+              normalizeHttpUrl(defaultSourceUrl) ??
+              "";
+        const finalBody = appendGalleryBlockToBody(draft.body ?? draft.excerpt ?? fallbackExcerpt, galleryImages);
 
         const normalized = normalizeNewsInput({
           title: draft.title ?? fallbackTitle,
           slug: "",
           kicker: draft.kicker ?? fallbackKicker,
           excerpt: draft.excerpt ?? fallbackExcerpt,
-          body: draft.body ?? draft.excerpt ?? fallbackExcerpt,
+          body: finalBody ?? fallbackExcerpt,
           imageUrl: finalImage,
           sourceName: finalSourceName,
           sourceUrl: finalSourceUrl,

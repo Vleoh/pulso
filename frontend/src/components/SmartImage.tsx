@@ -1,5 +1,6 @@
 "use client";
 
+import type { CSSProperties } from "react";
 import { useMemo, useState } from "react";
 import Image from "next/image";
 
@@ -73,6 +74,31 @@ export function SmartImage(props: SmartImageProps) {
   }
 
   const remote = isRemote(normalizedSrc);
+  const fillStyle: CSSProperties | undefined = props.fill
+    ? {
+        position: "absolute",
+        inset: 0,
+        width: "100%",
+        height: "100%",
+        objectFit: "cover",
+      }
+    : undefined;
+
+  if (remote) {
+    return (
+      <img
+        src={normalizedSrc}
+        alt={props.alt}
+        className={props.className}
+        style={fillStyle}
+        width={props.fill ? undefined : props.width}
+        height={props.fill ? undefined : props.height}
+        loading={props.priority ? "eager" : "lazy"}
+        decoding="async"
+        onError={() => setFailed(true)}
+      />
+    );
+  }
 
   return (
     <Image
@@ -84,9 +110,8 @@ export function SmartImage(props: SmartImageProps) {
       width={props.width}
       height={props.height}
       priority={props.priority}
-      unoptimized={remote}
+      unoptimized
       onError={() => setFailed(true)}
     />
   );
 }
-

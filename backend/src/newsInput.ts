@@ -1,5 +1,15 @@
 import { type PrismaClient, NewsStatus } from "@prisma/client";
-import { asNullable, isNewsSection, isNewsStatus, isProvince, readBoolean, readString, slugifyText } from "./utils";
+import {
+  asNullable,
+  isNewsSection,
+  isNewsStatus,
+  isProvince,
+  normalizeHttpUrl,
+  normalizeImageUrl,
+  readBoolean,
+  readString,
+  slugifyText,
+} from "./utils";
 import type { NormalizedNewsInput } from "./types";
 
 function trimExcerpt(rawExcerpt: string | null, body: string | null): string | null {
@@ -58,9 +68,9 @@ export function normalizeNewsInput(raw: Record<string, unknown>): NormalizedNews
     kicker: asNullable(readString(raw.kicker)),
     excerpt: trimExcerpt(asNullable(readString(raw.excerpt)), asNullable(readString(raw.body))),
     body: asNullable(readString(raw.body)),
-    imageUrl: asNullable(readString(raw.imageUrl)),
+    imageUrl: normalizeImageUrl(raw.imageUrl),
     sourceName: asNullable(readString(raw.sourceName)),
-    sourceUrl: asNullable(readString(raw.sourceUrl)),
+    sourceUrl: normalizeHttpUrl(raw.sourceUrl),
     authorName: asNullable(readString(raw.authorName)),
     section: sectionRaw,
     province,

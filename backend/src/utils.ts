@@ -33,6 +33,74 @@ export function asNullable(input: string): string | null {
   return input.length > 0 ? input : null;
 }
 
+export function decodeRepeatedURIComponent(input: string, max = 4): string {
+  let value = String(input ?? "");
+  for (let step = 0; step < max; step += 1) {
+    if (!/%[0-9A-Fa-f]{2}/.test(value)) {
+      break;
+    }
+    try {
+      const decoded = decodeURIComponent(value);
+      if (decoded === value) {
+        break;
+      }
+      value = decoded;
+    } catch {
+      break;
+    }
+  }
+  return value;
+}
+
+export function normalizeHttpUrl(value: unknown): string | null {
+  const raw = readString(value);
+  if (!raw) {
+    return null;
+  }
+
+  const decoded = decodeRepeatedURIComponent(raw, 2).replace(/\s+/g, "").trim();
+  const base = /^https?:\/\//i.test(decoded) ? decoded : `https://${decoded.replace(/^\/+/, "")}`;
+
+  try {
+    const parsed = new URL(base);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return null;
+    }
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+export function normalizeImageUrl(value: unknown): string | null {
+  const raw = readString(value);
+  if (!raw) {
+    return null;
+  }
+
+  const decoded = decodeRepeatedURIComponent(raw, 3);
+  const direct = normalizeHttpUrl(decoded);
+  if (!direct) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(direct);
+    const host = parsed.hostname.toLowerCase();
+    const isTransformProxy = host.includes("weserv.nl") || host === "wsrv.nl";
+    if (isTransformProxy && parsed.searchParams.has("url")) {
+      const nestedRaw = decodeRepeatedURIComponent(parsed.searchParams.get("url") ?? "", 6);
+      const nested = normalizeHttpUrl(nestedRaw);
+      if (nested) {
+        return nested;
+      }
+    }
+    return parsed.toString();
+  } catch {
+    return direct;
+  }
+}
+
 export function readBoolean(value: unknown): boolean {
   if (typeof value === "boolean") {
     return value;

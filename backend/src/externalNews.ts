@@ -1,5 +1,5 @@
 import Parser from "rss-parser";
-import { asNullable, parseGdeltDate, readString } from "./utils";
+import { asNullable, normalizeHttpUrl, normalizeImageUrl, parseGdeltDate, readString } from "./utils";
 import { dedupeByKey, guessSectionFromText } from "./feed";
 import type { FeedItem } from "./types";
 
@@ -7,7 +7,7 @@ const rssParser = new Parser();
 
 function extractRssImage(content: string): string | null {
   const match = content.match(/<img[^>]+src=["']([^"']+)["']/i);
-  return match?.[1] ?? null;
+  return normalizeImageUrl(match?.[1] ?? null);
 }
 
 async function fetchExternalFromGdelt(): Promise<FeedItem[]> {
@@ -31,7 +31,7 @@ async function fetchExternalFromGdelt(): Promise<FeedItem[]> {
   const mapped: FeedItem[] = [];
   for (const [index, article] of articles.entries()) {
     const title = readString(article.title);
-    const sourceUrl = readString(article.url);
+    const sourceUrl = normalizeHttpUrl(article.url);
     if (!title || !sourceUrl) {
       continue;
     }
@@ -42,7 +42,7 @@ async function fetchExternalFromGdelt(): Promise<FeedItem[]> {
       title,
       kicker: "Pulso en tiempo real",
       excerpt: readString(article.snippet) || "Actualizacion automatica desde fuentes periodisticas abiertas.",
-      imageUrl: asNullable(readString(article.socialimage)),
+      imageUrl: normalizeImageUrl(article.socialimage),
       sourceName: asNullable(readString(article.domain)) ?? "Fuente Externa",
       sourceUrl,
       section,
@@ -63,7 +63,7 @@ async function fetchExternalFromGoogleRss(): Promise<FeedItem[]> {
   const mapped: FeedItem[] = [];
   for (const [index, item] of (feed.items ?? []).entries()) {
     const title = readString(item.title);
-    const sourceUrl = readString(item.link);
+    const sourceUrl = normalizeHttpUrl(item.link);
     if (!title || !sourceUrl) {
       continue;
     }

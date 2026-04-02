@@ -1,4 +1,3 @@
-import Image from "next/image";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { EngagementBar } from "@/components/EngagementBar";
@@ -418,7 +417,7 @@ function DesktopEdition({
         </div>
 
         <div className="cp-brand">
-          <Image src={LOGO_SRC} alt="Pulso Pais" width={230} height={74} priority className="cp-brand-logo" />
+          <img src={LOGO_SRC} alt="Pulso Pais" width={230} height={74} className="cp-brand-logo" />
           <p>El diario de la situacion</p>
         </div>
 
@@ -698,7 +697,7 @@ function MobileEdition({
           <button type="button" aria-label="Menu">
             <UiIcon name="menu" />
           </button>
-          <Image src={LOGO_SRC} alt="Pulso Pais" width={126} height={42} className="cp-m-logo" priority />
+          <img src={LOGO_SRC} alt="Pulso Pais" width={126} height={42} className="cp-m-logo" />
           <div>
             <button type="button" aria-label="Buscar">
               <UiIcon name="search" />

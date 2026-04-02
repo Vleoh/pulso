@@ -1,5 +1,6 @@
 import { type News, NewsSection } from "@prisma/client";
 import type { FeedItem } from "./types";
+import { normalizeHttpUrl, normalizeImageUrl } from "./utils";
 
 export function guessSectionFromText(text: string): NewsSection {
   const normalized = text.toLowerCase();
@@ -28,9 +29,9 @@ export function toFeedItem(news: News): FeedItem {
     title: news.title,
     kicker: news.kicker,
     excerpt: news.excerpt,
-    imageUrl: news.imageUrl,
+    imageUrl: normalizeImageUrl(news.imageUrl),
     sourceName: news.sourceName,
-    sourceUrl: news.sourceUrl,
+    sourceUrl: normalizeHttpUrl(news.sourceUrl),
     section: news.section,
     province: news.province,
     publishedAt: (news.publishedAt ?? news.createdAt).toISOString(),
