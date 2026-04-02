@@ -693,6 +693,9 @@ type BatchNewsFormState = {
   campaignPercent: number;
   campaignTopic: string;
   generalBrief: string;
+  useResearchAgent: boolean;
+  includeCampaignLine: boolean;
+  campaignLine: string;
   publishStatus: NewsStatus;
   sectionHint: string;
   provinceHint: string;
@@ -704,10 +707,13 @@ type BatchNewsFormState = {
 
 function defaultBatchNewsFormState(): BatchNewsFormState {
   return {
-    totalItems: 20,
-    campaignPercent: 30,
+    totalItems: 1,
+    campaignPercent: 0,
     campaignTopic: "",
     generalBrief: "",
+    useResearchAgent: true,
+    includeCampaignLine: true,
+    campaignLine: "",
     publishStatus: NewsStatus.DRAFT,
     sectionHint: "",
     provinceHint: "",
@@ -718,8 +724,18 @@ function defaultBatchNewsFormState(): BatchNewsFormState {
   };
 }
 
-function renderBatchNewsForm(params: { state?: Partial<BatchNewsFormState>; error?: string; summary?: string }): string {
-  const current = { ...defaultBatchNewsFormState(), ...(params.state ?? {}) };
+function renderBatchNewsForm(params: {
+  state?: Partial<BatchNewsFormState>;
+  error?: string;
+  summary?: string;
+  aiResearch?: Awaited<ReturnType<typeof getAiResearchSettings>>;
+}): string {
+  const current = {
+    ...defaultBatchNewsFormState(),
+    campaignLine: params.aiResearch?.campaignLine ?? "",
+    ...(params.state ?? {}),
+  };
+  const researchEnabledInSystem = params.aiResearch?.enabled ?? true;
   const error = params.error ? `<div class="error">${currentErrorSafe(params.error)}</div>` : "";
   const summary = params.summary
     ? `<div class="flash"><strong>Resumen IA:</strong> ${currentErrorSafe(params.summary)}</div>`
@@ -744,19 +760,55 @@ function renderBatchNewsForm(params: { state?: Partial<BatchNewsFormState>; erro
     `<div class="grid">
       <div class="card">
         <div class="split-title">
-          <h3>Noticias en lote con IA</h3>
-          <span class="mini-tag">Batch CMS</span>
+          <h3>Generacion IA (1 nota o lote)</h3>
+          <span class="mini-tag">CMS + Agente periodista</span>
         </div>
         <p style="margin:0; color:#a9a9a9; line-height:1.5;">
-          Crea muchas noticias en una sola corrida IA. Puedes forzar porcentaje de campana (ej. 30%) y completar el resto con agenda general.
+          Usa un solo flujo para crear 1 nota (cantidad=1) o muchas notas en lote. Puedes activar investigacion periodistica para tomar agenda caliente y reescribir en tono Pulso Pais.
+        </p>
+        <p style="margin:0; color:#8f8f8f; line-height:1.45; font-size:12px;">
+          Estado agente periodista: <strong>${researchEnabledInSystem ? "ACTIVO" : "DESACTIVADO"}</strong>
+          ${
+            params.aiResearch
+              ? ` | fuentes:${params.aiResearch.hotNewsLimit} | lectura:${params.aiResearch.fetchArticleText ? "texto completo" : "titulares"} | crop:${
+                  params.aiResearch.cropImage ? `${params.aiResearch.cropWidth}x${params.aiResearch.cropHeight}` : "OFF"
+                }`
+              : ""
+          }
         </p>
         ${error}
         ${summary}
         <form method="post" action="/backoffice/news/batch" style="margin-top:14px;">
+          <div class="card" style="padding:12px; border-style:dashed;">
+            <div class="checks">
+              <label>
+                <input type="checkbox" name="useResearchAgent" ${current.useResearchAgent ? "checked" : ""} ${
+      researchEnabledInSystem ? "" : "disabled"
+    } />
+                Modo periodista (investiga agenda caliente y genera nota propia)
+              </label>
+              <label>
+                <input type="checkbox" name="includeCampaignLine" ${current.includeCampaignLine ? "checked" : ""} />
+                Incluir bajada editorial/campana en la corrida
+              </label>
+            </div>
+            <div class="field">
+              <label for="campaignLine">Bajada editorial / campana activa (opcional)</label>
+              <textarea id="campaignLine" name="campaignLine" rows="2" placeholder="Ej: consolidar presencia territorial en conurbano con foco en gestion y empleo.">${currentErrorSafe(
+                current.campaignLine,
+              )}</textarea>
+            </div>
+            ${
+              researchEnabledInSystem
+                ? ""
+                : `<p class="hint" style="margin:0;">Activa el agente periodista en <a href="/backoffice#theme-control">Panel / Control de portada</a> para usar investigacion automatica.</p>`
+            }
+          </div>
           <div class="cols-2">
             <div class="field">
               <label for="totalItems">Cantidad total</label>
               <input id="totalItems" name="totalItems" type="number" min="1" max="40" value="${current.totalItems}" required />
+              <p class="hint">Deja <strong>1</strong> para nota individual autogenerada.</p>
             </div>
             <div class="field">
               <label for="campaignPercent">Porcentaje campana (%)</label>
@@ -766,13 +818,13 @@ function renderBatchNewsForm(params: { state?: Partial<BatchNewsFormState>; erro
           </div>
           <div class="field">
             <label for="campaignTopic">Tema de campana (bloque estrategico)</label>
-            <textarea id="campaignTopic" name="campaignTopic" rows="3" placeholder="Ej: cierre de alianzas y armados seccionales en PBA para 2027." required>${currentErrorSafe(
+            <textarea id="campaignTopic" name="campaignTopic" rows="3" placeholder="Ej: cierre de alianzas y armados seccionales en PBA para 2027.">${currentErrorSafe(
               current.campaignTopic,
             )}</textarea>
           </div>
           <div class="field">
             <label for="generalBrief">Brief general para el resto de noticias</label>
-            <textarea id="generalBrief" name="generalBrief" rows="4" placeholder="Ej: agenda nacional, economica, provincias clave, municipios y radar electoral de la semana." required>${currentErrorSafe(
+            <textarea id="generalBrief" name="generalBrief" rows="4" placeholder="Ej: agenda nacional, economica, provincias clave, municipios y radar electoral de la semana.">${currentErrorSafe(
               current.generalBrief,
             )}</textarea>
           </div>
@@ -814,8 +866,8 @@ function renderBatchNewsForm(params: { state?: Partial<BatchNewsFormState>; erro
             Exigir foto en todas las noticias (si falta, usa imagen fallback).
           </label>
           <div style="display:flex; gap:8px; flex-wrap:wrap;">
-            <button class="primary" type="submit">Generar y crear noticias en lote</button>
-            <a class="button" href="/backoffice/news/new">Ir a nueva nota individual</a>
+            <button class="primary" type="submit">Generar y crear (1 o lote)</button>
+            <a class="button" href="/backoffice/news/new">Editor manual (formulario completo)</a>
           </div>
         </form>
         <script>
@@ -2460,22 +2512,31 @@ app.post("/backoffice/settings/ai-research", boGuard, async (request, response, 
   }
 });
 
-app.get("/backoffice/news/batch", boGuard, (request, response) => {
-  const summary = readString(request.query.ok);
-  response.send(
-    summary.length > 0
-      ? renderBatchNewsForm({
-          summary,
-        })
-      : renderBatchNewsForm({}),
-  );
+app.get("/backoffice/news/batch", boGuard, async (request, response, next) => {
+  try {
+    const summary = readString(request.query.ok);
+    const aiResearch = await getAiResearchSettings(prisma);
+    response.send(
+      summary.length > 0
+        ? renderBatchNewsForm({
+            summary,
+            aiResearch,
+          })
+        : renderBatchNewsForm({ aiResearch }),
+    );
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.post("/backoffice/news/batch", boGuard, async (request, response, next) => {
-  const totalItems = clampInteger(request.body.totalItems, 1, 40, 20);
-  const campaignPercent = clampInteger(request.body.campaignPercent, 0, 100, 30);
+  const totalItems = clampInteger(request.body.totalItems, 1, 40, 1);
+  const campaignPercent = clampInteger(request.body.campaignPercent, 0, 100, 0);
   const campaignTopic = readString(request.body.campaignTopic);
   const generalBrief = readString(request.body.generalBrief);
+  const useResearchAgent = readBoolean(request.body.useResearchAgent);
+  const includeCampaignLine = readBoolean(request.body.includeCampaignLine);
+  const campaignLine = readString(request.body.campaignLine);
   const publishStatus =
     readString(request.body.publishStatus).toUpperCase() === NewsStatus.PUBLISHED ? NewsStatus.PUBLISHED : NewsStatus.DRAFT;
   const sectionHintRaw = readString(request.body.sectionHint).toUpperCase();
@@ -2492,6 +2553,9 @@ app.post("/backoffice/news/batch", boGuard, async (request, response, next) => {
     campaignPercent,
     campaignTopic,
     generalBrief,
+    useResearchAgent,
+    includeCampaignLine,
+    campaignLine,
     publishStatus,
     sectionHint: sectionHint ?? "",
     provinceHint: provinceHint ?? "",
@@ -2502,26 +2566,60 @@ app.post("/backoffice/news/batch", boGuard, async (request, response, next) => {
   };
 
   try {
-    if (campaignTopic.length < 8) {
-      throw new Error("El tema de campana debe tener al menos 8 caracteres.");
+    const aiResearchSettings = await getAiResearchSettings(prisma);
+    const campaignSlots = Math.round((totalItems * campaignPercent) / 100);
+    const generalSlots = totalItems - campaignSlots;
+
+    if (campaignSlots > 0 && campaignTopic.length < 8) {
+      throw new Error("Con porcentaje de campana > 0, el tema de campana debe tener al menos 8 caracteres.");
     }
-    if (generalBrief.length < 12) {
-      throw new Error("El brief general debe tener al menos 12 caracteres.");
+    if (generalSlots > 0 && generalBrief.length < 12) {
+      throw new Error("Con bloque general activo, el brief general debe tener al menos 12 caracteres.");
     }
 
+    if (useResearchAgent && !aiResearchSettings.enabled) {
+      throw new Error("El agente periodista esta desactivado en Panel. Activalo o desmarca 'Modo periodista'.");
+    }
+
+    const safeCampaignTopic = campaignSlots > 0 ? campaignTopic : "Sin bloque de campana";
+    const safeGeneralBrief = generalSlots > 0 ? generalBrief : "Sin bloque general";
+
     const context = await buildAiNewsContext(prisma);
+    let mergedContext = context.contextText;
+    let researchLead: { sourceName: string | null; sourceUrl: string; imageUrl: string | null } | null = null;
+    let researchSourcesUsed = 0;
+
+    if (useResearchAgent) {
+      const researchBriefParts = [campaignSlots > 0 ? campaignTopic : "", generalSlots > 0 ? generalBrief : ""]
+        .map((part) => part.trim())
+        .filter(Boolean);
+      const researchBrief = researchBriefParts.join(" | ") || "Agenda politica federal Argentina";
+      const research = await buildNewsResearchContext({
+        brief: researchBrief,
+        limit: aiResearchSettings.hotNewsLimit,
+        fetchArticleText: aiResearchSettings.fetchArticleText,
+        campaignLine: selectedCampaignLine(request.body as Record<string, unknown>, includeCampaignLine ? campaignLine : ""),
+      });
+      researchLead = research.lead;
+      researchSourcesUsed = research.sources.length;
+      const sourceList = sourceFeedToText(research.sources, 12);
+      mergedContext = [context.contextText, "", research.contextText, sourceList ? `FUENTES INVESTIGADAS:\n${sourceList}` : ""]
+        .filter(Boolean)
+        .join("\n");
+    }
+
     const batch = await generateBatchDraftsWithAi(
       {
         totalItems,
         campaignPercent,
-        campaignTopic,
-        generalBrief,
+        campaignTopic: safeCampaignTopic,
+        generalBrief: safeGeneralBrief,
         sectionHint,
         provinceHint,
         publishStatus,
         requireImageUrl,
       },
-      context.contextText,
+      mergedContext,
     );
 
     let createdCount = 0;
@@ -2536,7 +2634,20 @@ app.post("/backoffice/news/batch", boGuard, async (request, response, next) => {
         const finalProvince = draft.province && isProvince(draft.province) ? draft.province : provinceHint ?? "";
         const fallbackTitle = item.focus === "CAMPAIGN" ? `Radar de campana ${index + 1}` : `Agenda politica ${index + 1}`;
         const fallbackKicker = item.focus === "CAMPAIGN" ? "Escenario Electoral" : "Mesa de situacion";
-        const fallbackExcerpt = item.focus === "CAMPAIGN" ? campaignTopic : generalBrief;
+        const fallbackExcerpt = item.focus === "CAMPAIGN" ? safeCampaignTopic : safeGeneralBrief;
+        const baseImage = draft.imageUrl ?? researchLead?.imageUrl ?? "";
+        const finalImage = baseImage
+          ? useResearchAgent && aiResearchSettings.cropImage
+            ? buildCroppedImageUrl(baseImage, aiResearchSettings.cropWidth, aiResearchSettings.cropHeight)
+            : baseImage
+          : requireImageUrl
+            ? fallbackBatchImageByIndex(index)
+            : "";
+        const finalSourceName = draft.sourceName ?? researchLead?.sourceName ?? defaultSourceName;
+        const finalSourceUrl =
+          useResearchAgent && aiResearchSettings.internalizeSourceLinks
+            ? ""
+            : draft.sourceUrl ?? researchLead?.sourceUrl ?? defaultSourceUrl;
 
         const normalized = normalizeNewsInput({
           title: draft.title ?? fallbackTitle,
@@ -2544,9 +2655,9 @@ app.post("/backoffice/news/batch", boGuard, async (request, response, next) => {
           kicker: draft.kicker ?? fallbackKicker,
           excerpt: draft.excerpt ?? fallbackExcerpt,
           body: draft.body ?? draft.excerpt ?? fallbackExcerpt,
-          imageUrl: requireImageUrl ? draft.imageUrl ?? fallbackBatchImageByIndex(index) : draft.imageUrl ?? "",
-          sourceName: draft.sourceName ?? defaultSourceName,
-          sourceUrl: draft.sourceUrl ?? defaultSourceUrl,
+          imageUrl: finalImage,
+          sourceName: finalSourceName,
+          sourceUrl: finalSourceUrl,
           authorName: draft.authorName ?? defaultAuthorName,
           section: finalSection,
           province: finalProvince,
@@ -2567,7 +2678,7 @@ app.post("/backoffice/news/batch", boGuard, async (request, response, next) => {
             ...normalized,
             slug: uniqueSlug,
             aiDecision: "ALLOW",
-            aiReason: `Generada en lote IA (${batch.model}) [${item.focus}]`,
+            aiReason: `Generada en lote IA (${batch.model}) [${item.focus}]${useResearchAgent ? " [AGENTE PERIODISTA]" : ""}`,
             aiWarnings: draft.notes,
             aiModel: batch.model,
             aiEvaluatedAt: new Date(),
@@ -2588,13 +2699,16 @@ app.post("/backoffice/news/batch", boGuard, async (request, response, next) => {
         ? `Se crearon ${createdCount}/${batch.items.length}. Errores: ${errors.slice(0, 3).join(" | ")}`
         : `Se crearon ${createdCount} noticias.`;
 
-    response.redirect(`/backoffice/news/batch?ok=${encodeURIComponent(`${detail} Modelo: ${batch.model}.`)}`);
+    const researchDetail = useResearchAgent ? ` Fuentes investigadas: ${researchSourcesUsed}.` : "";
+    response.redirect(`/backoffice/news/batch?ok=${encodeURIComponent(`${detail}${researchDetail} Modelo: ${batch.model}.`)}`);
   } catch (error) {
     if (error instanceof Error) {
+      const aiResearchSettings = await getAiResearchSettings(prisma);
       response.status(400).send(
         renderBatchNewsForm({
           state: formState,
           error: error.message,
+          aiResearch: aiResearchSettings,
         }),
       );
       return;

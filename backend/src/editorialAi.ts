@@ -1433,12 +1433,14 @@ export async function generateBatchDraftsWithAi(
 
   const totalItems = Math.max(1, Math.min(40, Math.floor(input.totalItems)));
   const campaignPercent = Math.max(0, Math.min(100, Math.round(input.campaignPercent)));
+  const campaignSlots = Math.round((totalItems * campaignPercent) / 100);
+  const generalSlots = totalItems - campaignSlots;
 
-  if (input.campaignTopic.trim().length < 8) {
-    throw new Error("El tema de campana debe tener al menos 8 caracteres.");
+  if (campaignSlots > 0 && input.campaignTopic.trim().length < 8) {
+    throw new Error("Con porcentaje de campana > 0, el tema de campana debe tener al menos 8 caracteres.");
   }
-  if (input.generalBrief.trim().length < 12) {
-    throw new Error("El brief general debe tener al menos 12 caracteres.");
+  if (generalSlots > 0 && input.generalBrief.trim().length < 12) {
+    throw new Error("Con bloque general activo, el brief general debe tener al menos 12 caracteres.");
   }
 
   try {
