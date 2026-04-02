@@ -144,6 +144,9 @@ const BATCH_NEWS_FALLBACK_IMAGES = [
 const GALLERY_BLOCK_START = "[[GALERIA_FOTOS]]";
 const GALLERY_BLOCK_END = "[[/GALERIA_FOTOS]]";
 const GALLERY_BLOCK_REGEX = /\[\[GALERIA_FOTOS\]\][\s\S]*?\[\[\/GALERIA_FOTOS\]\]/gi;
+const IMAGE_PROBE_TIMEOUT_MS = 4500;
+const IMAGE_PROBE_CACHE_TTL_MS = 15 * 60 * 1000;
+const imageProbeCache = new Map<string, { ok: boolean; expiresAt: number }>();
 
 function uniqueNormalizedImageUrls(values: Array<string | null | undefined>, maxItems = 6): string[] {
   const normalized = values.map((item) => normalizeImageUrl(item)).filter((item): item is string => Boolean(item));
@@ -185,6 +188,99 @@ function appendGalleryBlockToBody(body: string | null | undefined, imageUrls: st
     return galleryBlock;
   }
   return `${cleanedBody}\n\n${galleryBlock}`;
+}
+
+async function probeImageUrl(url: string): Promise<boolean> {
+  const cached = imageProbeCache.get(url);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.ok;
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), IMAGE_PROBE_TIMEOUT_MS);
+
+  const persist = (ok: boolean) => {
+    imageProbeCache.set(url, { ok, expiresAt: Date.now() + IMAGE_PROBE_CACHE_TTL_MS });
+    return ok;
+  };
+
+  try {
+    const head = await fetch(url, {
+      method: "HEAD",
+      signal: controller.signal,
+      headers: {
+        accept: "image/*,*/*;q=0.8",
+        "user-agent": "PulsoPaisImageProbe/1.0",
+      },
+    });
+
+    if (head.ok) {
+      const contentType = head.headers.get("content-type") ?? "";
+      if (!contentType || contentType.startsWith("image/")) {
+        return persist(true);
+      }
+    }
+
+    if (head.status !== 405 && head.status !== 403 && head.status !== 400) {
+      return persist(false);
+    }
+
+    const get = await fetch(url, {
+      method: "GET",
+      signal: controller.signal,
+      headers: {
+        accept: "image/*,*/*;q=0.8",
+        range: "bytes=0-1024",
+        "user-agent": "PulsoPaisImageProbe/1.0",
+      },
+    });
+
+    if (!get.ok) {
+      return persist(false);
+    }
+    const contentType = get.headers.get("content-type") ?? "";
+    if (!contentType || contentType.startsWith("image/")) {
+      return persist(true);
+    }
+    return persist(false);
+  } catch {
+    return persist(false);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function pickReachableImage(imageUrls: string[], maxChecks = 4): Promise<string | null> {
+  const unique = Array.from(new Set(imageUrls.map((item) => item.trim()).filter(Boolean)));
+  const capped = unique.slice(0, Math.max(1, maxChecks));
+
+  for (const url of capped) {
+    if (await probeImageUrl(url)) {
+      return url;
+    }
+  }
+
+  return null;
+}
+
+async function pickReachableImages(
+  imageUrls: string[],
+  maxItems = 4,
+  maxChecks = 10,
+): Promise<string[]> {
+  const unique = Array.from(new Set(imageUrls.map((item) => item.trim()).filter(Boolean)));
+  const selected: string[] = [];
+
+  for (const url of unique.slice(0, Math.max(maxChecks, maxItems))) {
+    if (selected.length >= maxItems) {
+      break;
+    }
+    if (await probeImageUrl(url)) {
+      selected.push(url);
+    }
+  }
+
+  return selected;
 }
 
 function wildcardToRegExp(pattern: string): RegExp {
@@ -286,28 +382,37 @@ function selectedCampaignLine(raw: Record<string, unknown>, fallbackLine: string
   return fallback.length > 0 ? fallback.slice(0, 260) : null;
 }
 
-function postProcessResearchedSuggestion(
+async function postProcessResearchedSuggestion(
   suggestion: Awaited<ReturnType<typeof generateDraftWithAi>>,
   settings: Awaited<ReturnType<typeof getAiResearchSettings>>,
   leadSource: { sourceName: string | null; sourceUrl: string; imageUrl: string | null } | null,
   sources: Array<{ imageUrl: string | null; sourceName: string | null; sourceUrl: string }>,
   fallbackSeed: string,
-): Awaited<ReturnType<typeof generateDraftWithAi>> {
+): Promise<Awaited<ReturnType<typeof generateDraftWithAi>>> {
   const notes = Array.isArray(suggestion.notes) ? suggestion.notes.slice(0, 7) : [];
   notes.unshift("Borrador generado con agente periodista (agenda caliente + reescritura propia).");
 
   const sourceImageCandidates = uniqueNormalizedImageUrls(sources.map((item) => item.imageUrl), 8);
-  const coverImageCandidates = uniqueNormalizedImageUrls(
+  const coverImageCandidatesRaw = uniqueNormalizedImageUrls(
     [suggestion.imageUrl, leadSource?.imageUrl, ...sourceImageCandidates, fallbackResearchImage(fallbackSeed)],
     8,
   );
-  const coverImageRaw = coverImageCandidates[0] ?? null;
-  const finalImage = applyResearchImageTransform(coverImageRaw, settings);
-
-  const gallerySourceRaw = sourceImageCandidates.filter((url) => url !== coverImageRaw).slice(0, 4);
-  const galleryImages = gallerySourceRaw
+  const coverImageCandidates = coverImageCandidatesRaw
     .map((url) => applyResearchImageTransform(url, settings))
     .filter((url): url is string => Boolean(url));
+  let finalImage = await pickReachableImage(coverImageCandidates, 6);
+  if (!finalImage) {
+    const fallbackImage = applyResearchImageTransform(fallbackResearchImage(fallbackSeed), settings);
+    finalImage = fallbackImage && (await probeImageUrl(fallbackImage)) ? fallbackImage : null;
+  }
+
+  const gallerySourceRaw = sourceImageCandidates
+    .filter((url) => !coverImageCandidatesRaw.includes(url))
+    .slice(0, 6);
+  const galleryCandidates = gallerySourceRaw
+    .map((url) => applyResearchImageTransform(url, settings))
+    .filter((url): url is string => Boolean(url));
+  const galleryImages = (await pickReachableImages(galleryCandidates, 4, 10)).filter((url) => url !== finalImage);
 
   const finalBody = appendGalleryBlockToBody(suggestion.body ?? suggestion.excerpt ?? null, galleryImages);
   if (finalImage) {
@@ -2084,7 +2189,7 @@ app.post("/api/admin/ai/research-assist", apiGuard, async (request, response, ne
       .join("\n");
 
     const suggestion = await generateDraftWithAi(assistInput, mergedContext);
-    const finalSuggestion = postProcessResearchedSuggestion(
+    const finalSuggestion = await postProcessResearchedSuggestion(
       suggestion,
       settings,
       research.lead,
@@ -2335,7 +2440,7 @@ app.post("/backoffice/ai/research-assist", boGuard, async (request, response, ne
       .join("\n");
 
     const suggestion = await generateDraftWithAi(assistInput, mergedContext);
-    const finalSuggestion = postProcessResearchedSuggestion(
+    const finalSuggestion = await postProcessResearchedSuggestion(
       suggestion,
       settings,
       research.lead,
@@ -2751,23 +2856,29 @@ app.post("/backoffice/news/batch", boGuard, async (request, response, next) => {
           researchSources.length > 0
             ? [researchSources[(index + 1) % researchSources.length], researchSources[(index + 2) % researchSources.length]]
             : [];
-        const baseImage = uniqueNormalizedImageUrls(
+        const baseImageCandidatesRaw = uniqueNormalizedImageUrls(
           [
             draft.imageUrl,
             sourceItem?.imageUrl ?? null,
             researchLead?.imageUrl ?? null,
             requireImageUrl || useResearchAgent ? fallbackBatchImageByIndex(index) : null,
           ],
-          1,
-        )[0] ?? "";
-        const finalImage = applyResearchImageTransform(baseImage || null, aiResearchSettings) ?? "";
+          5,
+        );
+        const baseImageCandidates = baseImageCandidatesRaw
+          .map((url) => applyResearchImageTransform(url, aiResearchSettings))
+          .filter((url): url is string => Boolean(url));
+        const reachableCover = await pickReachableImage(baseImageCandidates, 3);
+        const fallbackCover = applyResearchImageTransform(fallbackBatchImageByIndex(index), aiResearchSettings);
+        const finalImage = reachableCover ?? (fallbackCover && (await probeImageUrl(fallbackCover)) ? fallbackCover : "");
         const galleryImages = uniqueNormalizedImageUrls(
           sourceGalleryCandidates.map((entry) => entry?.imageUrl ?? null),
           3,
         )
-          .filter((url) => url !== baseImage)
+          .filter((url) => !baseImageCandidatesRaw.includes(url))
           .map((url) => applyResearchImageTransform(url, aiResearchSettings))
           .filter((url): url is string => Boolean(url));
+        const reachableGallery = (await pickReachableImages(galleryImages, 3, 8)).filter((url) => url !== finalImage);
 
         const finalSourceName = draft.sourceName ?? sourceItem?.sourceName ?? researchLead?.sourceName ?? defaultSourceName;
         const finalSourceUrl =
@@ -2778,7 +2889,7 @@ app.post("/backoffice/news/batch", boGuard, async (request, response, next) => {
               normalizeHttpUrl(researchLead?.sourceUrl) ??
               normalizeHttpUrl(defaultSourceUrl) ??
               "";
-        const finalBody = appendGalleryBlockToBody(draft.body ?? draft.excerpt ?? fallbackExcerpt, galleryImages);
+        const finalBody = appendGalleryBlockToBody(draft.body ?? draft.excerpt ?? fallbackExcerpt, reachableGallery);
 
         const normalized = normalizeNewsInput({
           title: draft.title ?? fallbackTitle,
