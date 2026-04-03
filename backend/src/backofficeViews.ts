@@ -2,8 +2,44 @@ import { type News, NewsStatus, type Poll, PollStatus, type Province, UserPlan }
 import { PROVINCE_OPTIONS, SECTION_OPTIONS, provinceLabel, sectionLabel } from "./catalog";
 import { escapeHtml } from "./utils";
 
+function resolveBackofficeNav(title: string): "panel" | "editorial" | "polls" | "users" {
+  const normalized = title.trim().toLowerCase();
+  if (normalized.includes("encuesta")) {
+    return "polls";
+  }
+  if (normalized.includes("usuario")) {
+    return "users";
+  }
+  if (
+    normalized.includes("noticia") ||
+    normalized.includes("nota") ||
+    normalized.includes("ia") ||
+    normalized.includes("editorial")
+  ) {
+    return "editorial";
+  }
+  return "panel";
+}
+
+function backofficeNavLink(params: {
+  href: string;
+  label: string;
+  icon: string;
+  isActive: boolean;
+  target?: string;
+  rel?: string;
+}): string {
+  return `<a class="bo-nav-link ${params.isActive ? "is-active" : ""}" href="${params.href}"${
+    params.target ? ` target="${params.target}"` : ""
+  }${params.rel ? ` rel="${params.rel}"` : ""}>
+    <span class="bo-nav-icon">${params.icon}</span>
+    <span>${escapeHtml(params.label)}</span>
+  </a>`;
+}
+
 export function backofficeShell(title: string, body: string, flashMessage?: string): string {
   const flash = flashMessage ? `<div class="flash">${escapeHtml(flashMessage)}</div>` : "";
+  const activeNav = resolveBackofficeNav(title);
   return `<!doctype html>
 <html lang="es">
 <head>
@@ -14,195 +50,378 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,500;6..72,700;6..72,800&display=swap" rel="stylesheet" />
   <style>
-    :root { --bg:#090909; --card:#131313; --line:#262626; --muted:#9d9d9d; --text:#f8f8f8; --gold:#c6a24a; --gold-soft:#e5c46f; }
+    :root {
+      --bg:#f3f1ec;
+      --surface:#ffffff;
+      --surface-soft:#fbfaf7;
+      --surface-strong:#191714;
+      --line:#dfd9cf;
+      --text:#171717;
+      --muted:#6f6b63;
+      --gold:#f2b705;
+      --gold-soft:#8c6910;
+      --shadow:0 16px 36px rgba(26,24,20,.06);
+      --radius:18px;
+    }
     * { box-sizing:border-box; }
-    body { margin:0; min-height:100vh; background:radial-gradient(circle at top right,#141414 0%,var(--bg) 55%); color:var(--text); font-family:Segoe UI,Arial,sans-serif; }
+    html { background:var(--bg); }
+    body {
+      margin:0;
+      min-height:100vh;
+      background:radial-gradient(circle at top left, rgba(242,183,5,.08), transparent 24%), linear-gradient(180deg,#f8f6f1 0%, var(--bg) 22%, #efede7 100%);
+      color:var(--text);
+      font-family:Inter, "Segoe UI", Arial, sans-serif;
+    }
+    a { color:inherit; }
     .layout { min-height:100vh; display:grid; grid-template-columns:260px minmax(0,1fr); }
-    .sidebar { border-right:1px solid var(--line); background:linear-gradient(180deg,#0f0f0f,#0b0b0b); padding:20px 14px; display:grid; align-content:start; gap:14px; position:sticky; top:0; height:100vh; }
-    .side-brand { border:1px solid #2d2d2d; border-radius:12px; padding:12px; display:grid; gap:4px; background:#121212; }
-    .side-brand strong { letter-spacing:.14em; font-size:20px; text-transform:uppercase; }
-    .side-brand span { color:var(--gold); font-size:11px; letter-spacing:.2em; text-transform:uppercase; }
-    .side-nav { display:grid; gap:6px; }
-    .side-nav a { border:1px solid #272727; border-radius:10px; background:#121212; color:#d9d9d9; text-decoration:none; font-size:12px; text-transform:uppercase; letter-spacing:.07em; padding:10px 11px; font-weight:600; }
-    .side-nav a:hover { border-color:#5e4c25; color:var(--gold-soft); }
+    .sidebar {
+      position:sticky;
+      top:0;
+      height:100vh;
+      padding:26px 20px;
+      border-right:1px solid #e2ddd5;
+      background:rgba(248,247,243,.82);
+      backdrop-filter:blur(18px);
+      display:grid;
+      grid-template-rows:auto auto 1fr auto;
+      gap:22px;
+    }
+    .side-brand {
+      display:grid;
+      gap:8px;
+      padding:18px;
+      border:1px solid #dfd9cf;
+      border-radius:22px;
+      background:linear-gradient(180deg,#ffffff,#f8f6f1);
+      box-shadow:var(--shadow);
+    }
+    .side-brand-mark {
+      display:inline-grid;
+      place-items:center;
+      width:34px;
+      height:34px;
+      border-radius:10px;
+      background:#171717;
+      color:#f2b705;
+      font-size:13px;
+      font-weight:700;
+      letter-spacing:.16em;
+    }
+    .side-brand strong { font-family:Newsreader, Georgia, serif; font-size:20px; line-height:1; font-weight:700; }
+    .side-brand span { color:var(--muted); font-size:11px; letter-spacing:.24em; text-transform:uppercase; }
+    .side-section-label { color:#8b857b; font-size:11px; letter-spacing:.18em; text-transform:uppercase; font-weight:700; padding:0 8px; }
+    .side-nav { display:grid; gap:8px; }
+    .bo-nav-link {
+      display:flex;
+      align-items:center;
+      gap:12px;
+      padding:13px 14px;
+      border-radius:14px;
+      text-decoration:none;
+      color:#49453f;
+      border:1px solid transparent;
+      font-size:13px;
+      font-weight:600;
+      letter-spacing:.04em;
+      transition:all .18s ease;
+    }
+    .bo-nav-link:hover { background:#ffffff; border-color:#d9d2c6; color:#1c1b18; transform:translateX(1px); }
+    .bo-nav-link.is-active { background:#ffffff; border-color:#e1c981; color:#8a6200; box-shadow:var(--shadow); }
+    .bo-nav-icon { width:18px; text-align:center; font-size:15px; color:inherit; opacity:.88; }
+    .side-footer { display:grid; gap:10px; align-content:end; }
+    .side-footer a {
+      display:flex;
+      align-items:center;
+      gap:10px;
+      text-decoration:none;
+      color:#726c63;
+      font-size:12px;
+      padding:10px 12px;
+      border-radius:12px;
+    }
+    .side-footer a:hover { background:#fff; color:#1f1e1a; }
     .main { min-width:0; }
-    .wrap { width:min(1220px,94vw); margin:0 auto; padding:24px 0 64px; }
-    .top { display:flex; align-items:center; justify-content:space-between; margin-bottom:26px; border-bottom:1px solid var(--line); padding-bottom:18px; gap:12px; flex-wrap:wrap; }
-    .brand { display:grid; gap:2px; }
-    .brand strong { letter-spacing:.14em; font-size:24px; text-transform:uppercase; }
-    .brand span { color:var(--gold); font-size:12px; letter-spacing:.24em; text-transform:uppercase; }
-    .actions { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
-    .button, button { display:inline-flex; align-items:center; justify-content:center; gap:8px; border-radius:10px; border:1px solid var(--line); background:#1a1a1a; color:var(--text); text-decoration:none; font-weight:600; font-size:13px; padding:10px 14px; cursor:pointer; transition:border-color .18s,color .18s,opacity .18s,transform .18s; }
-    .button.primary, button.primary { background:linear-gradient(120deg,#b58f3f,var(--gold-soft)); color:#0b0b0b; border-color:transparent; }
-    .button:hover, button:hover { border-color:var(--gold); color:var(--gold-soft); }
-    .button.primary:hover, button.primary:hover { color:#0b0b0b; filter:brightness(1.05); }
+    .wrap { width:min(1380px,94vw); margin:0 auto; padding:22px 0 72px; }
+    .top {
+      display:grid;
+      grid-template-columns:minmax(0,1fr) auto;
+      align-items:center;
+      gap:20px;
+      margin-bottom:22px;
+      padding-bottom:18px;
+      border-bottom:1px solid #dfd9cf;
+    }
+    .brand { display:grid; gap:6px; }
+    .brand small { color:var(--gold-soft); font-size:11px; letter-spacing:.16em; text-transform:uppercase; font-weight:700; }
+    .brand strong { margin:0; font-family:Newsreader, Georgia, serif; font-size:52px; line-height:.9; font-weight:700; letter-spacing:-.03em; }
+    .brand span { color:#5b5750; font-size:18px; line-height:1.45; max-width:760px; }
+    .actions { display:flex; gap:10px; align-items:center; flex-wrap:wrap; justify-content:flex-end; }
+    .bo-search {
+      display:flex;
+      align-items:center;
+      gap:10px;
+      min-width:280px;
+      padding:0 14px;
+      height:48px;
+      border:1px solid #ddd6ca;
+      border-radius:14px;
+      background:#fff;
+    }
+    .bo-search input {
+      border:0;
+      background:transparent;
+      padding:0;
+      height:auto;
+      min-height:auto;
+      outline:none;
+      box-shadow:none;
+      font-size:13px;
+      color:#272522;
+    }
+    .bo-user-chip {
+      display:flex;
+      align-items:center;
+      gap:12px;
+      min-height:52px;
+      padding:10px 14px;
+      border-radius:16px;
+      border:1px solid #ddd6ca;
+      background:#fff;
+      box-shadow:var(--shadow);
+    }
+    .bo-user-avatar {
+      display:inline-grid;
+      place-items:center;
+      width:36px;
+      height:36px;
+      border-radius:12px;
+      background:#191714;
+      color:#f2b705;
+      font-weight:700;
+      font-size:12px;
+    }
+    .bo-user-copy { display:grid; gap:2px; }
+    .bo-user-copy strong { font-size:13px; line-height:1.1; }
+    .bo-user-copy span { color:#7a746c; font-size:11px; letter-spacing:.08em; text-transform:uppercase; }
+    .button, button {
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      gap:8px;
+      min-height:42px;
+      border-radius:12px;
+      border:1px solid #d8d1c5;
+      background:#fff;
+      color:#26231f;
+      text-decoration:none;
+      font-weight:700;
+      font-size:13px;
+      padding:10px 14px;
+      cursor:pointer;
+      transition:border-color .18s ease,color .18s ease,transform .18s ease, background .18s ease;
+    }
+    .button:hover, button:hover { border-color:#d0a72f; color:#7b5f00; transform:translateY(-1px); }
+    .button.primary, button.primary { background:#f2b705; color:#151311; border-color:#d1a32d; box-shadow:0 8px 22px rgba(242,183,5,.22); }
+    .button.primary:hover, button.primary:hover { color:#151311; }
     .button[disabled], button[disabled] { opacity:.56; cursor:not-allowed; transform:none; }
-    button.is-running { border-color:#7b6127; background:#231c0f; color:#f7dda1; box-shadow:0 0 0 1px rgba(198,162,74,.22) inset; }
-    .grid { display:grid; gap:18px; }
-    .card { background:linear-gradient(180deg,#141414,#101010); border:1px solid var(--line); border-radius:16px; padding:18px; }
-    .flash { margin:0 0 16px; border:1px solid #3e3520; background:#1f1a0d; color:var(--gold-soft); padding:12px 14px; border-radius:10px; font-size:14px; }
-    .error { margin:0 0 12px; border:1px solid #633030; background:#2a1414; color:#ef9f9f; padding:10px 12px; border-radius:10px; font-size:13px; }
+    button.is-running { border-color:#d1a32d; background:#fff4cf; color:#7b5f00; }
+    .grid { display:grid; gap:20px; }
+    .card { background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:22px; box-shadow:var(--shadow); }
+    .flash, .error { margin:0 0 16px; padding:12px 14px; border-radius:14px; font-size:13px; line-height:1.45; border:1px solid transparent; }
+    .flash { background:#fff7df; border-color:#dfc06b; color:#735600; }
+    .error { background:#ffe8e8; border-color:#cf8a8a; color:#922828; }
     table { width:100%; border-collapse:collapse; font-size:13px; }
-    thead th { color:var(--muted); font-weight:600; text-transform:uppercase; font-size:11px; letter-spacing:.08em; border-bottom:1px solid var(--line); padding:10px 8px; text-align:left; }
-    tbody td { border-bottom:1px solid #1e1e1e; padding:12px 8px; vertical-align:top; }
-    .pill { display:inline-flex; align-items:center; border-radius:999px; font-size:10px; letter-spacing:.06em; text-transform:uppercase; border:1px solid var(--line); padding:4px 8px; }
-    .pill.live { color:#9ae0b9; border-color:#2d5f45; background:#102318; } .pill.draft { color:#d4d4d4; border-color:#3a3a3a; background:#181818; } .pill.gold { color:var(--gold-soft); border-color:#574823; background:#1f1a0f; }
-    .pill.ai-allow { color:#b6f3ca; border-color:#226840; background:#132b1d; }
-    .pill.ai-review { color:#f5dd96; border-color:#70591f; background:#221b0d; }
-    .pill.ai-reject { color:#ffc4c4; border-color:#7b2f2f; background:#2c1313; }
-    .meta { display:flex; gap:8px; flex-wrap:wrap; margin-top:7px; } .title { font-size:14px; font-weight:700; line-height:1.35; }
-    form { display:grid; gap:14px; } .field { display:grid; gap:6px; }
-    .field label { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.07em; font-weight:600; }
-    input, textarea, select { width:100%; border-radius:10px; border:1px solid var(--line); background:#121212; color:var(--text); padding:11px 12px; font-size:14px; }
-    textarea { min-height:130px; resize:vertical; } input:focus, textarea:focus, select:focus { outline:2px solid #9b7b2d; outline-offset:1px; border-color:#9b7b2d; }
+    thead th { color:#7b766e; font-weight:700; text-transform:uppercase; font-size:10px; letter-spacing:.14em; border-bottom:1px solid #e6e1d8; padding:12px 8px; text-align:left; }
+    tbody td { border-bottom:1px solid #efebe3; padding:14px 8px; vertical-align:top; }
+    .pill { display:inline-flex; align-items:center; border-radius:999px; font-size:10px; letter-spacing:.08em; text-transform:uppercase; border:1px solid #d8d1c5; padding:4px 8px; background:#fff; }
+    .pill.live, .pill.ai-allow { color:#19613b; border-color:#aed2bb; background:#edf8f0; }
+    .pill.draft { color:#565049; border-color:#d6d0c4; background:#f8f5ef; }
+    .pill.gold, .pill.ai-review { color:#825f00; border-color:#dfc06b; background:#fff4d0; }
+    .pill.ai-reject { color:#922828; border-color:#d4a0a0; background:#ffecec; }
+    .meta { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
+    .title { font-size:15px; font-weight:700; line-height:1.35; }
+    form { display:grid; gap:14px; }
+    .field { display:grid; gap:7px; }
+    .field label { color:#666159; font-size:11px; text-transform:uppercase; letter-spacing:.14em; font-weight:700; }
+    input, textarea, select { width:100%; border-radius:12px; border:1px solid #d8d1c5; background:#ffffff; color:#1f1d1a; padding:12px 13px; font-size:14px; min-height:46px; }
+    textarea { min-height:132px; resize:vertical; }
+    input:focus, textarea:focus, select:focus { outline:2px solid rgba(242,183,5,.18); outline-offset:1px; border-color:#d0a72f; }
     .cols-2 { display:grid; gap:14px; grid-template-columns:repeat(2,minmax(0,1fr)); }
-    .checks { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
-    .checks label { border:1px solid var(--line); border-radius:10px; background:#111111; padding:10px 12px; display:flex; gap:8px; align-items:center; cursor:pointer; color:#efefef; font-size:13px; text-transform:none; letter-spacing:normal; font-weight:500; }
-    .inline-actions { display:flex; gap:6px; flex-wrap:wrap; } .danger { border-color:#4f2222; color:#f2b0b0; background:#1f1111; }
-    .ai-box { border:1px solid #3f341d; background:linear-gradient(160deg,#1b1710,#111111); border-radius:12px; padding:14px; margin-bottom:14px; display:grid; gap:10px; }
-    .ai-head { display:flex; gap:10px; align-items:flex-start; justify-content:space-between; flex-wrap:wrap; }
-    .ai-title { margin:0; font-size:17px; letter-spacing:.04em; text-transform:uppercase; }
-    .ai-sub { margin:0; font-size:13px; color:#cfcfcf; line-height:1.45; }
-    .ai-badge { display:inline-flex; align-items:center; border:1px solid #5f4e27; background:#201a0f; color:var(--gold-soft); border-radius:999px; font-size:10px; padding:4px 8px; text-transform:uppercase; letter-spacing:.08em; }
+    .checks { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+    .checks label { border:1px solid #dbd4c9; border-radius:14px; background:#fff; padding:11px 12px; display:flex; gap:8px; align-items:center; cursor:pointer; color:#2f2b27; font-size:13px; text-transform:none; letter-spacing:normal; font-weight:500; }
+    .inline-actions { display:flex; gap:6px; flex-wrap:wrap; }
+    .danger { border-color:#cf8a8a; color:#922828; background:#ffe8e8; }
+    .ai-box { border:1px solid #e1cd91; background:linear-gradient(180deg,#fff8e6,#fffdf8); border-radius:18px; padding:18px; margin-bottom:16px; display:grid; gap:12px; }
+    .ai-head { display:flex; gap:12px; align-items:flex-start; justify-content:space-between; flex-wrap:wrap; }
+    .ai-title { margin:0; font-size:18px; letter-spacing:.06em; text-transform:uppercase; }
+    .ai-sub { margin:0; font-size:13px; color:#544f48; line-height:1.5; }
+    .ai-badge { display:inline-flex; align-items:center; border:1px solid #e1c981; background:#fff3c6; color:#775a00; border-radius:999px; font-size:10px; padding:5px 8px; text-transform:uppercase; letter-spacing:.1em; font-weight:700; }
     .ai-actions { display:flex; gap:8px; flex-wrap:wrap; }
     .ai-actions button { position:relative; }
-    .ai-main-action { font-size:14px; padding:11px 16px; letter-spacing:.02em; }
-    .ai-advanced { border:1px solid #2b2b2b; border-radius:10px; background:#101010; padding:8px 10px; display:grid; gap:8px; }
-    .ai-advanced summary { cursor:pointer; user-select:none; color:#d7d7d7; font-size:12px; text-transform:uppercase; letter-spacing:.08em; }
+    .ai-main-action { font-size:14px; padding:12px 16px; }
+    .ai-advanced { border:1px solid #e2ddd5; border-radius:14px; background:#faf8f3; padding:10px 12px; display:grid; gap:8px; }
+    .ai-advanced summary { cursor:pointer; user-select:none; color:#3d3934; font-size:12px; text-transform:uppercase; letter-spacing:.12em; font-weight:700; }
     .ai-advanced .ai-actions { margin-top:8px; }
     .ai-actions button.is-running::after { content:""; width:11px; height:11px; border:2px solid #9b7c36; border-top-color:transparent; border-radius:999px; margin-left:8px; animation:spin .7s linear infinite; }
-    .ai-status { border:1px solid #2b2b2b; background:#121212; color:#d4d4d4; border-radius:10px; padding:10px 12px; font-size:13px; line-height:1.45; }
-    .ai-status.ok { border-color:#27543a; background:#102016; color:#c8f0d6; }
-    .ai-status.warn { border-color:#654f1f; background:#221b0d; color:#f5dd9b; }
-    .ai-status.error { border-color:#6e2f2f; background:#281414; color:#f2bbbb; }
-    .ai-review { border:1px solid #2f2f2f; background:#111111; border-radius:10px; padding:11px 12px; display:grid; gap:6px; }
-    .ai-review strong { font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:#d6d6d6; }
-    .ai-review p { margin:0; font-size:13px; line-height:1.45; color:#f0f0f0; }
-    .muted { color:var(--muted); font-size:12px; line-height:1.4; margin:0; }
-    .table-tools { display:grid; grid-template-columns:minmax(220px,1fr) repeat(2,minmax(140px,200px)) auto; gap:8px; margin-bottom:12px; align-items:center; }
+    .ai-status, .ai-review, .ai-chat-answer { border:1px solid #ddd7cc; background:#fff; border-radius:14px; padding:10px 12px; font-size:13px; line-height:1.5; }
+    .ai-status { color:#4d4a44; }
+    .ai-status.ok { border-color:#aed2bb; background:#edf8f0; color:#1f603b; }
+    .ai-status.warn { border-color:#dfc06b; background:#fff7df; color:#775a00; }
+    .ai-status.error { border-color:#d4a0a0; background:#ffecec; color:#922828; }
+    .ai-review { display:grid; gap:6px; }
+    .ai-review strong { font-size:12px; text-transform:uppercase; letter-spacing:.1em; color:#514d46; }
+    .ai-review p { margin:0; color:#23211d; }
+    .muted { color:var(--muted); font-size:12px; line-height:1.45; margin:0; }
+    .table-tools { display:grid; grid-template-columns:minmax(220px,1fr) repeat(2,minmax(140px,200px)) auto; gap:10px; margin-bottom:12px; align-items:center; }
     .table-tools input, .table-tools select { width:100%; }
-    .table-count { font-size:12px; color:#b5b5b5; text-align:right; }
-    .cms-layout { display:grid; gap:16px; grid-template-columns:minmax(0,1.6fr) minmax(320px,0.8fr); align-items:start; }
-    .editor-stack { display:grid; gap:12px; }
-    .editor-card { border:1px solid #2a2a2a; border-radius:12px; background:#111111; padding:12px; display:grid; gap:10px; }
-    .editor-toolbar { display:flex; gap:6px; flex-wrap:wrap; border:1px solid #262626; border-radius:10px; padding:7px; background:#0f0f0f; }
-    .editor-toolbar button { padding:6px 9px; font-size:12px; min-width:auto; border-radius:8px; }
-    .editor-surface { border:1px solid #2b2b2b; border-radius:10px; background:#101010; min-height:260px; padding:12px; font-size:15px; line-height:1.55; overflow:auto; }
-    .editor-surface:focus { outline:2px solid #9b7b2d; outline-offset:1px; border-color:#9b7b2d; }
-    .editor-surface pre { background:#0a0a0a; border:1px solid #272727; border-radius:8px; padding:10px; overflow:auto; }
-    .editor-surface blockquote { border-left:3px solid #7a6029; margin:8px 0; padding:4px 0 4px 10px; color:#ccc; }
+    .table-count { font-size:12px; color:#757066; text-align:right; }
+    .cms-layout { display:grid; gap:18px; grid-template-columns:minmax(0,1.7fr) minmax(320px,0.82fr); align-items:start; }
+    .editor-stack { display:grid; gap:14px; }
+    .editor-card { border:1px solid #e2ddd5; border-radius:16px; background:var(--surface-soft); padding:14px; display:grid; gap:10px; }
+    .editor-toolbar { display:flex; gap:6px; flex-wrap:wrap; border:1px solid #ddd7cc; border-radius:12px; padding:8px; background:#f5f3ee; }
+    .editor-toolbar button { padding:7px 10px; font-size:12px; min-width:auto; border-radius:10px; min-height:auto; }
+    .editor-surface { border:1px solid #ddd7cc; border-radius:14px; background:#fff; min-height:260px; padding:14px; font-size:15px; line-height:1.6; overflow:auto; }
+    .editor-surface:focus { outline:2px solid rgba(242,183,5,.18); outline-offset:1px; border-color:#d0a72f; }
+    .editor-surface pre { background:#f5f3ee; border:1px solid #ddd7cc; border-radius:10px; padding:10px; overflow:auto; }
+    .editor-surface blockquote { border-left:3px solid #cfa73a; margin:8px 0; padding:4px 0 4px 12px; color:#4c4841; }
     .editor-hidden { display:none; }
-    .editor-metrics { display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px; font-size:12px; color:#a5a5a5; }
-    .editor-preview { border:1px dashed #383838; border-radius:10px; min-height:140px; padding:12px; color:#9f9f9f; font-size:13px; display:grid; place-items:center; text-align:center; background:#0f0f0f; }
-    .editor-preview img { max-width:100%; border-radius:8px; object-fit:cover; }
+    .editor-metrics { display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px; font-size:12px; color:#7b766e; }
+    .editor-preview { border:1px dashed #d7d0c4; border-radius:14px; min-height:148px; padding:12px; color:#7d786f; font-size:13px; display:grid; place-items:center; text-align:center; background:#fff; }
+    .editor-preview img { width:100%; height:100%; min-height:148px; border-radius:14px; object-fit:cover; }
     .editor-preview.has-image { padding:0; overflow:hidden; border-style:solid; }
-    .field .hint { margin-top:4px; font-size:12px; color:#8f8f8f; line-height:1.35; }
-    .ai-chat-answer { border:1px solid #2d2d2d; background:#101010; border-radius:10px; padding:10px 12px; font-size:13px; line-height:1.5; color:#e0e0e0; white-space:pre-wrap; }
+    .field .hint { margin-top:4px; font-size:12px; color:#7b766e; line-height:1.38; }
+    .ai-chat-answer { white-space:pre-wrap; color:#2b2925; }
     .ai-inline { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-    .ai-inline input[type="checkbox"] { width:16px; height:16px; margin:0; accent-color:#d1b462; }
-    .toast-stack { position:fixed; right:16px; bottom:16px; z-index:9999; display:grid; gap:8px; width:min(360px,calc(100vw - 24px)); pointer-events:none; }
-    .toast { border:1px solid #2f2f2f; background:#111111; color:#e7e7e7; border-radius:12px; padding:10px 12px; box-shadow:0 6px 24px rgba(0,0,0,.35); font-size:13px; line-height:1.4; opacity:0; transform:translateY(8px); animation:toast-in .18s ease forwards; }
-    .toast.ok { border-color:#2d5f45; background:#102318; color:#c9f0d7; }
-    .toast.warn { border-color:#70591f; background:#221b0d; color:#f5dd9b; }
-    .toast.error { border-color:#7b2f2f; background:#2c1313; color:#ffc4c4; }
+    .ai-inline input[type="checkbox"] { width:16px; height:16px; margin:0; accent-color:#d1b462; min-height:auto; }
+    .toast-stack { position:fixed; right:18px; bottom:18px; z-index:9999; display:grid; gap:8px; width:min(360px,calc(100vw - 24px)); pointer-events:none; }
+    .toast { border:1px solid #ddd7cc; background:#fff; color:#2b2a26; border-radius:14px; padding:10px 12px; box-shadow:0 12px 28px rgba(31,27,19,.12); font-size:13px; line-height:1.42; opacity:0; transform:translateY(8px); animation:toast-in .18s ease forwards; }
+    .toast.ok { border-color:#aed2bb; background:#edf8f0; color:#1f603b; }
+    .toast.warn { border-color:#dfc06b; background:#fff7df; color:#775a00; }
+    .toast.error { border-color:#d4a0a0; background:#ffecec; color:#922828; }
+    .split-title { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+    .split-title h3 { margin:0; font-size:16px; text-transform:uppercase; letter-spacing:.08em; }
+    .mini-tag { display:inline-flex; align-items:center; border:1px solid #dfc06b; border-radius:999px; padding:4px 8px; color:#7c5f00; font-size:10px; letter-spacing:.08em; text-transform:uppercase; background:#fff4d0; font-weight:700; }
+    .bo-hero { display:grid; grid-template-columns:minmax(0,1.35fr) 220px; gap:18px; align-items:stretch; padding:28px; border-radius:24px; background:linear-gradient(135deg,#ffffff,#faf7ef); border:1px solid #e5ddce; box-shadow:var(--shadow); }
+    .bo-hero-copy { display:grid; gap:10px; align-content:start; }
+    .bo-hero-copy small { color:#8f6900; font-size:11px; letter-spacing:.18em; text-transform:uppercase; font-weight:700; }
+    .bo-hero-copy h2 { margin:0; font-family:Newsreader, Georgia, serif; font-size:58px; line-height:.94; letter-spacing:-.04em; }
+    .bo-hero-copy p { margin:0; color:#4e4942; font-size:18px; line-height:1.6; max-width:740px; }
+    .bo-hero-art { border-radius:20px; background:linear-gradient(180deg,rgba(242,183,5,.22),transparent 48%), linear-gradient(180deg,#f5f2ea,#efebe1); border:1px solid #eadcbc; position:relative; overflow:hidden; }
+    .bo-hero-art::before, .bo-hero-art::after { content:""; position:absolute; right:22px; bottom:22px; width:26px; background:#fff; opacity:.8; border-radius:4px; }
+    .bo-hero-art::before { height:76px; box-shadow:-44px -32px 0 0 rgba(255,255,255,.84), -88px -12px 0 0 rgba(255,255,255,.6); }
+    .bo-hero-art::after { height:118px; box-shadow:-44px -12px 0 0 rgba(255,255,255,.58); }
+    .bo-stat-grid { display:grid; gap:14px; grid-template-columns:repeat(auto-fit,minmax(148px,1fr)); }
+    .bo-stat-card { padding:18px; border-radius:18px; background:#fff; border:1px solid #e4ddd2; box-shadow:var(--shadow); display:grid; gap:8px; }
+    .bo-stat-card strong { font-family:Newsreader, Georgia, serif; font-size:30px; line-height:1; }
+    .bo-stat-card span { color:#7b766e; font-size:11px; letter-spacing:.14em; text-transform:uppercase; font-weight:700; }
+    .bo-stat-card.emphasis { border-color:#dfc06b; box-shadow:0 12px 26px rgba(242,183,5,.14); }
+    .bo-module-grid { display:grid; gap:20px; grid-template-columns:minmax(0,1.6fr) 340px; align-items:start; }
+    .bo-side-panel { padding:22px; border-radius:24px; background:#191714; color:#fff; border:1px solid #2a2723; display:grid; gap:16px; position:sticky; top:24px; }
+    .bo-side-panel h3 { margin:0; font-size:15px; letter-spacing:.12em; text-transform:uppercase; color:#f2b705; }
+    .bo-side-panel p { margin:0; color:#d0cbc2; font-size:13px; line-height:1.55; }
+    .bo-side-panel .field label { color:#ddd3bd; }
+    .bo-side-panel input, .bo-side-panel textarea, .bo-side-panel select { background:#24211d; border-color:#3a3630; color:#f6f4ee; }
+    .bo-toggle-row { display:flex; align-items:center; justify-content:space-between; gap:14px; padding:10px 0; border-bottom:1px solid rgba(255,255,255,.08); }
+    .bo-toggle-row:last-child { border-bottom:0; }
+    .bo-toggle-row strong { font-size:13px; }
+    .bo-toggle-row span { color:#b9b2a7; font-size:11px; }
+    .bo-pill-switch { position:relative; width:46px; height:26px; border-radius:999px; background:#44403a; display:inline-block; }
+    .bo-pill-switch::after { content:""; position:absolute; top:3px; left:3px; width:20px; height:20px; border-radius:999px; background:#f7f5f1; transition:transform .18s ease; }
+    .bo-pill-switch.is-on { background:#f2b705; }
+    .bo-pill-switch.is-on::after { transform:translateX(20px); background:#151311; }
+    .bo-action-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+    .bo-action-tile { display:grid; place-items:center; gap:8px; min-height:110px; padding:16px; text-decoration:none; text-align:center; border:1px solid #e0d8cb; border-radius:16px; background:#fff; }
+    .bo-action-tile strong { font-size:13px; letter-spacing:.06em; text-transform:uppercase; }
+    .bo-action-tile span { font-size:22px; color:#8c6910; }
+    .bo-activity-list { display:grid; gap:0; }
+    .bo-activity-row { display:grid; grid-template-columns:100px minmax(0,1fr) auto; gap:16px; align-items:center; padding:14px 0; border-top:1px solid #eee7dc; }
+    .bo-activity-row:first-child { border-top:0; }
+    .bo-activity-time { color:#8a847a; font-size:11px; letter-spacing:.1em; text-transform:uppercase; }
+    .bo-activity-copy { display:grid; gap:5px; }
+    .bo-activity-copy strong { font-size:14px; }
+    .bo-activity-copy span { color:#777169; font-size:12px; }
+    .bo-kicker { display:inline-flex; align-items:center; gap:8px; color:#8d6907; font-size:11px; letter-spacing:.16em; text-transform:uppercase; font-weight:700; }
+    .bo-kicker::before { content:""; width:4px; height:18px; background:#f2b705; border-radius:999px; }
+    .bo-tabs { display:flex; gap:10px; flex-wrap:wrap; }
+    .bo-tab-btn { display:inline-flex; align-items:center; gap:8px; padding:11px 14px; border-radius:999px; border:1px solid #d8d1c5; background:#fff; color:#38342f; font-size:12px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; cursor:pointer; }
+    .bo-tab-btn.is-active { background:#191714; border-color:#191714; color:#fff; }
+    .bo-tab-panel { display:none; }
+    .bo-tab-panel.is-active { display:grid; gap:14px; }
+    .bo-compact-grid { display:grid; gap:14px; grid-template-columns:repeat(2,minmax(0,1fr)); }
+    .bo-subgrid-3 { display:grid; gap:12px; grid-template-columns:repeat(3,minmax(0,1fr)); }
+    .bo-note-box { padding:14px; border-radius:16px; border:1px solid #e3dccf; background:#faf8f3; }
+    .bo-note-box strong { display:block; margin-bottom:6px; font-size:13px; }
+    .bo-note-box p { margin:0; color:#645f57; font-size:13px; line-height:1.5; }
+    .bo-form-actions { display:flex; gap:10px; flex-wrap:wrap; }
+    .bo-inline-stat { display:flex; gap:10px; flex-wrap:wrap; }
+    .bo-inline-stat span { display:inline-flex; align-items:center; gap:8px; padding:8px 10px; border-radius:999px; background:#faf7ef; border:1px solid #e2ddd5; font-size:12px; }
     @keyframes toast-in { to { opacity:1; transform:translateY(0); } }
     @keyframes spin { from { transform:rotate(0deg); } to { transform:rotate(360deg); } }
-    .split-title { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
-    .split-title h3 { margin:0; font-size:16px; text-transform:uppercase; letter-spacing:.05em; }
-    .mini-tag { display:inline-flex; align-items:center; border:1px solid #423518; border-radius:999px; padding:4px 8px; color:#e0c779; font-size:10px; letter-spacing:.08em; text-transform:uppercase; background:#1a160d; }
-    /* Light editorial skin (Cronista Dorado) */
-    :root { --bg:#efefec; --card:#ffffff; --line:#ddddda; --muted:#6e6e6e; --text:#171717; --gold:#f2b705; --gold-soft:#8f6900; }
-    body { background:var(--bg); color:var(--text); font-family:Inter, "Segoe UI", Arial, sans-serif; }
-    .sidebar { border-right:1px solid #d9d9d5; background:#f7f7f5; }
-    .side-brand { border-color:#dadad7; background:#ffffff; }
-    .side-brand strong { font-family:Newsreader, Georgia, serif; color:#111111; }
-    .side-nav a { border-color:#d8d8d4; background:#ffffff; color:#3b3b3b; }
-    .side-nav a:hover { border-color:#d0a72f; color:#7c5f00; }
-    .top { border-bottom:1px solid #dcdcd8; }
-    .brand strong { font-family:Newsreader, Georgia, serif; color:#111111; font-size:44px; letter-spacing:0; text-transform:none; line-height:0.95; }
-    .brand span { color:#866700; letter-spacing:.12em; font-size:10px; }
-    .button, button { border-color:#d8d8d4; background:#ffffff; color:#2c2c2c; border-radius:10px; }
-    .button.primary, button.primary { background:#f2b705; color:#121212; border-color:#d1a32d; }
-    .button:hover, button:hover { border-color:#cba43a; color:#7b5f00; }
-    .button.primary:hover, button.primary:hover { color:#121212; }
-    button.is-running { border-color:#d1a32d; background:#fff4cf; color:#7b5f00; box-shadow:none; }
-    .card { background:#ffffff; border-color:#ddddda; }
-    .flash { border-color:#d0aa36; background:#fff7df; color:#6f5600; }
-    .error { border-color:#c56a6a; background:#ffe9e9; color:#8f2424; }
-    thead th { color:#6a6a6a; border-bottom-color:#ddddda; }
-    tbody td { border-bottom-color:#ededea; }
-    .pill { border-color:#d8d8d4; }
-    .pill.draft { color:#525252; border-color:#cfcfcb; background:#f5f5f2; }
-    .pill.gold { color:#876800; border-color:#d5b24f; background:#fff4d0; }
-    form .field label { color:#5f5f5f; }
-    input, textarea, select { border-color:#d8d8d4; background:#ffffff; color:#1f1f1f; }
-    textarea { background:#ffffff; }
-    input:focus, textarea:focus, select:focus { outline:2px solid rgba(198,162,74,.28); border-color:#d0a72f; }
-    .checks label { border-color:#d8d8d4; background:#ffffff; color:#2d2d2d; }
-    .danger { border-color:#bd6b6b; color:#8e3030; background:#ffe9e9; }
-    .ai-box { border-color:#d9be73; background:#fff8e4; }
-    .ai-sub { color:#5a5a5a; }
-    .ai-badge { border-color:#d2a933; background:#f9edc2; color:#765900; }
-    .ai-advanced { border-color:#dddcd8; background:#fafaf8; }
-    .ai-advanced summary { color:#3b3b3b; }
-    .ai-status { border-color:#d8d8d4; background:#f9f9f6; color:#4d4d4d; }
-    .ai-review { border-color:#dddcd8; background:#fafaf8; }
-    .ai-review strong { color:#555555; }
-    .ai-review p { color:#242424; }
-    .table-count { color:#777777; }
-    .editor-card { border-color:#dddcd8; background:#fafaf8; }
-    .editor-toolbar { border-color:#d8d8d4; background:#f2f2ef; }
-    .editor-surface { border-color:#d8d8d4; background:#ffffff; color:#212121; }
-    .editor-surface pre { background:#f5f5f3; border-color:#ddddda; color:#1f1f1f; }
-    .editor-surface blockquote { border-left-color:#cfa73a; color:#444444; }
-    .editor-metrics { color:#777777; }
-    .editor-preview { border-color:#d6d6d2; background:#ffffff; color:#7e7e7e; }
-    .field .hint { color:#777777; }
-    .ai-chat-answer { border-color:#dddcd8; background:#ffffff; color:#2a2a2a; }
-    .toast { border-color:#d8d8d4; background:#ffffff; color:#2b2b2b; box-shadow:0 6px 24px rgba(0,0,0,.12); }
-    .split-title h3 { color:#191919; }
-    .mini-tag { border-color:#d4ac40; color:#7c5f00; background:#fff4d0; }
-    @media (max-width:1100px) {
+    @media (max-width:1180px) {
       .layout { grid-template-columns:1fr; }
-      .sidebar { position:static; height:auto; border-right:0; border-bottom:1px solid var(--line); grid-template-columns:1fr; }
+      .sidebar { position:static; height:auto; border-right:0; border-bottom:1px solid var(--line); grid-template-rows:auto auto auto auto; }
       .side-nav { grid-template-columns:repeat(2,minmax(0,1fr)); }
+      .wrap { width:min(1220px,94vw); }
+      .top { grid-template-columns:1fr; }
+      .actions { justify-content:flex-start; }
+      .bo-module-grid, .bo-hero { grid-template-columns:1fr; }
+      .bo-side-panel { position:static; }
     }
     @media (max-width:900px) {
-      .cols-2, .checks, .table-tools, .cms-layout { grid-template-columns:1fr; }
+      .cols-2, .checks, .table-tools, .cms-layout, .bo-compact-grid, .bo-subgrid-3 { grid-template-columns:1fr; }
       .table-count { text-align:left; }
       table, thead, tbody, th, td, tr { display:block; }
       thead { display:none; }
-      tbody tr { border:1px solid var(--line); border-radius:12px; margin-bottom:10px; padding:10px; }
+      tbody tr { border:1px solid var(--line); border-radius:14px; margin-bottom:10px; padding:10px; background:#fff; }
       tbody td { border:0; padding:6px 0; }
+      .bo-search { min-width:0; width:100%; }
+      .bo-activity-row { grid-template-columns:1fr; gap:8px; }
+      .brand strong { font-size:42px; }
+      .bo-hero-copy h2 { font-size:44px; }
     }
   </style>
 </head>
 <body>
   <div class="layout">
     <aside class="sidebar">
-      <div class="side-brand"><strong>PULSO</strong><span>Backoffice</span></div>
+      <div class="side-brand">
+        <span class="side-brand-mark">PP</span>
+        <strong>Pulso Pais</strong>
+        <span>Situation Room</span>
+      </div>
+      <div class="side-section-label">Navegacion</div>
       <nav class="side-nav">
-        <a href="/backoffice"><span>Panel</span></a>
-        <a href="/backoffice/news/new"><span>Nueva Nota</span></a>
-        <a href="/backoffice/news/batch"><span>Noticias Lote</span></a>
-        <a href="/backoffice/polls"><span>Encuestas</span></a>
-        <a href="/backoffice/users"><span>Usuarios</span></a>
-        <a href="/backoffice#theme-control"><span>Temas</span></a>
-        <a href="/backoffice/ia-lab"><span>IA Lab</span></a>
-        <a href="/backoffice/ai/context" target="_blank" rel="noreferrer"><span>Wrapper IA</span></a>
+        ${backofficeNavLink({ href: "/backoffice", label: "Panel", icon: "▦", isActive: activeNav === "panel" })}
+        ${backofficeNavLink({ href: "/backoffice/news/new", label: "Centro IA", icon: "+", isActive: activeNav === "editorial" })}
+        ${backofficeNavLink({ href: "/backoffice/polls", label: "Encuestas", icon: "◫", isActive: activeNav === "polls" })}
+        ${backofficeNavLink({ href: "/backoffice/users", label: "Usuarios", icon: "◉", isActive: activeNav === "users" })}
+        ${backofficeNavLink({ href: "/backoffice#theme-control", label: "Control portada", icon: "≣", isActive: activeNav === "panel" })}
       </nav>
+      <div class="side-footer">
+        <a href="/backoffice/ia-lab"><span class="bo-nav-icon">i</span><span>Diagnostico IA</span></a>
+        <a href="/backoffice/logout"><span class="bo-nav-icon">×</span><span>Cerrar sesion</span></a>
+      </div>
     </aside>
     <main class="main">
       <div class="wrap">
         <header class="top">
-          <div class="brand"><strong>PULSO PAIS</strong><span>Backoffice Editorial</span></div>
+          <div class="brand">
+            <small>Dashboard editorial</small>
+            <strong>${escapeHtml(title)}</strong>
+            <span>Centro de comando para contenido, portada, encuestas y operaciones IA editoriales.</span>
+          </div>
           <div class="actions">
-            <a class="button" href="/backoffice">Panel</a>
-            <a class="button" href="/backoffice/news/new">Nueva Nota</a>
-            <a class="button" href="/backoffice/news/batch">Noticias Lote</a>
-            <a class="button" href="/backoffice/polls">Encuestas</a>
-            <a class="button" href="/backoffice/users">Usuarios</a>
-            <a class="button" href="/backoffice/logout">Cerrar Sesion</a>
+            <label class="bo-search" aria-label="Buscar contenido">
+              <span class="bo-nav-icon">⌕</span>
+              <input type="text" placeholder="Buscar contenido..." />
+            </label>
+            <div class="bo-user-chip">
+              <span class="bo-user-avatar">EP</span>
+              <div class="bo-user-copy">
+                <strong>Editor Principal</strong>
+                <span>Turno manana</span>
+              </div>
+            </div>
           </div>
         </header>
         ${flash}
@@ -214,7 +433,6 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
   <script>
     (function () {
       const toastStack = document.getElementById("boToastStack");
-
       function toast(message, level) {
         if (!toastStack || !message) {
           return;
@@ -231,14 +449,12 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
           }, 220);
         }, 2600);
       }
-
       window.pulsoToast = toast;
     })();
   </script>
 </body>
 </html>`;
 }
-
 export function renderLogin(errorMessage?: string): string {
   const errorHtml = errorMessage ? `<div class="error">${escapeHtml(errorMessage)}</div>` : "";
   return `<!doctype html>
@@ -402,6 +618,240 @@ function isoLocalDate(value: Date | null): string {
   return `${year}-${month}-${day}T${hours}:${minutes}`;
 }
 
+type EditorialBatchStudioState = {
+  totalItems: number;
+  campaignPercent: number;
+  campaignTopic: string;
+  generalBrief: string;
+  useResearchAgent: boolean;
+  includeCampaignLine: boolean;
+  campaignLine: string;
+  publishStatus: string;
+  sectionHint: string;
+  provinceHint: string;
+  requireImageUrl: boolean;
+  defaultSourceName: string;
+  defaultAuthorName: string;
+  defaultSourceUrl: string;
+  summary?: string | null;
+};
+
+type EditorialRewriteStudioState = {
+  instruction: string;
+  limit: number;
+  scope: string;
+  publishStatus: string;
+  sectionHint: string;
+  provinceHint: string;
+  includeCampaignLine: boolean;
+  campaignLine: string;
+  deleteDuplicates: boolean;
+  summary?: string | null;
+};
+
+function renderEditorialStudio(params: {
+  batch?: Partial<EditorialBatchStudioState>;
+  rewrite?: Partial<EditorialRewriteStudioState>;
+  activeMode?: string;
+}): string {
+  const batch: EditorialBatchStudioState = {
+    totalItems: 1,
+    campaignPercent: 0,
+    campaignTopic: "",
+    generalBrief: "",
+    useResearchAgent: true,
+    includeCampaignLine: true,
+    campaignLine: "",
+    publishStatus: "DRAFT",
+    sectionHint: "",
+    provinceHint: "",
+    requireImageUrl: true,
+    defaultSourceName: "Pulso Pais IA",
+    defaultAuthorName: "Redaccion Pulso Pais",
+    defaultSourceUrl: "",
+    summary: "",
+    ...(params.batch ?? {}),
+  };
+
+  const rewrite: EditorialRewriteStudioState = {
+    instruction:
+      "Convierte las noticias externas relevantes en notas propias de Pulso Pais, manteniendo los hechos, reformulando el enfoque a nuestra editorial y asegurando imagen valida.",
+    limit: 6,
+    scope: "mixed",
+    publishStatus: "DRAFT",
+    sectionHint: "",
+    provinceHint: "",
+    includeCampaignLine: true,
+    campaignLine: batch.campaignLine,
+    deleteDuplicates: false,
+    summary: "",
+    ...(params.rewrite ?? {}),
+  };
+
+  const activeMode = (params.activeMode ?? "single").toLowerCase();
+
+  return `<div class="editor-card" id="studio">
+    <div class="split-title">
+      <div>
+        <div class="bo-kicker">Centro Editorial IA</div>
+        <h3 style="margin-top:8px;">Operacion editorial unificada</h3>
+      </div>
+      <span class="mini-tag">nota puntual + lote + rewrite</span>
+    </div>
+    <p class="muted">Usa una sola consola para generar 1 nota, lanzar una corrida de cobertura o internalizar enlaces externos en noticias propias. La edicion manual sigue abajo para revisar y publicar.</p>
+    <div class="bo-tabs" id="studioTabs">
+      <button type="button" class="bo-tab-btn ${activeMode === "single" ? "is-active" : ""}" data-studio-tab="single">Nota puntual</button>
+      <button type="button" class="bo-tab-btn ${activeMode === "batch" ? "is-active" : ""}" data-studio-tab="batch">Cobertura en lote</button>
+      <button type="button" class="bo-tab-btn ${activeMode === "rewrite" ? "is-active" : ""}" data-studio-tab="rewrite">Internalizar externas</button>
+    </div>
+
+    <section class="bo-tab-panel ${activeMode === "single" ? "is-active" : ""}" data-studio-panel="single">
+      <div class="bo-note-box">
+        <strong>Operacion puntual</strong>
+        <p>Escribe el brief en el bloque IA de abajo y elige entre <em>Genera con IA</em> o <em>Investigar y generar nota propia</em>. Si el agente periodista encuentra fuentes calientes, traerá contexto, imagen y media para autocompletar el formulario.</p>
+      </div>
+      <div class="bo-inline-stat">
+        <span>Cantidad fija: <strong>1</strong></span>
+        <span>Revision manual: <strong>obligatoria</strong></span>
+        <span>Destino: <strong>editor de noticia</strong></span>
+      </div>
+    </section>
+
+    <section class="bo-tab-panel ${activeMode === "batch" ? "is-active" : ""}" data-studio-panel="batch">
+      ${batch.summary ? `<div class="flash">${escapeHtml(batch.summary)}</div>` : ""}
+      <form method="post" action="/backoffice/news/batch" data-studio-submit="batch">
+        <div class="bo-compact-grid">
+          <div class="field">
+            <label for="batchTotalItems">Cantidad total</label>
+            <input id="batchTotalItems" name="totalItems" type="number" min="1" max="40" value="${batch.totalItems}" />
+          </div>
+          <div class="field">
+            <label for="batchCampaignPercent">Porcentaje campana (%)</label>
+            <input id="batchCampaignPercent" name="campaignPercent" type="number" min="0" max="100" value="${batch.campaignPercent}" />
+          </div>
+        </div>
+        <div class="field">
+          <label for="batchCampaignTopic">Tema de campana</label>
+          <textarea id="batchCampaignTopic" name="campaignTopic" rows="3" placeholder="Ej: 30% sobre Dante Gebel, ascenso social, humor cultural y consolidacion argentina.">${escapeHtml(batch.campaignTopic)}</textarea>
+        </div>
+        <div class="field">
+          <label for="batchGeneralBrief">Brief general para el resto</label>
+          <textarea id="batchGeneralBrief" name="generalBrief" rows="3" placeholder="Ej: agenda politica federal, gobernadores, Congreso, economia real y radar electoral.">${escapeHtml(batch.generalBrief)}</textarea>
+        </div>
+        <div class="checks">
+          <label><input type="checkbox" name="useResearchAgent" ${batch.useResearchAgent ? "checked" : ""} /> Modo periodista (investiga antes de escribir)</label>
+          <label><input type="checkbox" name="includeCampaignLine" ${batch.includeCampaignLine ? "checked" : ""} /> Incluir bajada/campana activa</label>
+          <label><input type="checkbox" name="requireImageUrl" ${batch.requireImageUrl ? "checked" : ""} /> Exigir imagen valida</label>
+        </div>
+        <div class="field">
+          <label for="batchCampaignLine">Bajada editorial / campana activa</label>
+          <textarea id="batchCampaignLine" name="campaignLine" rows="2">${escapeHtml(batch.campaignLine)}</textarea>
+        </div>
+        <div class="bo-subgrid-3">
+          <div class="field">
+            <label for="batchPublishStatus">Estado</label>
+            <select id="batchPublishStatus" name="publishStatus">
+              <option value="DRAFT" ${batch.publishStatus === "DRAFT" ? "selected" : ""}>DRAFT</option>
+              <option value="PUBLISHED" ${batch.publishStatus === "PUBLISHED" ? "selected" : ""}>PUBLISHED</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="batchSectionHint">Seccion base</label>
+            <select id="batchSectionHint" name="sectionHint">
+              <option value="">Sin forzar</option>
+              ${SECTION_OPTIONS.map((option) => `<option value="${option.value}" ${batch.sectionHint === option.value ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}
+            </select>
+          </div>
+          <div class="field">
+            <label for="batchProvinceHint">Distrito base</label>
+            <select id="batchProvinceHint" name="provinceHint">
+              <option value="">Sin distrito especifico</option>
+              ${PROVINCE_OPTIONS.map((option) => `<option value="${option.value}" ${batch.provinceHint === option.value ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}
+            </select>
+          </div>
+        </div>
+        <div class="bo-compact-grid">
+          <div class="field">
+            <label for="batchSourceName">Fuente por defecto</label>
+            <input id="batchSourceName" name="defaultSourceName" value="${escapeHtml(batch.defaultSourceName)}" />
+          </div>
+          <div class="field">
+            <label for="batchAuthorName">Autor por defecto</label>
+            <input id="batchAuthorName" name="defaultAuthorName" value="${escapeHtml(batch.defaultAuthorName)}" />
+          </div>
+        </div>
+        <div class="field">
+          <label for="batchSourceUrl">URL fuente fallback (opcional)</label>
+          <input id="batchSourceUrl" name="defaultSourceUrl" value="${escapeHtml(batch.defaultSourceUrl)}" />
+        </div>
+        <div class="bo-form-actions">
+          <button type="submit" class="primary" data-submit-label="Lanzando cobertura IA...">Lanzar cobertura IA</button>
+          <span class="muted">La IA crea y guarda directamente el lote. Si activas modo periodista, primero investiga agenda caliente.</span>
+        </div>
+      </form>
+    </section>
+
+    <section class="bo-tab-panel ${activeMode === "rewrite" ? "is-active" : ""}" data-studio-panel="rewrite">
+      ${rewrite.summary ? `<div class="flash">${escapeHtml(rewrite.summary)}</div>` : ""}
+      <form method="post" action="/backoffice/news/internalize" data-studio-submit="rewrite">
+        <div class="field">
+          <label for="rewriteInstruction">Instruccion administrativa para IA</label>
+          <textarea id="rewriteInstruction" name="instruction" rows="4" placeholder="Ej: fijate todas las noticias que apunten a portales externos, reescribilas como notas propias de Pulso Pais, con tono editorial federal y fotografia portada valida.">${escapeHtml(rewrite.instruction)}</textarea>
+        </div>
+        <div class="bo-compact-grid">
+          <div class="field">
+            <label for="rewriteLimit">Cantidad maxima</label>
+            <input id="rewriteLimit" name="limit" type="number" min="1" max="20" value="${rewrite.limit}" />
+          </div>
+          <div class="field">
+            <label for="rewriteScope">Alcance</label>
+            <select id="rewriteScope" name="scope">
+              <option value="mixed" ${rewrite.scope === "mixed" ? "selected" : ""}>Mixto: actualiza existentes + crea faltantes</option>
+              <option value="existing" ${rewrite.scope === "existing" ? "selected" : ""}>Solo notas existentes con fuente externa</option>
+              <option value="feed" ${rewrite.scope === "feed" ? "selected" : ""}>Solo nuevas desde agenda externa</option>
+            </select>
+          </div>
+        </div>
+        <div class="checks">
+          <label><input type="checkbox" name="includeCampaignLine" ${rewrite.includeCampaignLine ? "checked" : ""} /> Incluir bajada/campana activa</label>
+          <label><input type="checkbox" name="deleteDuplicates" ${rewrite.deleteDuplicates ? "checked" : ""} /> Limpiar duplicados externos sobrantes</label>
+        </div>
+        <div class="field">
+          <label for="rewriteCampaignLine">Bajada editorial / campana activa</label>
+          <textarea id="rewriteCampaignLine" name="campaignLine" rows="2">${escapeHtml(rewrite.campaignLine)}</textarea>
+        </div>
+        <div class="bo-subgrid-3">
+          <div class="field">
+            <label for="rewritePublishStatus">Estado</label>
+            <select id="rewritePublishStatus" name="publishStatus">
+              <option value="DRAFT" ${rewrite.publishStatus === "DRAFT" ? "selected" : ""}>DRAFT</option>
+              <option value="PUBLISHED" ${rewrite.publishStatus === "PUBLISHED" ? "selected" : ""}>PUBLISHED</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="rewriteSectionHint">Seccion base</label>
+            <select id="rewriteSectionHint" name="sectionHint">
+              <option value="">Sin forzar</option>
+              ${SECTION_OPTIONS.map((option) => `<option value="${option.value}" ${rewrite.sectionHint === option.value ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}
+            </select>
+          </div>
+          <div class="field">
+            <label for="rewriteProvinceHint">Distrito base</label>
+            <select id="rewriteProvinceHint" name="provinceHint">
+              <option value="">Sin distrito especifico</option>
+              ${PROVINCE_OPTIONS.map((option) => `<option value="${option.value}" ${rewrite.provinceHint === option.value ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}
+            </select>
+          </div>
+        </div>
+        <div class="bo-form-actions">
+          <button type="submit" class="primary" data-submit-label="Internalizando noticias externas...">Convertir externas a notas propias</button>
+          <span class="muted">Esta operacion usa el agente periodista, toma la fuente, reformula cuerpo e imagen, y actualiza o crea noticias internas.</span>
+        </div>
+      </form>
+    </section>
+  </div>`;
+}
+
 export function renderNewsForm(params: {
   mode: "create" | "edit";
   action: string;
@@ -416,6 +866,11 @@ export function renderNewsForm(params: {
     cropHeight: number;
     internalizeSourceLinks: boolean;
     campaignLine: string;
+  };
+  editorialStudio?: {
+    activeMode?: string;
+    batch?: Partial<EditorialBatchStudioState>;
+    rewrite?: Partial<EditorialRewriteStudioState>;
   };
 }): string {
   const { mode, action, data, error } = params;
@@ -458,6 +913,27 @@ export function renderNewsForm(params: {
     .map((option) => `<option value="${option}" ${status === option ? "selected" : ""}>${option}</option>`)
     .join("");
 
+  const studioParams: {
+    activeMode?: string;
+    batch?: Partial<EditorialBatchStudioState>;
+    rewrite?: Partial<EditorialRewriteStudioState>;
+  } = {};
+
+  if (params.editorialStudio?.activeMode) {
+    studioParams.activeMode = params.editorialStudio.activeMode;
+  }
+  if (params.editorialStudio?.batch) {
+    studioParams.batch = params.editorialStudio.batch;
+  }
+  if (params.editorialStudio?.rewrite) {
+    studioParams.rewrite = params.editorialStudio.rewrite;
+  }
+
+  const studioBlock =
+    mode === "create"
+      ? renderEditorialStudio(studioParams)
+      : "";
+
   return backofficeShell(
     mode === "create" ? "Nueva noticia" : "Editar noticia",
     `<div class="grid">
@@ -470,6 +946,7 @@ export function renderNewsForm(params: {
               )}</div>`
             : ""
         }
+        ${studioBlock}
         <div id="ia" class="ai-box">
           <div class="ai-head">
             <div>
@@ -628,11 +1105,26 @@ export function renderNewsForm(params: {
               review: reviewBtn,
               apply: applyBtn,
             };
+            const studioTabs = Array.from(document.querySelectorAll("[data-studio-tab]"));
+            const studioPanels = Array.from(document.querySelectorAll("[data-studio-panel]"));
+            const studioForms = Array.from(document.querySelectorAll("[data-studio-submit]"));
 
             function notify(message, level) {
               if (typeof window.pulsoToast === "function") {
                 window.pulsoToast(message, level || "");
               }
+            }
+
+            function activateStudioTab(mode) {
+              if (!studioTabs.length || !studioPanels.length) {
+                return;
+              }
+              studioTabs.forEach(function (button) {
+                button.classList.toggle("is-active", button.getAttribute("data-studio-tab") === mode);
+              });
+              studioPanels.forEach(function (panel) {
+                panel.classList.toggle("is-active", panel.getAttribute("data-studio-panel") === mode);
+              });
             }
 
             function setStatus(message, level) {
@@ -912,6 +1404,33 @@ export function renderNewsForm(params: {
                 connBadge.style.background = "#2c1313";
                 setStatus(error instanceof Error ? error.message : "No se pudo verificar la conexion IA.", "error");
               }
+            }
+
+            if (studioTabs.length && studioPanels.length) {
+              studioTabs.forEach(function (button) {
+                button.addEventListener("click", function () {
+                  activateStudioTab(button.getAttribute("data-studio-tab") || "single");
+                });
+              });
+              activateStudioTab(
+                studioTabs.find(function (button) { return button.classList.contains("is-active"); })?.getAttribute("data-studio-tab") || "single",
+              );
+            }
+
+            if (studioForms.length) {
+              studioForms.forEach(function (studioForm) {
+                studioForm.addEventListener("submit", function (event) {
+                  const submitter = event.submitter;
+                  const label = submitter && submitter.getAttribute ? submitter.getAttribute("data-submit-label") : "";
+                  const message = label || "Operacion editorial recibida. Procesando IA...";
+                  if (submitter) {
+                    submitter.disabled = true;
+                    submitter.classList.add("is-running");
+                  }
+                  setStatus(message, "warn");
+                  notify(message, "warn");
+                });
+              });
             }
 
             function buildAssistPayload(brief) {
@@ -2067,4 +2586,5 @@ export function renderIaLab(): string {
     </div>`,
   );
 }
+
 

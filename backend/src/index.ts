@@ -6,7 +6,7 @@ import cors from "cors";
 import express, { type NextFunction, type Request, type Response } from "express";
 import helmet from "helmet";
 import morgan from "morgan";
-import { type Poll, type Prisma, NewsStatus, PollStatus, UserEmailCodePurpose, UserPlan } from "@prisma/client";
+import { type News, type Poll, type Prisma, NewsStatus, PollStatus, UserEmailCodePurpose, UserPlan } from "@prisma/client";
 import { adminApiGuard, backofficeGuard, extractAdminToken, signAdminToken, verifyAdminToken } from "./auth";
 import {
   backofficeShell,
@@ -1004,6 +1004,20 @@ type BatchNewsFormState = {
   defaultSourceName: string;
   defaultAuthorName: string;
   defaultSourceUrl: string;
+  summary?: string;
+};
+
+type ExternalRewriteFormState = {
+  instruction: string;
+  limit: number;
+  scope: "mixed" | "existing" | "feed";
+  publishStatus: NewsStatus;
+  sectionHint: string;
+  provinceHint: string;
+  includeCampaignLine: boolean;
+  campaignLine: string;
+  deleteDuplicates: boolean;
+  summary?: string;
 };
 
 function defaultBatchNewsFormState(): BatchNewsFormState {
@@ -1023,6 +1037,47 @@ function defaultBatchNewsFormState(): BatchNewsFormState {
     defaultAuthorName: "Redaccion Pulso Pais",
     defaultSourceUrl: "",
   };
+}
+
+function defaultExternalRewriteFormState(campaignLine = ""): ExternalRewriteFormState {
+  return {
+    instruction:
+      "Convierte las noticias externas relevantes en notas propias de Pulso Pais, manteniendo hechos, reformulando la redaccion a nuestra editorial y asegurando portada con imagen valida.",
+    limit: 6,
+    scope: "mixed",
+    publishStatus: NewsStatus.DRAFT,
+    sectionHint: "",
+    provinceHint: "",
+    includeCampaignLine: true,
+    campaignLine,
+    deleteDuplicates: false,
+  };
+}
+
+function normalizeExternalRewriteScope(raw: unknown): ExternalRewriteFormState["scope"] {
+  const value = readString(raw).toLowerCase();
+  if (value === "existing") {
+    return "existing";
+  }
+  if (value === "feed") {
+    return "feed";
+  }
+  return "mixed";
+}
+
+function normalizeExternalKey(url: string | null | undefined): string {
+  return (normalizeHttpUrl(url) ?? "").replace(/\/+$/, "").toLowerCase();
+}
+
+function isLikelyThinExternalNews(item: {
+  sourceUrl?: string | null;
+  body?: string | null;
+  imageUrl?: string | null;
+}): boolean {
+  const hasExternalSource = normalizeExternalKey(item.sourceUrl).length > 0;
+  const bodyLength = readString(item.body).length;
+  const hasImage = Boolean(normalizeImageUrl(item.imageUrl));
+  return hasExternalSource && (bodyLength < 900 || !hasImage);
 }
 
 function renderBatchNewsForm(params: {
@@ -1209,6 +1264,42 @@ function currentErrorSafe(value: string): string {
         return char;
     }
   });
+}
+
+async function renderUnifiedEditorialPage(params?: {
+  activeMode?: "single" | "batch" | "rewrite";
+  error?: string;
+  data?: Partial<Prisma.NewsUncheckedCreateInput>;
+  batchState?: Partial<BatchNewsFormState>;
+  rewriteState?: Partial<ExternalRewriteFormState>;
+}): Promise<string> {
+  const aiResearch = await getAiResearchSettings(prisma);
+  const renderParams: Parameters<typeof renderNewsForm>[0] = {
+    mode: "create",
+    action: "/backoffice/news",
+    aiResearch,
+    editorialStudio: {
+      activeMode: params?.activeMode ?? "single",
+      batch: {
+        ...defaultBatchNewsFormState(),
+        campaignLine: aiResearch.campaignLine,
+        ...(params?.batchState ?? {}),
+      },
+      rewrite: {
+        ...defaultExternalRewriteFormState(aiResearch.campaignLine),
+        ...(params?.rewriteState ?? {}),
+      },
+    },
+  };
+
+  if (params?.error) {
+    renderParams.error = params.error;
+  }
+  if (params?.data) {
+    renderParams.data = params.data as Partial<News>;
+  }
+
+  return renderNewsForm(renderParams);
 }
 
 app.set("trust proxy", 1);
@@ -2706,108 +2797,183 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
     const aiReview = news.filter((item) => item.aiDecision === "REVIEW").length;
     const pollPublished = pollRows.filter((item) => item.status === PollStatus.PUBLISHED).length;
     const pollVotes = pollRows.reduce((acc, item) => acc + item.totalVotes, 0);
-
+    const externalLinked = news.filter((item) => normalizeExternalKey(item.sourceUrl).length > 0).length;
+    const thinExternal = news.filter((item) => isLikelyThinExternalNews(item)).length;
+    const recentNewsRows = news
+      .slice(0, 4)
+      .map((item) => {
+        const when = new Date(item.updatedAt).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" });
+        const event =
+          item.status === NewsStatus.PUBLISHED
+            ? `Nota publicada: "${currentErrorSafe(item.title)}"`
+            : `Borrador actualizado: "${currentErrorSafe(item.title)}"`;
+        return `<div class="bo-activity-row">
+          <div class="bo-activity-time">${when}</div>
+          <div class="bo-activity-copy">
+            <strong>${event}</strong>
+            <span>${currentErrorSafe(item.section)}${item.province ? ` · ${currentErrorSafe(item.province)}` : ""} · IA ${currentErrorSafe(
+              item.aiDecision ?? "REVIEW",
+            )}</span>
+          </div>
+          <a class="button" href="/backoffice/news/${item.id}/edit">Abrir</a>
+        </div>`;
+      })
+      .join("");
+    const recentPollRows = pollRows
+      .slice(0, 2)
+      .map((item) => {
+        const when = new Date(item.updatedAt).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" });
+        return `<div class="bo-activity-row">
+          <div class="bo-activity-time">${when}</div>
+          <div class="bo-activity-copy">
+            <strong>Encuesta ${currentErrorSafe(item.status.toLowerCase())}: "${currentErrorSafe(item.title)}"</strong>
+            <span>${item.totalVotes} votos · lider ${currentErrorSafe(item.leaderLabel ?? "sin definir")}</span>
+          </div>
+          <a class="button" href="/backoffice/polls/${item.id}/edit">Abrir</a>
+        </div>`;
+      })
+      .join("");
     const body = `<div class="grid">
-      <div class="card">
-        <h2 style="margin:0 0 12px; font-size:22px;">Modos y Estado Editorial</h2>
-        <div style="display:grid; gap:10px; grid-template-columns:repeat(7,minmax(0,1fr));">
-          <div style="border:1px solid #2d2d2d; border-radius:10px; padding:10px; background:#121212;"><p style="margin:0; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:#a5a5a5;">Total</p><strong style="font-size:28px; font-family:inherit;">${total}</strong></div>
-          <div style="border:1px solid #27513a; border-radius:10px; padding:10px; background:#102017;"><p style="margin:0; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:#9ddcb7;">Publicadas</p><strong style="font-size:28px; font-family:inherit;">${published}</strong></div>
-          <div style="border:1px solid #4a4a4a; border-radius:10px; padding:10px; background:#181818;"><p style="margin:0; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:#cfcfcf;">Draft</p><strong style="font-size:28px; font-family:inherit;">${drafts}</strong></div>
-          <div style="border:1px solid #6a5524; border-radius:10px; padding:10px; background:#211a0f;"><p style="margin:0; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:#f3dc9f;">IA Review</p><strong style="font-size:28px; font-family:inherit;">${aiReview}</strong></div>
-          <div style="border:1px solid #773232; border-radius:10px; padding:10px; background:#2b1515;"><p style="margin:0; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:#f2b3b3;">IA Reject</p><strong style="font-size:28px; font-family:inherit;">${aiReject}</strong></div>
-          <div style="border:1px solid #4b3c1f; border-radius:10px; padding:10px; background:#1f180d;"><p style="margin:0; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:#e8cc84;">Encuestas live</p><strong style="font-size:28px; font-family:inherit;">${pollPublished}</strong></div>
-          <div style="border:1px solid #2f4e67; border-radius:10px; padding:10px; background:#101a22;"><p style="margin:0; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:#94cdf7;">Votos totales</p><strong style="font-size:28px; font-family:inherit;">${pollVotes}</strong></div>
+      <section class="bo-hero">
+        <div class="bo-hero-copy">
+          <small>Panel de control</small>
+          <h2>Backoffice Editorial</h2>
+          <p>Centro de comando para contenido, portada, encuestas y operaciones de IA editorial. Monitorea el pulso de la nacion y actua sobre el sitio en tiempo real.</p>
         </div>
-      </div>
-      <div class="card">
-        <div class="split-title" style="margin-bottom:8px;">
-          <h3>Modulo de Encuestas</h3>
-          <a class="button primary" href="/backoffice/polls/new">Nueva Encuesta</a>
-        </div>
-        <p style="margin:0 0 12px; color:#a9a9a9; line-height:1.5;">Crea encuestas digitales para compartir en Instagram, mide conversion a voto y visualiza lider por candidato con actualizacion en vivo.</p>
-        <div class="actions">
-          <a class="button" href="/backoffice/polls">Gestionar encuestas</a>
-          <a class="button" href="/backoffice/news/batch">Noticias en lote IA</a>
-        </div>
-      </div>
-      <div class="card">
-        <h2 style="margin:0 0 8px; font-size:22px;">Control de Portada</h2>
-        <p style="margin:0 0 14px; color:#a9a9a9; line-height:1.5;">Gestiona titulares, radar electoral, publinotas y cobertura federal. El front de Vercel consume la API publica <code>/api/home</code> en tiempo real. En <strong>Nueva Nota</strong>, <strong>Editar</strong> y <strong>Nueva Encuesta</strong> tenes asistencia IA para autocompletar campos clave y validar el borrador.</p>
-        <form id="theme-control" method="post" action="/backoffice/settings/theme" style="display:grid; gap:10px; max-width:620px;">
-          <label for="homeTheme" style="color:#cfcfcf; text-transform:uppercase; letter-spacing:.08em; font-size:12px; font-weight:600;">Tema visual del home</label>
-          <div style="display:flex; gap:10px; flex-wrap:wrap;">
-            <select id="homeTheme" name="homeTheme" style="max-width:360px;">${themeOptions}</select>
-            <button class="primary" type="submit">Guardar tema</button>
-          </div>
-          <p style="margin:0; color:#8e8e8e; font-size:12px; line-height:1.4;">El tema <strong>Clasico Editorial</strong> replica una estetica tradicional. El tema <strong>Social Newsroom</strong> prioriza tarjetas consumibles, gadgets e interaccion de lectura constante.</p>
-        </form>
-        <form method="post" action="/backoffice/settings/engagement" style="display:grid; gap:10px; margin-top:16px; max-width:760px;">
-          <label style="color:#cfcfcf; text-transform:uppercase; letter-spacing:.08em; font-size:12px; font-weight:600;">Interacciones del front (botones en cada noticia)</label>
-          <div class="checks" style="grid-template-columns:repeat(3,minmax(0,1fr));">
-            <label>
-              <input type="checkbox" name="commentsEnabled" ${engagementSettings.commentsEnabled ? "checked" : ""} />
-              Comentarios
-            </label>
-            <label>
-              <input type="checkbox" name="reactionsEnabled" ${engagementSettings.reactionsEnabled ? "checked" : ""} />
-              Reacciones
-            </label>
-            <label>
-              <input type="checkbox" name="analysisEnabled" ${engagementSettings.analysisEnabled ? "checked" : ""} />
-              Analisis
-            </label>
-          </div>
-          <div style="display:flex; gap:10px; flex-wrap:wrap;">
-            <button class="primary" type="submit">Guardar interacciones</button>
-          </div>
-          <p style="margin:0; color:#8e8e8e; font-size:12px; line-height:1.4;">Si desactivas un modulo, el front deja de mostrar ese boton en todas las tarjetas y portadas al refrescar.</p>
-        </form>
-        <form method="post" action="/backoffice/settings/ai-research" style="display:grid; gap:10px; margin-top:18px; max-width:860px;">
-          <label style="color:#cfcfcf; text-transform:uppercase; letter-spacing:.08em; font-size:12px; font-weight:600;">Agente periodista IA (investigacion + nota propia)</label>
-          <div class="checks" style="grid-template-columns:repeat(3,minmax(0,1fr));">
-            <label>
-              <input type="checkbox" name="enabled" ${aiResearchSettings.enabled ? "checked" : ""} />
-              Activar agente periodista
-            </label>
-            <label>
-              <input type="checkbox" name="fetchArticleText" ${aiResearchSettings.fetchArticleText ? "checked" : ""} />
-              Leer texto de fuentes
-            </label>
-            <label>
-              <input type="checkbox" name="internalizeSourceLinks" ${aiResearchSettings.internalizeSourceLinks ? "checked" : ""} />
-              Publicar sin link externo
-            </label>
-            <label>
-              <input type="checkbox" name="cropImage" ${aiResearchSettings.cropImage ? "checked" : ""} />
-              Recorte automatico de imagen
-            </label>
-          </div>
-          <div class="cols-2">
-            <div class="field">
-              <label for="hotNewsLimit" style="color:#b5b5b5;">Fuentes calientes maximas</label>
-              <input id="hotNewsLimit" name="hotNewsLimit" type="number" min="3" max="20" value="${aiResearchSettings.hotNewsLimit}" />
+        <div class="bo-hero-art" aria-hidden="true"></div>
+      </section>
+
+      <section class="bo-stat-grid">
+        <article class="bo-stat-card"><span>Total notas</span><strong>${total}</strong></article>
+        <article class="bo-stat-card"><span>Publicadas</span><strong>${published}</strong></article>
+        <article class="bo-stat-card"><span>Draft</span><strong>${drafts}</strong></article>
+        <article class="bo-stat-card emphasis"><span>IA review</span><strong>${aiReview}</strong></article>
+        <article class="bo-stat-card"><span>Externas</span><strong>${externalLinked}</strong></article>
+        <article class="bo-stat-card"><span>Thin external</span><strong>${thinExternal}</strong></article>
+        <article class="bo-stat-card"><span>Encuestas live</span><strong>${pollPublished}</strong></article>
+        <article class="bo-stat-card"><span>Votos totales</span><strong>${pollVotes}</strong></article>
+      </section>
+
+      <section class="bo-module-grid">
+        <div class="grid">
+          <article class="card">
+            <div class="split-title">
+              <div>
+                <div class="bo-kicker">Modulo de encuestas</div>
+                <h3 style="margin-top:10px;">Monitor Electoral y Conversion</h3>
+              </div>
+              <a class="button primary" href="/backoffice/polls/new">Nueva encuesta</a>
             </div>
-            <div class="field">
-              <label for="cropWidth" style="color:#b5b5b5;">Recorte (ancho x alto)</label>
-              <div style="display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px;">
-                <input id="cropWidth" name="cropWidth" type="number" min="480" max="2400" value="${aiResearchSettings.cropWidth}" />
-                <input id="cropHeight" name="cropHeight" type="number" min="320" max="1800" value="${aiResearchSettings.cropHeight}" />
+            <p class="muted">Crea encuestas para Instagram y trafico del sitio, monitorea conversion de votos y ranking de candidatos con analiticas en vivo.</p>
+            <div class="actions">
+              <a class="button" href="/backoffice/polls">Gestionar encuestas</a>
+              <a class="button" href="/backoffice/news/new?studio=rewrite">Internalizar externas</a>
+            </div>
+          </article>
+
+          <article class="card">
+            <div class="split-title">
+              <div>
+                <div class="bo-kicker">Flujo editorial reciente</div>
+                <h3 style="margin-top:10px;">Actividad del newsroom</h3>
               </div>
             </div>
+            <div class="bo-activity-list">
+              ${recentNewsRows || `<div class="bo-note-box"><p>No hay noticias recientes para mostrar.</p></div>`}
+              ${recentPollRows}
+            </div>
+          </article>
+
+          <article class="card">
+            <div class="split-title">
+              <div>
+                <div class="bo-kicker">Operaciones IA</div>
+                <h3 style="margin-top:10px;">Acciones rapidas</h3>
+              </div>
+            </div>
+            <div class="bo-action-grid">
+              <a class="bo-action-tile" href="/backoffice/news/new"><span>+</span><strong>Crear nota</strong></a>
+              <a class="bo-action-tile" href="/backoffice/news/new?studio=batch"><span>◫</span><strong>Generar lote IA</strong></a>
+              <a class="bo-action-tile" href="/backoffice/news/new?studio=rewrite"><span>↺</span><strong>Reformular externas</strong></a>
+              <a class="bo-action-tile" href="/backoffice/users"><span>◎</span><strong>Ver usuarios</strong></a>
+            </div>
+          </article>
+        </div>
+
+        <aside class="bo-side-panel">
+          <div>
+            <h3>Control de portada</h3>
+            <p>Gestiona layout editorial, interacciones del front y comportamiento del agente periodista sin salir del dashboard.</p>
           </div>
-          <div class="field">
-            <label for="campaignLine" style="color:#b5b5b5;">Bajada/campana activa por defecto</label>
-            <textarea id="campaignLine" name="campaignLine" rows="2" placeholder="Ej: instalar gobernabilidad territorial y agenda federal pro-inversion.">${currentErrorSafe(
-              aiResearchSettings.campaignLine,
-            )}</textarea>
-          </div>
-          <div style="display:flex; gap:10px; flex-wrap:wrap;">
+
+          <form id="theme-control" method="post" action="/backoffice/settings/theme" style="display:grid; gap:12px;">
+            <div class="field">
+              <label for="homeTheme">Layout de portada</label>
+              <select id="homeTheme" name="homeTheme">${themeOptions}</select>
+            </div>
+            <button class="primary" type="submit">Guardar cambios portada</button>
+          </form>
+
+          <form method="post" action="/backoffice/settings/engagement" style="display:grid; gap:10px;">
+            <div class="bo-toggle-row">
+              <div><strong>Comentarios</strong><span>Control global de discusion</span></div>
+              <label><input type="checkbox" name="commentsEnabled" ${engagementSettings.commentsEnabled ? "checked" : ""} /></label>
+            </div>
+            <div class="bo-toggle-row">
+              <div><strong>Reacciones</strong><span>Botones de apoyo y guardado</span></div>
+              <label><input type="checkbox" name="reactionsEnabled" ${engagementSettings.reactionsEnabled ? "checked" : ""} /></label>
+            </div>
+            <div class="bo-toggle-row">
+              <div><strong>Analisis en vivo</strong><span>Insights contextuales en tarjetas</span></div>
+              <label><input type="checkbox" name="analysisEnabled" ${engagementSettings.analysisEnabled ? "checked" : ""} /></label>
+            </div>
+            <button class="primary" type="submit">Guardar interacciones</button>
+          </form>
+
+          <form method="post" action="/backoffice/settings/ai-research" style="display:grid; gap:12px;">
+            <div>
+              <h3 style="margin-bottom:8px;">Agente periodista</h3>
+              <p>Investiga agenda, toma fuentes, internaliza enlaces externos y consigue media portada.</p>
+            </div>
+            <div class="bo-toggle-row">
+              <div><strong>Activo</strong><span>${aiResearchSettings.enabled ? "Investigando y reescribiendo" : "Desactivado"}</span></div>
+              <label><input type="checkbox" name="enabled" ${aiResearchSettings.enabled ? "checked" : ""} /></label>
+            </div>
+            <div class="bo-toggle-row">
+              <div><strong>Leer texto completo</strong><span>Extrae cuerpo desde la fuente</span></div>
+              <label><input type="checkbox" name="fetchArticleText" ${aiResearchSettings.fetchArticleText ? "checked" : ""} /></label>
+            </div>
+            <div class="bo-toggle-row">
+              <div><strong>Sin link externo</strong><span>Publica la nota propia como destino principal</span></div>
+              <label><input type="checkbox" name="internalizeSourceLinks" ${aiResearchSettings.internalizeSourceLinks ? "checked" : ""} /></label>
+            </div>
+            <div class="bo-toggle-row">
+              <div><strong>Crop automatico</strong><span>${aiResearchSettings.cropWidth}x${aiResearchSettings.cropHeight}</span></div>
+              <label><input type="checkbox" name="cropImage" ${aiResearchSettings.cropImage ? "checked" : ""} /></label>
+            </div>
+            <div class="bo-compact-grid">
+              <div class="field">
+                <label for="hotNewsLimit">Fuentes max.</label>
+                <input id="hotNewsLimit" name="hotNewsLimit" type="number" min="3" max="20" value="${aiResearchSettings.hotNewsLimit}" />
+              </div>
+              <div class="field">
+                <label for="cropWidth">Crop</label>
+                <div style="display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px;">
+                  <input id="cropWidth" name="cropWidth" type="number" min="480" max="2400" value="${aiResearchSettings.cropWidth}" />
+                  <input id="cropHeight" name="cropHeight" type="number" min="320" max="1800" value="${aiResearchSettings.cropHeight}" />
+                </div>
+              </div>
+            </div>
+            <div class="field">
+              <label for="campaignLine">Bajada/campana activa</label>
+              <textarea id="campaignLine" name="campaignLine" rows="3">${currentErrorSafe(aiResearchSettings.campaignLine)}</textarea>
+            </div>
             <button class="primary" type="submit">Guardar agente periodista</button>
-          </div>
-          <p style="margin:0; color:#8e8e8e; font-size:12px; line-height:1.4;">Cuando esta activo, el boton "Investigar y generar nota propia" analiza agenda caliente, propone enfoque propio y puede recortar imagen al formato editorial.</p>
-        </form>
-      </div>
+            <p>Notas con fuente externa detectadas: <strong>${externalLinked}</strong>. Candidatas a internalizacion inmediata: <strong>${thinExternal}</strong>.</p>
+          </form>
+        </aside>
+      </section>
+
       ${renderNewsTable(news, { frontendBaseUrl: normalizedFrontendBaseUrl() })}
     </div>`;
 
@@ -2872,16 +3038,13 @@ app.post("/backoffice/settings/ai-research", boGuard, async (request, response, 
 
 app.get("/backoffice/news/batch", boGuard, async (request, response, next) => {
   try {
-    const summary = readString(request.query.ok);
-    const aiResearch = await getAiResearchSettings(prisma);
-    response.send(
-      summary.length > 0
-        ? renderBatchNewsForm({
-            summary,
-            aiResearch,
-          })
-        : renderBatchNewsForm({ aiResearch }),
-    );
+    const query = new URLSearchParams();
+    query.set("studio", "batch");
+    const ok = readString(request.query.ok);
+    if (ok) {
+      query.set("ok", ok);
+    }
+    response.redirect(`/backoffice/news/new?${query.toString()}`);
   } catch (error) {
     next(error);
   }
@@ -3122,15 +3285,16 @@ app.post("/backoffice/news/batch", boGuard, async (request, response, next) => {
         : `Se crearon ${createdCount} noticias.`;
 
     const researchDetail = useResearchAgent ? ` Fuentes investigadas: ${researchSourcesUsed}.` : "";
-    response.redirect(`/backoffice/news/batch?ok=${encodeURIComponent(`${detail}${researchDetail} Modelo: ${batch.model}.`)}`);
+    response.redirect(
+      `/backoffice/news/new?studio=batch&ok=${encodeURIComponent(`${detail}${researchDetail} Modelo: ${batch.model}.`)}`,
+    );
   } catch (error) {
     if (error instanceof Error) {
-      const aiResearchSettings = await getAiResearchSettings(prisma);
       response.status(400).send(
-        renderBatchNewsForm({
-          state: formState,
+        await renderUnifiedEditorialPage({
+          activeMode: "batch",
           error: error.message,
-          aiResearch: aiResearchSettings,
+          batchState: formState,
         }),
       );
       return;
@@ -3139,15 +3303,293 @@ app.post("/backoffice/news/batch", boGuard, async (request, response, next) => {
   }
 });
 
-app.get("/backoffice/news/new", boGuard, async (_request, response, next) => {
+app.post("/backoffice/news/internalize", boGuard, async (request, response, next) => {
+  const limit = clampInteger(request.body.limit, 1, 20, 6);
+  const scope = normalizeExternalRewriteScope(request.body.scope);
+  const publishStatus =
+    readString(request.body.publishStatus).toUpperCase() === NewsStatus.PUBLISHED ? NewsStatus.PUBLISHED : NewsStatus.DRAFT;
+  const sectionHintRaw = readString(request.body.sectionHint).toUpperCase();
+  const provinceHintRaw = readString(request.body.provinceHint).toUpperCase();
+  const sectionHint = isNewsSection(sectionHintRaw) ? sectionHintRaw : null;
+  const provinceHint = isProvince(provinceHintRaw) ? provinceHintRaw : null;
+  const deleteDuplicates = readBoolean(request.body.deleteDuplicates);
+  const rewriteState: ExternalRewriteFormState = {
+    instruction: readString(request.body.instruction),
+    limit,
+    scope,
+    publishStatus,
+    sectionHint: sectionHint ?? "",
+    provinceHint: provinceHint ?? "",
+    includeCampaignLine: readBoolean(request.body.includeCampaignLine),
+    campaignLine: readString(request.body.campaignLine),
+    deleteDuplicates,
+  };
+
   try {
-    const aiResearch = await getAiResearchSettings(prisma);
+    const settings = await getAiResearchSettings(prisma);
+    if (!settings.enabled) {
+      throw new Error("El agente periodista esta desactivado en Panel. Activalo antes de internalizar fuentes externas.");
+    }
+    if (rewriteState.instruction.length < 18) {
+      throw new Error("La instruccion administrativa debe tener al menos 18 caracteres.");
+    }
+
+    const research = await buildNewsResearchContext({
+      brief: rewriteState.instruction,
+      limit: Math.min(16, Math.max(limit * 2, settings.hotNewsLimit)),
+      fetchArticleText: settings.fetchArticleText,
+      campaignLine: selectedCampaignLine(request.body as Record<string, unknown>, rewriteState.includeCampaignLine ? rewriteState.campaignLine : ""),
+    });
+    const context = await buildAiNewsContext(prisma);
+    const existingRows = await prisma.news.findMany({
+      orderBy: [{ updatedAt: "desc" }],
+      take: 180,
+    });
+
+    const existingBySource = new Map<string, News[]>();
+    for (const row of existingRows) {
+      const key = normalizeExternalKey(row.sourceUrl);
+      if (!key) {
+        continue;
+      }
+      const bucket = existingBySource.get(key) ?? [];
+      bucket.push(row);
+      existingBySource.set(key, bucket);
+    }
+
+    const matchedFromResearch = research.sources
+      .map((source) => ({
+        source,
+        existing: (existingBySource.get(normalizeExternalKey(source.sourceUrl)) ?? []).find((row) => isLikelyThinExternalNews(row)) ?? null,
+      }))
+      .filter((item) => scope !== "existing" || item.existing)
+      .slice(0, limit);
+
+    const fallbackExistingCandidates =
+      scope === "existing"
+        ? existingRows
+            .filter((row) => isLikelyThinExternalNews(row))
+            .filter((row) => !matchedFromResearch.some((item) => item.existing?.id === row.id))
+            .slice(0, limit)
+            .map((row, index) => ({
+              source: {
+                rank: matchedFromResearch.length + index + 1,
+                title: row.title,
+                sourceName: row.sourceName,
+                sourceUrl: normalizeHttpUrl(row.sourceUrl) ?? "",
+                imageUrl: normalizeImageUrl(row.imageUrl),
+                videoUrl: null,
+                videoPosterUrl: null,
+                excerpt: row.excerpt,
+                section: row.section,
+                publishedAt: (row.publishedAt ?? row.updatedAt).toISOString(),
+                matchScore: 0,
+              },
+              existing: row,
+            }))
+            .filter((item) => item.source.sourceUrl.length > 0)
+        : [];
+
+    const candidates = [...matchedFromResearch, ...fallbackExistingCandidates].slice(0, limit);
+    if (candidates.length === 0) {
+      throw new Error("No se encontraron fuentes externas candidatas para internalizar con ese criterio.");
+    }
+
+    let createdCount = 0;
+    let updatedCount = 0;
+    let deletedCount = 0;
+    const errors: string[] = [];
+
+    for (const [index, candidate] of candidates.entries()) {
+      try {
+        const source = candidate.source;
+        const externalKey = normalizeExternalKey(source.sourceUrl);
+        const duplicateRows = existingBySource.get(externalKey) ?? [];
+        const existing = candidate.existing;
+
+        const assistInput = {
+          brief: `${rewriteState.instruction}\nFuente objetivo: ${source.title}`,
+          sectionHint: sectionHint ?? (isNewsSection(source.section) ? source.section : null),
+          provinceHint,
+          isSponsored: existing?.isSponsored ?? false,
+          currentTitle: existing?.title ?? null,
+          currentKicker: existing?.kicker ?? null,
+          currentExcerpt: existing?.excerpt ?? source.excerpt ?? null,
+          currentBody: existing?.body ?? null,
+          currentImageUrl: existing?.imageUrl ?? source.imageUrl ?? null,
+          currentSourceName: existing?.sourceName ?? source.sourceName ?? null,
+          currentSourceUrl: source.sourceUrl,
+          currentAuthorName: existing?.authorName ?? null,
+          currentStatus: publishStatus,
+          currentPublishedAt: existing?.publishedAt ? existing.publishedAt.toISOString() : null,
+          currentSection: existing?.section ?? null,
+          currentProvince: existing?.province ?? null,
+          currentFlags: {
+            isHero: existing?.isHero ?? false,
+            isFeatured: existing?.isFeatured ?? false,
+            isSponsored: existing?.isSponsored ?? false,
+            isInterview: existing?.isInterview ?? false,
+            isOpinion: existing?.isOpinion ?? false,
+            isRadar: existing?.isRadar ?? false,
+          },
+          currentTags: existing?.tags ?? [],
+        };
+
+        const mergedContext = [
+          context.contextText,
+          "",
+          research.contextText,
+          "FUENTE OBJETIVO:",
+          `- titulo: ${source.title}`,
+          `- medio: ${source.sourceName ?? "Fuente abierta"}`,
+          `- url: ${source.sourceUrl}`,
+          source.excerpt ? `- resumen: ${source.excerpt}` : "",
+        ]
+          .filter(Boolean)
+          .join("\n");
+
+        const suggestion = await generateDraftWithAi(assistInput, mergedContext);
+        const finalSuggestion = await postProcessResearchedSuggestion(
+          suggestion,
+          settings,
+          source,
+          [source],
+          rewriteState.instruction,
+        );
+
+        const finalSection =
+          sectionHint ??
+          (existing?.section ?? (isNewsSection(source.section) ? source.section : "NACION"));
+        const finalProvince = provinceHint ?? existing?.province ?? null;
+        const finalPublishedAt =
+          publishStatus === NewsStatus.PUBLISHED
+            ? existing?.publishedAt?.toISOString() ?? new Date(Date.now() + index * 1000).toISOString()
+            : "";
+
+        const normalized = normalizeNewsInput({
+          title: finalSuggestion.title ?? existing?.title ?? source.title,
+          slug: existing?.slug ?? "",
+          kicker:
+            finalSuggestion.kicker ??
+            existing?.kicker ??
+            (finalSection === "RADAR_ELECTORAL" ? "Escenario Electoral" : "Mesa de situacion"),
+          excerpt: finalSuggestion.excerpt ?? existing?.excerpt ?? source.excerpt ?? rewriteState.instruction,
+          body: finalSuggestion.body ?? existing?.body ?? source.excerpt ?? rewriteState.instruction,
+          imageUrl: finalSuggestion.imageUrl ?? source.imageUrl ?? "",
+          sourceName:
+            finalSuggestion.sourceName ??
+            existing?.sourceName ??
+            source.sourceName ??
+            "Pulso Pais (elaboracion propia sobre fuentes abiertas)",
+          sourceUrl: settings.internalizeSourceLinks ? "" : normalizeHttpUrl(source.sourceUrl) ?? "",
+          authorName: finalSuggestion.authorName ?? existing?.authorName ?? "Redaccion Pulso Pais",
+          section: finalSection,
+          province: finalProvince,
+          tags: finalSuggestion.tags.length > 0 ? finalSuggestion.tags : existing?.tags?.length ? existing.tags : ["pulso-pais", "agenda-propia"],
+          status: publishStatus,
+          publishedAt: finalPublishedAt,
+          isSponsored: existing?.isSponsored ?? false,
+          isFeatured: finalSuggestion.flags.isFeatured || existing?.isFeatured || false,
+          isHero: false,
+          isInterview: finalSuggestion.flags.isInterview || existing?.isInterview || false,
+          isOpinion: finalSuggestion.flags.isOpinion || existing?.isOpinion || false,
+          isRadar:
+            finalSuggestion.flags.isRadar ||
+            existing?.isRadar ||
+            finalSection === "RADAR_ELECTORAL",
+        });
+
+        if (existing) {
+          const uniqueSlug = await ensureUniqueSlug(prisma, normalized.slug, existing.id);
+          await prisma.news.update({
+            where: { id: existing.id },
+            data: {
+              ...normalized,
+              slug: uniqueSlug,
+              aiDecision: "ALLOW",
+              aiReason: `Internalizada desde fuente externa (${finalSuggestion.model})`,
+              aiWarnings: finalSuggestion.notes,
+              aiModel: finalSuggestion.model,
+              aiEvaluatedAt: new Date(),
+            },
+          });
+          updatedCount += 1;
+
+          if (deleteDuplicates && duplicateRows.length > 1) {
+            const duplicateIds = duplicateRows.filter((row) => row.id !== existing.id).map((row) => row.id);
+            if (duplicateIds.length > 0) {
+              const deleted = await prisma.news.deleteMany({ where: { id: { in: duplicateIds } } });
+              deletedCount += deleted.count;
+            }
+          }
+        } else {
+          const uniqueSlug = await ensureUniqueSlug(prisma, normalized.slug);
+          await prisma.news.create({
+            data: {
+              ...normalized,
+              slug: uniqueSlug,
+              aiDecision: "ALLOW",
+              aiReason: `Creada desde fuente externa (${finalSuggestion.model})`,
+              aiWarnings: finalSuggestion.notes,
+              aiModel: finalSuggestion.model,
+              aiEvaluatedAt: new Date(),
+            },
+          });
+          createdCount += 1;
+        }
+      } catch (error) {
+        errors.push(`Fuente ${index + 1}: ${(error as Error).message}`);
+      }
+    }
+
+    if (createdCount === 0 && updatedCount === 0) {
+      throw new Error(errors[0] ?? "No se pudo internalizar ninguna fuente externa.");
+    }
+
+    const summaryParts = [
+      `Notas propias generadas: ${createdCount}`,
+      `actualizadas: ${updatedCount}`,
+    ];
+    if (deletedCount > 0) {
+      summaryParts.push(`duplicados limpiados: ${deletedCount}`);
+    }
+    if (errors.length > 0) {
+      summaryParts.push(`alertas: ${errors.slice(0, 2).join(" | ")}`);
+    }
+
+    response.redirect(
+      `/backoffice/news/new?studio=rewrite&ok=${encodeURIComponent(summaryParts.join(" � "))}`,
+    );
+  } catch (error) {
+    if (error instanceof Error) {
+      response.status(400).send(
+        await renderUnifiedEditorialPage({
+          activeMode: "rewrite",
+          error: error.message,
+          rewriteState,
+        }),
+      );
+      return;
+    }
+    next(error);
+  }
+});
+
+app.get("/backoffice/news/new", boGuard, async (request, response, next) => {
+  try {
+    const studio = readString(request.query.studio).toLowerCase();
+    const ok = readString(request.query.ok);
+    const pageParams: Parameters<typeof renderUnifiedEditorialPage>[0] = {
+      activeMode: studio === "batch" || studio === "rewrite" ? (studio as "batch" | "rewrite") : "single",
+    };
+    if (studio === "batch" && ok) {
+      pageParams.batchState = { summary: ok };
+    }
+    if (studio === "rewrite" && ok) {
+      pageParams.rewriteState = { summary: ok };
+    }
     response.send(
-      renderNewsForm({
-        mode: "create",
-        action: "/backoffice/news",
-        aiResearch,
-      }),
+      await renderUnifiedEditorialPage(pageParams),
     );
   } catch (error) {
     next(error);
@@ -3697,4 +4139,5 @@ const shutdown = async () => {
 
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
+
 
