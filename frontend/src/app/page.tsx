@@ -14,6 +14,19 @@ type EngagementControls = {
   analysisEnabled: boolean;
 };
 
+type FederalCardItem = {
+  id: string;
+  province: string;
+  headline: string;
+  section: string;
+  slug: string | null;
+  isExternal: boolean;
+  imageUrl: string | null;
+  excerpt: string | null;
+  sourceUrl: string | null;
+  publishedAt: string;
+};
+
 const SECTION_LABEL: Record<NewsSection, string> = {
   NACION: "Nacion",
   PROVINCIAS: "Buenos Aires",
@@ -37,7 +50,7 @@ const NAV_ITEMS: Array<{ label: string; section?: NewsSection }> = [
   { label: "Deportes" },
 ];
 
-const LOGO_SRC = "/logo-home-20260401.png";
+const LOGO_SRC = "/logo.png?v=20260403";
 
 function sanitizeDisplayText(input: string): string {
   return input
@@ -288,7 +301,7 @@ function DesktopArticleCard({
 }) {
   const title = cleanTitle(item);
   return (
-    <article className={`cp-article-card ${compact ? "compact" : ""}`}>
+    <article className={`cp-article-card ${compact ? "compact" : ""}`} data-section={item.section}>
       <StoryAnchor item={item} className="cp-article-media">
         <SmartImage
           src={item.imageUrl}
@@ -301,6 +314,10 @@ function DesktopArticleCard({
       </StoryAnchor>
       <div className="cp-article-body">
         <p className="cp-kicker">{sanitizeDisplayText(item.kicker ?? SECTION_LABEL[item.section])}</p>
+        <div className="cp-article-topline">
+          <span>{sanitizeDisplayText(item.sourceName ?? authorFor(item) ?? "Pulso Pais")}</span>
+          <span>{relativeMinutes(item.publishedAt)}</span>
+        </div>
         <h3>
           <StoryAnchor item={item} className="cp-story-link">
             {shortText(title, compact ? 86 : 104)}
@@ -312,6 +329,46 @@ function DesktopArticleCard({
           <span>{formatDate(item.publishedAt)}</span>
         </div>
         <EngagementBar itemId={item.id} title={title} compact controls={controls} />
+      </div>
+    </article>
+  );
+}
+
+function ProvinceFeatureCard({ entry }: { entry: FederalCardItem }) {
+  const cleanHeadline = shortText(stripCategoryPrefix(sanitizeDisplayText(entry.headline), entry.section), 78);
+  const story = {
+    slug: entry.slug,
+    sourceUrl: entry.sourceUrl,
+    isExternal: entry.isExternal,
+  };
+
+  return (
+    <article className="cp-province-card">
+      <StoryAnchor item={story} className="cp-province-media">
+        <SmartImage
+          src={entry.imageUrl}
+          alt={cleanHeadline}
+          fill
+          sizes="(max-width: 1100px) 100vw, 24vw"
+          className="cp-image"
+          fallbackClassName="cp-image-fallback"
+        />
+      </StoryAnchor>
+      <div className="cp-province-copy">
+        <div className="cp-province-topline">
+          <span>{sanitizeDisplayText(entry.province)}</span>
+          <small>{sanitizeDisplayText(entry.section)}</small>
+        </div>
+        <h4>
+          <StoryAnchor item={story} className="cp-story-link">
+            {cleanHeadline}
+          </StoryAnchor>
+        </h4>
+        <p>{shortText(sanitizeDisplayText(entry.excerpt ?? "Cobertura territorial con foco institucional y agenda local."), 116)}</p>
+        <div className="cp-meta-line">
+          <span>Pulso Federal</span>
+          <span>{relativeMinutes(entry.publishedAt)}</span>
+        </div>
       </div>
     </article>
   );
@@ -383,7 +440,7 @@ function DesktopEdition({
   interviewStory: FeedItem | null;
   electionStory: FeedItem | null;
   sportsStory: FeedItem | null;
-  provinces: Array<{ province: string; headline: string; section: string; sourceUrl: string | null }>;
+  provinces: FederalCardItem[];
   poll: PollItem | null;
   markets: Array<{ symbol: string; label: string; price: number | null; changePct: number | null; currency: string }>;
   weatherLabel: string;
@@ -479,16 +536,32 @@ function DesktopEdition({
         <aside className="cp-hero-side">
           <div className="cp-most-read">
             <h3>Lo mas leido</h3>
-            {topStories.map((story, index) => (
-              <article key={story.id} className="cp-most-read-item">
-                <span>{String(index + 1).padStart(2, "0")}</span>
-                <h4>
-                  <StoryAnchor item={story} className="cp-story-link">
-                    {shortText(cleanTitle(story), 78)}
+            <div className="cp-most-read-list">
+              {topStories.map((story, index) => (
+                <article key={story.id} className="cp-most-read-item">
+                  <span className="cp-most-read-rank">{String(index + 1).padStart(2, "0")}</span>
+                  <StoryAnchor item={story} className="cp-most-read-thumb">
+                    <SmartImage
+                      src={story.imageUrl}
+                      alt={cleanTitle(story)}
+                      fill
+                      sizes="88px"
+                      className="cp-image"
+                      fallbackClassName="cp-image-fallback"
+                    />
                   </StoryAnchor>
-                </h4>
-              </article>
-            ))}
+                  <div className="cp-most-read-copy">
+                    <small>{sanitizeDisplayText(story.kicker ?? SECTION_LABEL[story.section])}</small>
+                    <h4>
+                      <StoryAnchor item={story} className="cp-story-link">
+                        {shortText(cleanTitle(story), 74)}
+                      </StoryAnchor>
+                    </h4>
+                    <p>{relativeMinutes(story.publishedAt)}</p>
+                  </div>
+                </article>
+              ))}
+            </div>
           </div>
           <div className="cp-ad-tile">
             <small>Espacio publicitario</small>
@@ -623,10 +696,7 @@ function DesktopEdition({
         </div>
         <div className="cp-province-grid">
           {provinces.map((entry) => (
-            <article key={entry.province}>
-              <span>{sanitizeDisplayText(entry.province)}</span>
-              <h4>{shortText(stripCategoryPrefix(sanitizeDisplayText(entry.headline)), 74)}</h4>
-            </article>
+            <ProvinceFeatureCard key={entry.id} entry={entry} />
           ))}
         </div>
       </section>
@@ -679,7 +749,7 @@ function MobileEdition({
 }: {
   hero: FeedItem | null;
   stream: FeedItem[];
-  provinces: Array<{ province: string; headline: string; section: string; sourceUrl: string | null }>;
+  provinces: FederalCardItem[];
   interviewStory: FeedItem | null;
   opinionStories: FeedItem[];
   sportsStory: FeedItem | null;
@@ -776,9 +846,22 @@ function MobileEdition({
         </div>
         <div className="cp-m-province-row">
           {provinces.map((entry) => (
-            <article key={entry.province}>
+            <article key={entry.id}>
+              <StoryAnchor
+                item={{ slug: entry.slug, sourceUrl: entry.sourceUrl, isExternal: entry.isExternal }}
+                className="cp-m-province-media"
+              >
+                <SmartImage
+                  src={entry.imageUrl}
+                  alt={sanitizeDisplayText(entry.headline)}
+                  fill
+                  sizes="44vw"
+                  className="cp-image"
+                  fallbackClassName="cp-image-fallback"
+                />
+              </StoryAnchor>
               <small>{sanitizeDisplayText(entry.province)}</small>
-              <p>{shortText(stripCategoryPrefix(sanitizeDisplayText(entry.headline)), 54)}</p>
+              <p>{shortText(stripCategoryPrefix(sanitizeDisplayText(entry.headline)), 56)}</p>
             </article>
           ))}
         </div>

@@ -24,11 +24,15 @@ services:
         value: https://tu-frontend.vercel.app,https://*.vercel.app
       - key: FRONTEND_PUBLIC_URL
         value: https://pulso-pais.vercel.app
+      - key: BACKEND_PUBLIC_URL
+        value: https://pulso-backend-kgtc.onrender.com
       - key: ADMIN_EMAIL
         sync: false
       - key: ADMIN_PASSWORD
         sync: false
       - key: ADMIN_JWT_SECRET
+        sync: false
+      - key: MEDIA_PROXY_SECRET
         sync: false
       - key: ADMIN_COOKIE_NAME
         value: pulso_admin_session

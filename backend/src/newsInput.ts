@@ -4,12 +4,13 @@ import {
   isNewsSection,
   isNewsStatus,
   isProvince,
+  normalizeImageUrl as normalizeImageUrlInput,
   normalizeHttpUrl,
-  normalizeImageUrl,
   readBoolean,
   readString,
   slugifyText,
 } from "./utils";
+import { buildManagedImageUrl } from "./mediaProxy";
 import type { NormalizedNewsInput } from "./types";
 
 function trimExcerpt(rawExcerpt: string | null, body: string | null): string | null {
@@ -61,6 +62,11 @@ export function normalizeNewsInput(raw: Record<string, unknown>): NormalizedNews
     .map((tag) => tag.trim())
     .filter(Boolean)
     .slice(0, 12);
+  const imageUrl = buildManagedImageUrl(normalizeImageUrlInput(raw.imageUrl));
+
+  if (statusRaw === NewsStatus.PUBLISHED && !imageUrl) {
+    throw new Error("La noticia publicada debe tener una imagen de portada valida.");
+  }
 
   return {
     title,
@@ -68,7 +74,7 @@ export function normalizeNewsInput(raw: Record<string, unknown>): NormalizedNews
     kicker: asNullable(readString(raw.kicker)),
     excerpt: trimExcerpt(asNullable(readString(raw.excerpt)), asNullable(readString(raw.body))),
     body: asNullable(readString(raw.body)),
-    imageUrl: normalizeImageUrl(raw.imageUrl),
+    imageUrl,
     sourceName: asNullable(readString(raw.sourceName)),
     sourceUrl: normalizeHttpUrl(raw.sourceUrl),
     authorName: asNullable(readString(raw.authorName)),

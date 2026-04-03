@@ -9,7 +9,7 @@ import type { FeedItem, NewsSection } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
-const LOGO_SRC = "/logo-home-20260401.png";
+const LOGO_SRC = "/logo.png?v=20260403";
 
 const SECTION_LABEL: Record<NewsSection, string> = {
   NACION: "Nacion",
@@ -34,6 +34,7 @@ const NAV_ITEMS: Array<{ label: string; section?: NewsSection }> = [
 ];
 
 const GALLERY_BLOCK_REGEX = /\[\[GALERIA_FOTOS\]\]([\s\S]*?)\[\[\/GALERIA_FOTOS\]\]/i;
+const VIDEO_BLOCK_REGEX = /\[\[VIDEO_PRINCIPAL\]\]([\s\S]*?)\[\[\/VIDEO_PRINCIPAL\]\]/i;
 
 type NewsDetailPageProps = {
   params: Promise<{ slug: string }>;
@@ -128,6 +129,40 @@ function extractGalleryFromBody(body: string | null): { bodyWithoutGallery: stri
   return {
     bodyWithoutGallery: bodyWithoutGallery.length > 0 ? bodyWithoutGallery : null,
     galleryUrls,
+  };
+}
+
+function extractPrimaryVideoFromBody(body: string | null): {
+  bodyWithoutVideo: string | null;
+  videoUrl: string | null;
+  posterUrl: string | null;
+} {
+  if (!body || body.trim().length === 0) {
+    return { bodyWithoutVideo: null, videoUrl: null, posterUrl: null };
+  }
+
+  const match = body.match(VIDEO_BLOCK_REGEX);
+  if (!match) {
+    return { bodyWithoutVideo: body, videoUrl: null, posterUrl: null };
+  }
+
+  let videoUrl: string | null = null;
+  let posterUrl: string | null = null;
+  for (const line of match[1].split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (/^url:\s*/i.test(trimmed)) {
+      videoUrl = trimmed.replace(/^url:\s*/i, "").trim() || null;
+    }
+    if (/^poster:\s*/i.test(trimmed)) {
+      posterUrl = trimmed.replace(/^poster:\s*/i, "").trim() || null;
+    }
+  }
+
+  const bodyWithoutVideo = body.replace(VIDEO_BLOCK_REGEX, "").replace(/\n{3,}/g, "\n\n").trim();
+  return {
+    bodyWithoutVideo: bodyWithoutVideo.length > 0 ? bodyWithoutVideo : null,
+    videoUrl,
+    posterUrl,
   };
 }
 
@@ -240,7 +275,8 @@ export default async function NewsDetailPage({ params }: NewsDetailPageProps) {
   const mostRead = dedupeById([...payload.related, ...stream]).slice(0, 6);
   const sideStream = stream.slice(0, 3);
   const related = dedupeById(payload.related).slice(0, 6);
-  const { bodyWithoutGallery, galleryUrls } = extractGalleryFromBody(payload.item.body);
+  const { bodyWithoutVideo, videoUrl, posterUrl } = extractPrimaryVideoFromBody(payload.item.body);
+  const { bodyWithoutGallery, galleryUrls } = extractGalleryFromBody(bodyWithoutVideo);
   const paragraphs = detailParagraphs(bodyWithoutGallery, payload.item.excerpt);
 
   return (
@@ -306,6 +342,14 @@ export default async function NewsDetailPage({ params }: NewsDetailPageProps) {
             />
           </figure>
 
+          {videoUrl ? (
+            <section className="news-detail-video">
+              <video controls preload="metadata" poster={posterUrl ?? undefined}>
+                <source src={videoUrl} />
+              </video>
+            </section>
+          ) : null}
+
           {galleryUrls.length > 0 ? (
             <section className="news-detail-gallery" aria-label="Galeria de imagenes de la nota">
               {galleryUrls.map((url, index) => (
@@ -352,11 +396,25 @@ export default async function NewsDetailPage({ params }: NewsDetailPageProps) {
               {mostRead.map((entry, index) => (
                 <article key={entry.id} className="news-most-read-item">
                   <span>{String(index + 1).padStart(2, "0")}</span>
-                  <h4>
-                    <StoryAnchor item={entry} className="news-story-link">
-                      {shortText(cleanTitle({ title: entry.title, section: entry.section }), 84)}
-                    </StoryAnchor>
-                  </h4>
+                  <div className="news-most-read-thumb">
+                    <SmartImage
+                      src={entry.imageUrl}
+                      alt={cleanTitle({ title: entry.title, section: entry.section })}
+                      fill
+                      sizes="92px"
+                      className="news-related-image"
+                      fallbackClassName="news-related-placeholder"
+                    />
+                  </div>
+                  <div className="news-most-read-copy">
+                    <small>{sanitizeDisplayText(SECTION_LABEL[entry.section])}</small>
+                    <h4>
+                      <StoryAnchor item={entry} className="news-story-link">
+                        {shortText(cleanTitle({ title: entry.title, section: entry.section }), 72)}
+                      </StoryAnchor>
+                    </h4>
+                    <p>{formatDate(entry.publishedAt)}</p>
+                  </div>
                 </article>
               ))}
             </div>

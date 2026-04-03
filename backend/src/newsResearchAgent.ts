@@ -1,6 +1,6 @@
 import { getExternalNews } from "./externalNews";
 import { type FeedItem } from "./types";
-import { normalizeImageUrl } from "./utils";
+import { normalizeHttpUrl, normalizeImageUrl } from "./utils";
 
 export type NewsResearchOptions = {
   brief: string;
@@ -15,6 +15,8 @@ export type NewsResearchSource = {
   sourceName: string | null;
   sourceUrl: string;
   imageUrl: string | null;
+  videoUrl: string | null;
+  videoPosterUrl: string | null;
   excerpt: string | null;
   section: string;
   publishedAt: string;
@@ -31,6 +33,9 @@ type ArticleSnapshot = {
   title: string | null;
   description: string | null;
   imageUrl: string | null;
+  imageCandidates: string[];
+  videoUrl: string | null;
+  videoPosterUrl: string | null;
   paragraphs: string[];
 };
 
@@ -61,7 +66,7 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function findMetaContent(html: string, key: string): string | null {
+function findMetaCandidates(html: string, key: string): string[] {
   const escaped = escapeRegExp(key);
   const patterns = [
     new RegExp(
@@ -73,13 +78,90 @@ function findMetaContent(html: string, key: string): string | null {
       "i",
     ),
   ];
+  const values: string[] = [];
   for (const pattern of patterns) {
-    const match = html.match(pattern);
-    if (match?.[1]) {
-      return stripHtmlTags(match[1]).slice(0, 400);
+    for (const match of html.matchAll(pattern)) {
+      const value = stripHtmlTags(match[1] ?? "").slice(0, 800);
+      if (value) {
+        values.push(value);
+      }
     }
   }
-  return null;
+  return Array.from(new Set(values));
+}
+
+function findMetaContent(html: string, key: string): string | null {
+  return findMetaCandidates(html, key)[0] ?? null;
+}
+
+function absoluteMediaUrl(pageUrl: string, candidate: string | null, kind: "image" | "video"): string | null {
+  const value = stripHtmlTags(candidate ?? "");
+  if (!value) {
+    return null;
+  }
+  try {
+    const resolved = new URL(value, pageUrl).toString();
+    return kind === "image" ? normalizeImageUrl(resolved) : normalizeHttpUrl(resolved);
+  } catch {
+    return kind === "image" ? normalizeImageUrl(value) : normalizeHttpUrl(value);
+  }
+}
+
+function extractAttributeCandidates(html: string, expression: RegExp): string[] {
+  const results: string[] = [];
+  for (const match of html.matchAll(expression)) {
+    const value = stripHtmlTags(match[1] ?? "").slice(0, 800);
+    if (value) {
+      results.push(value);
+    }
+  }
+  return Array.from(new Set(results));
+}
+
+function extractImageCandidates(html: string, pageUrl: string): string[] {
+  const rawCandidates = [
+    ...findMetaCandidates(html, "og:image"),
+    ...findMetaCandidates(html, "og:image:url"),
+    ...findMetaCandidates(html, "twitter:image"),
+    ...findMetaCandidates(html, "twitter:image:src"),
+    ...findMetaCandidates(html, "image"),
+    ...extractAttributeCandidates(html, /<img[^>]+(?:src|data-src|data-lazy-src)=["']([^"']+)["']/gi),
+  ];
+
+  return Array.from(
+    new Set(
+      rawCandidates
+        .map((candidate) => absoluteMediaUrl(pageUrl, candidate, "image"))
+        .filter((candidate): candidate is string => Boolean(candidate)),
+    ),
+  ).slice(0, 8);
+}
+
+function extractVideoSnapshot(html: string, pageUrl: string): { videoUrl: string | null; videoPosterUrl: string | null } {
+  const videoCandidates = [
+    ...findMetaCandidates(html, "og:video"),
+    ...findMetaCandidates(html, "og:video:url"),
+    ...findMetaCandidates(html, "twitter:player:stream"),
+    ...extractAttributeCandidates(html, /<video[^>]+src=["']([^"']+)["']/gi),
+    ...extractAttributeCandidates(html, /<source[^>]+src=["']([^"']+)["'][^>]*type=["']video\/[^"']+["']/gi),
+  ];
+
+  const posterCandidates = [
+    ...findMetaCandidates(html, "og:video:image"),
+    ...findMetaCandidates(html, "twitter:image"),
+    ...extractAttributeCandidates(html, /<video[^>]+poster=["']([^"']+)["']/gi),
+  ];
+
+  return {
+    videoUrl:
+      videoCandidates
+        .map((candidate) => absoluteMediaUrl(pageUrl, candidate, "video"))
+        .find((candidate): candidate is string => Boolean(candidate)) ?? null,
+    videoPosterUrl:
+      posterCandidates
+        .map((candidate) => absoluteMediaUrl(pageUrl, candidate, "image"))
+        .find((candidate): candidate is string => Boolean(candidate)) ?? null,
+  };
 }
 
 function extractParagraphs(html: string, maxItems = 3): string[] {
@@ -115,13 +197,17 @@ async function fetchArticleSnapshot(url: string): Promise<ArticleSnapshot> {
     const html = await response.text();
     const ogTitle = findMetaContent(html, "og:title");
     const ogDescription = findMetaContent(html, "og:description");
-    const ogImage = findMetaContent(html, "og:image");
+    const imageCandidates = extractImageCandidates(html, url);
+    const videoSnapshot = extractVideoSnapshot(html, url);
     const paragraphs = extractParagraphs(html);
 
     return {
       title: ogTitle,
       description: ogDescription,
-      imageUrl: ogImage,
+      imageUrl: imageCandidates[0] ?? videoSnapshot.videoPosterUrl ?? null,
+      imageCandidates,
+      videoUrl: videoSnapshot.videoUrl,
+      videoPosterUrl: videoSnapshot.videoPosterUrl,
       paragraphs,
     };
   } catch {
@@ -129,6 +215,9 @@ async function fetchArticleSnapshot(url: string): Promise<ArticleSnapshot> {
       title: null,
       description: null,
       imageUrl: null,
+      imageCandidates: [],
+      videoUrl: null,
+      videoPosterUrl: null,
       paragraphs: [],
     };
   } finally {
@@ -223,7 +312,7 @@ async function buildRankedSources(options: NewsResearchOptions): Promise<RankedS
     const withSnapshot = item.sourceUrl ? snapshotByUrl.get(item.sourceUrl) ?? null : null;
     const title = withSnapshot?.title || item.title;
     const excerpt = withSnapshot?.description || item.excerpt || null;
-    const imageUrl = normalizeImageUrl(withSnapshot?.imageUrl || item.imageUrl || null);
+    const imageUrl = normalizeImageUrl(withSnapshot?.imageUrl || item.imageUrl || withSnapshot?.videoPosterUrl || null);
     const paragraphText = withSnapshot?.paragraphs.join(" || ") || "";
     const sourceText = `${title} ${excerpt ?? ""} ${paragraphText}`.trim();
     const score = scoreByBrief(sourceText, tokens);
@@ -235,6 +324,8 @@ async function buildRankedSources(options: NewsResearchOptions): Promise<RankedS
         sourceName: item.sourceName,
         sourceUrl: item.sourceUrl || "",
         imageUrl,
+        videoUrl: withSnapshot?.videoUrl ?? null,
+        videoPosterUrl: withSnapshot?.videoPosterUrl ?? null,
         excerpt: excerpt ? compactText(excerpt, 260) : null,
         section: item.section,
         publishedAt: item.publishedAt,

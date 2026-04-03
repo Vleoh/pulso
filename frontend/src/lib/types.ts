@@ -76,10 +76,16 @@ export type HomePayload = {
   sponsored: FeedItem[];
   externalPulse: FeedItem[];
   federalHighlights: Array<{
+    id: string;
     province: string;
     headline: string;
     section: string;
+    slug: string | null;
+    isExternal: boolean;
+    imageUrl: string | null;
+    excerpt: string | null;
     sourceUrl: string | null;
+    publishedAt: string;
   }>;
   adSlots: Array<{
     id: string;

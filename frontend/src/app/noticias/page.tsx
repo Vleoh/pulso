@@ -6,6 +6,8 @@ import type { FeedItem, NewsSection } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
+const LOGO_SRC = "/logo.png?v=20260403";
+
 const NEWS_SECTIONS: Array<{ value: NewsSection; label: string }> = [
   { value: "NACION", label: "Nacion" },
   { value: "PROVINCIAS", label: "Provincias" },
@@ -113,11 +115,15 @@ export default async function NewsHubPage({ searchParams }: NewsHubPageProps) {
       <div className="news-hub-shell">
         <header className="news-hub-header">
           <div>
-            <h1>Gestion de Noticias Publicas</h1>
-            <p>Portada de lectura con acceso directo a cada nota y fuente.</p>
+            <div className="news-hub-brand-lockup">
+              <img src={LOGO_SRC} alt="Pulso Pais" width={168} height={54} />
+              <span>Archivo vivo de cobertura politica federal</span>
+            </div>
+            <h1>{activeSection ? activeSection.label : "Noticias"}</h1>
+            <p>Lectura continua con notas propias, seguimiento territorial y acceso a las fuentes cuando corresponde.</p>
           </div>
           <div className="news-hub-actions">
-            <Link href="/">Ir al Home</Link>
+            <Link href="/">Volver al Home</Link>
             <a href={process.env.NEXT_PUBLIC_BACKOFFICE_URL ?? "https://pulso-backend-kgtc.onrender.com/backoffice"} target="_blank" rel="noreferrer">
               Backoffice
             </a>

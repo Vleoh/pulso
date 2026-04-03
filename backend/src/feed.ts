@@ -1,4 +1,5 @@
 import { type News, NewsSection } from "@prisma/client";
+import { buildManagedImageUrl } from "./mediaProxy";
 import type { FeedItem } from "./types";
 import { normalizeHttpUrl, normalizeImageUrl } from "./utils";
 
@@ -29,7 +30,7 @@ export function toFeedItem(news: News): FeedItem {
     title: news.title,
     kicker: news.kicker,
     excerpt: news.excerpt,
-    imageUrl: normalizeImageUrl(news.imageUrl),
+    imageUrl: buildManagedImageUrl(normalizeImageUrl(news.imageUrl)),
     sourceName: news.sourceName,
     sourceUrl: normalizeHttpUrl(news.sourceUrl),
     section: news.section,

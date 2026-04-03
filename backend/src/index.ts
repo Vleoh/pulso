@@ -26,6 +26,7 @@ import { ensureUniqueSlug, normalizeNewsInput } from "./newsInput";
 import { toFeedItem, dedupeByKey } from "./feed";
 import { getExternalNews } from "./externalNews";
 import { getMarketData, getWeatherData } from "./signalData";
+import { buildManagedImageUrl, buildManagedVideoUrl, proxyManagedMediaRequest } from "./mediaProxy";
 import { PROVINCE_OPTIONS, SECTION_OPTIONS } from "./catalog";
 import {
   asNullable,
@@ -144,12 +145,20 @@ const BATCH_NEWS_FALLBACK_IMAGES = [
 const GALLERY_BLOCK_START = "[[GALERIA_FOTOS]]";
 const GALLERY_BLOCK_END = "[[/GALERIA_FOTOS]]";
 const GALLERY_BLOCK_REGEX = /\[\[GALERIA_FOTOS\]\][\s\S]*?\[\[\/GALERIA_FOTOS\]\]/gi;
+const VIDEO_BLOCK_START = "[[VIDEO_PRINCIPAL]]";
+const VIDEO_BLOCK_END = "[[/VIDEO_PRINCIPAL]]";
+const VIDEO_BLOCK_REGEX = /\[\[VIDEO_PRINCIPAL\]\][\s\S]*?\[\[\/VIDEO_PRINCIPAL\]\]/gi;
 const IMAGE_PROBE_TIMEOUT_MS = 4500;
 const IMAGE_PROBE_CACHE_TTL_MS = 15 * 60 * 1000;
 const imageProbeCache = new Map<string, { ok: boolean; expiresAt: number }>();
 
 function uniqueNormalizedImageUrls(values: Array<string | null | undefined>, maxItems = 6): string[] {
   const normalized = values.map((item) => normalizeImageUrl(item)).filter((item): item is string => Boolean(item));
+  return Array.from(new Set(normalized)).slice(0, maxItems);
+}
+
+function uniqueNormalizedVideoUrls(values: Array<string | null | undefined>, maxItems = 3): string[] {
+  const normalized = values.map((item) => normalizeHttpUrl(item)).filter((item): item is string => Boolean(item));
   return Array.from(new Set(normalized)).slice(0, maxItems);
 }
 
@@ -190,8 +199,33 @@ function appendGalleryBlockToBody(body: string | null | undefined, imageUrls: st
   return `${cleanedBody}\n\n${galleryBlock}`;
 }
 
-async function probeImageUrl(url: string): Promise<boolean> {
-  const cached = imageProbeCache.get(url);
+function appendPrimaryVideoBlockToBody(
+  body: string | null | undefined,
+  videoUrl: string | null,
+  posterUrl?: string | null,
+): string | null {
+  const cleanedBody = readString(body).replace(VIDEO_BLOCK_REGEX, "").trim();
+  if (!videoUrl) {
+    return cleanedBody.length > 0 ? cleanedBody : null;
+  }
+
+  const lines = [VIDEO_BLOCK_START, `url: ${videoUrl}`];
+  if (posterUrl) {
+    lines.push(`poster: ${posterUrl}`);
+  }
+  lines.push(VIDEO_BLOCK_END);
+
+  const block = lines.join("\n");
+  if (!cleanedBody) {
+    return block;
+  }
+
+  return `${block}\n\n${cleanedBody}`;
+}
+
+async function probeMediaUrl(url: string, kind: "image" | "video"): Promise<boolean> {
+  const cacheKey = `${kind}:${url}`;
+  const cached = imageProbeCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
     return cached.ok;
   }
@@ -200,7 +234,7 @@ async function probeImageUrl(url: string): Promise<boolean> {
   const timeout = setTimeout(() => controller.abort(), IMAGE_PROBE_TIMEOUT_MS);
 
   const persist = (ok: boolean) => {
-    imageProbeCache.set(url, { ok, expiresAt: Date.now() + IMAGE_PROBE_CACHE_TTL_MS });
+    imageProbeCache.set(cacheKey, { ok, expiresAt: Date.now() + IMAGE_PROBE_CACHE_TTL_MS });
     return ok;
   };
 
@@ -209,14 +243,14 @@ async function probeImageUrl(url: string): Promise<boolean> {
       method: "HEAD",
       signal: controller.signal,
       headers: {
-        accept: "image/*,*/*;q=0.8",
-        "user-agent": "PulsoPaisImageProbe/1.0",
+        accept: kind === "image" ? "image/*,*/*;q=0.8" : "video/*,*/*;q=0.8",
+        "user-agent": "PulsoPaisMediaProbe/1.0",
       },
     });
 
     if (head.ok) {
       const contentType = head.headers.get("content-type") ?? "";
-      if (!contentType || contentType.startsWith("image/")) {
+      if (!contentType || contentType.startsWith(`${kind}/`) || contentType === "application/octet-stream") {
         return persist(true);
       }
     }
@@ -229,9 +263,9 @@ async function probeImageUrl(url: string): Promise<boolean> {
       method: "GET",
       signal: controller.signal,
       headers: {
-        accept: "image/*,*/*;q=0.8",
+        accept: kind === "image" ? "image/*,*/*;q=0.8" : "video/*,*/*;q=0.8",
         range: "bytes=0-1024",
-        "user-agent": "PulsoPaisImageProbe/1.0",
+        "user-agent": "PulsoPaisMediaProbe/1.0",
       },
     });
 
@@ -239,7 +273,7 @@ async function probeImageUrl(url: string): Promise<boolean> {
       return persist(false);
     }
     const contentType = get.headers.get("content-type") ?? "";
-    if (!contentType || contentType.startsWith("image/")) {
+    if (!contentType || contentType.startsWith(`${kind}/`) || contentType === "application/octet-stream") {
       return persist(true);
     }
     return persist(false);
@@ -250,12 +284,33 @@ async function probeImageUrl(url: string): Promise<boolean> {
   }
 }
 
+async function probeImageUrl(url: string): Promise<boolean> {
+  return probeMediaUrl(url, "image");
+}
+
+async function probeVideoUrl(url: string): Promise<boolean> {
+  return probeMediaUrl(url, "video");
+}
+
 async function pickReachableImage(imageUrls: string[], maxChecks = 4): Promise<string | null> {
   const unique = Array.from(new Set(imageUrls.map((item) => item.trim()).filter(Boolean)));
   const capped = unique.slice(0, Math.max(1, maxChecks));
 
   for (const url of capped) {
     if (await probeImageUrl(url)) {
+      return url;
+    }
+  }
+
+  return null;
+}
+
+async function pickReachableVideo(videoUrls: string[], maxChecks = 3): Promise<string | null> {
+  const unique = Array.from(new Set(videoUrls.map((item) => item.trim()).filter(Boolean)));
+  const capped = unique.slice(0, Math.max(1, maxChecks));
+
+  for (const url of capped) {
+    if (await probeVideoUrl(url)) {
       return url;
     }
   }
@@ -385,8 +440,22 @@ function selectedCampaignLine(raw: Record<string, unknown>, fallbackLine: string
 async function postProcessResearchedSuggestion(
   suggestion: Awaited<ReturnType<typeof generateDraftWithAi>>,
   settings: Awaited<ReturnType<typeof getAiResearchSettings>>,
-  leadSource: { sourceName: string | null; sourceUrl: string; imageUrl: string | null } | null,
-  sources: Array<{ imageUrl: string | null; sourceName: string | null; sourceUrl: string }>,
+  leadSource:
+    | {
+        sourceName: string | null;
+        sourceUrl: string;
+        imageUrl: string | null;
+        videoUrl: string | null;
+        videoPosterUrl: string | null;
+      }
+    | null,
+  sources: Array<{
+    imageUrl: string | null;
+    sourceName: string | null;
+    sourceUrl: string;
+    videoUrl: string | null;
+    videoPosterUrl: string | null;
+  }>,
   fallbackSeed: string,
 ): Promise<Awaited<ReturnType<typeof generateDraftWithAi>>> {
   const notes = Array.isArray(suggestion.notes) ? suggestion.notes.slice(0, 7) : [];
@@ -394,7 +463,13 @@ async function postProcessResearchedSuggestion(
 
   const sourceImageCandidates = uniqueNormalizedImageUrls(sources.map((item) => item.imageUrl), 8);
   const coverImageCandidatesRaw = uniqueNormalizedImageUrls(
-    [suggestion.imageUrl, leadSource?.imageUrl, ...sourceImageCandidates, fallbackResearchImage(fallbackSeed)],
+    [
+      suggestion.imageUrl,
+      leadSource?.imageUrl,
+      leadSource?.videoPosterUrl,
+      ...sourceImageCandidates,
+      fallbackResearchImage(fallbackSeed),
+    ],
     8,
   );
   const coverImageCandidates = coverImageCandidatesRaw
@@ -412,14 +487,40 @@ async function postProcessResearchedSuggestion(
   const galleryCandidates = gallerySourceRaw
     .map((url) => applyResearchImageTransform(url, settings))
     .filter((url): url is string => Boolean(url));
-  const galleryImages = (await pickReachableImages(galleryCandidates, 4, 10)).filter((url) => url !== finalImage);
+  const galleryImages = (await pickReachableImages(galleryCandidates, 4, 10))
+    .filter((url) => url !== finalImage)
+    .map((url) => buildManagedImageUrl(url))
+    .filter((url): url is string => Boolean(url));
 
-  const finalBody = appendGalleryBlockToBody(suggestion.body ?? suggestion.excerpt ?? null, galleryImages);
+  const rawVideoCandidates = uniqueNormalizedVideoUrls(
+    [leadSource?.videoUrl, ...sources.map((item) => item.videoUrl), normalizeHttpUrl((suggestion as { videoUrl?: string | null }).videoUrl)],
+    4,
+  );
+  const rawPosterCandidates = uniqueNormalizedImageUrls(
+    [leadSource?.videoPosterUrl, ...sources.map((item) => item.videoPosterUrl), finalImage],
+    4,
+  );
+  const finalVideo = await pickReachableVideo(rawVideoCandidates, 3);
+  const finalVideoPoster = uniqueNormalizedImageUrls(
+    [finalImage, ...rawPosterCandidates],
+    3,
+  )[0] ?? null;
+
+  const proxiedCover = buildManagedImageUrl(finalImage);
+  let finalBody = appendPrimaryVideoBlockToBody(
+    suggestion.body ?? suggestion.excerpt ?? null,
+    buildManagedVideoUrl(finalVideo),
+    buildManagedImageUrl(finalVideoPoster),
+  );
+  finalBody = appendGalleryBlockToBody(finalBody, galleryImages);
   if (finalImage) {
     notes.push("Portada visual confirmada por agente periodista.");
   }
   if (galleryImages.length > 0) {
     notes.push(`Galeria IA agregada (${galleryImages.length} fotos).`);
+  }
+  if (finalVideo) {
+    notes.push("Video principal detectado y enlazado para consumo in-page.");
   }
 
   const finalSourceName =
@@ -430,7 +531,7 @@ async function postProcessResearchedSuggestion(
 
   return {
     ...suggestion,
-    imageUrl: finalImage,
+    imageUrl: proxiedCover,
     body: finalBody,
     sourceName: finalSourceName,
     sourceUrl: settings.internalizeSourceLinks
@@ -1188,6 +1289,32 @@ app.get("/api/weather", async (_request, response, next) => {
   }
 });
 
+app.get("/api/media/proxy/:kind/:payload", async (request, response, next) => {
+  try {
+    const kind = request.params.kind === "video" ? "video" : request.params.kind === "image" ? "image" : null;
+    if (!kind) {
+      response.status(400).json({ error: "Tipo de media invalido." });
+      return;
+    }
+    await proxyManagedMediaRequest(request, response, kind);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.head("/api/media/proxy/:kind/:payload", async (request, response, next) => {
+  try {
+    const kind = request.params.kind === "video" ? "video" : request.params.kind === "image" ? "image" : null;
+    if (!kind) {
+      response.status(400).end();
+      return;
+    }
+    await proxyManagedMediaRequest(request, response, kind);
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/news", async (request, response, next) => {
   try {
     const sectionQuery = readString(request.query.section).toUpperCase();
@@ -1268,7 +1395,7 @@ app.get("/api/news/:slug", async (request, response, next) => {
     response.json({
       item: {
         ...item,
-        imageUrl: normalizeImageUrl(item.imageUrl),
+        imageUrl: buildManagedImageUrl(normalizeImageUrl(item.imageUrl)),
         sourceUrl: normalizeHttpUrl(item.sourceUrl),
         publishedAt: (item.publishedAt ?? item.createdAt).toISOString(),
         createdAt: item.createdAt.toISOString(),
@@ -2406,7 +2533,13 @@ app.post("/backoffice/ai/assist", boGuard, async (request, response, next) => {
     const assistInput = buildEditorialAssistInput(request.body as Record<string, unknown>);
     const context = await buildAiNewsContext(prisma);
     const suggestion = await generateDraftWithAi(assistInput, context.contextText);
-    response.json({ suggestion, context: context.meta });
+    response.json({
+      suggestion: {
+        ...suggestion,
+        imageUrl: buildManagedImageUrl(suggestion.imageUrl),
+      },
+      context: context.meta,
+    });
   } catch (error) {
     next(error);
   }
@@ -2466,7 +2599,18 @@ app.post("/backoffice/ai/ask", boGuard, async (request, response, next) => {
     const assistInput = buildEditorialAssistInput(request.body as Record<string, unknown>);
     const context = await buildAiNewsContext(prisma);
     const answer = await askEditorialWithAi(assistInput, context.contextText);
-    response.json({ answer, context: context.meta });
+    response.json({
+      answer: answer?.draft
+        ? {
+            ...answer,
+            draft: {
+              ...answer.draft,
+              imageUrl: buildManagedImageUrl(answer.draft.imageUrl),
+            },
+          }
+        : answer,
+      context: context.meta,
+    });
   } catch (error) {
     next(error);
   }
@@ -2800,8 +2944,22 @@ app.post("/backoffice/news/batch", boGuard, async (request, response, next) => {
 
     const context = await buildAiNewsContext(prisma);
     let mergedContext = context.contextText;
-    let researchLead: { sourceName: string | null; sourceUrl: string; imageUrl: string | null } | null = null;
-    let researchSources: Array<{ sourceName: string | null; sourceUrl: string; imageUrl: string | null }> = [];
+    let researchLead:
+      | {
+          sourceName: string | null;
+          sourceUrl: string;
+          imageUrl: string | null;
+          videoUrl: string | null;
+          videoPosterUrl: string | null;
+        }
+      | null = null;
+    let researchSources: Array<{
+      sourceName: string | null;
+      sourceUrl: string;
+      imageUrl: string | null;
+      videoUrl: string | null;
+      videoPosterUrl: string | null;
+    }> = [];
     let researchSourcesUsed = 0;
 
     if (useResearchAgent) {
@@ -2856,11 +3014,13 @@ app.post("/backoffice/news/batch", boGuard, async (request, response, next) => {
           researchSources.length > 0
             ? [researchSources[(index + 1) % researchSources.length], researchSources[(index + 2) % researchSources.length]]
             : [];
+        const sourceVideoCandidates = researchSources.length > 0 ? [sourceItem, researchLead, ...sourceGalleryCandidates] : [];
         const baseImageCandidatesRaw = uniqueNormalizedImageUrls(
           [
             draft.imageUrl,
             sourceItem?.imageUrl ?? null,
             researchLead?.imageUrl ?? null,
+            sourceItem?.videoPosterUrl ?? null,
             requireImageUrl || useResearchAgent ? fallbackBatchImageByIndex(index) : null,
           ],
           5,
@@ -2878,7 +3038,20 @@ app.post("/backoffice/news/batch", boGuard, async (request, response, next) => {
           .filter((url) => !baseImageCandidatesRaw.includes(url))
           .map((url) => applyResearchImageTransform(url, aiResearchSettings))
           .filter((url): url is string => Boolean(url));
-        const reachableGallery = (await pickReachableImages(galleryImages, 3, 8)).filter((url) => url !== finalImage);
+        const reachableGallery = (await pickReachableImages(galleryImages, 3, 8))
+          .filter((url) => url !== finalImage)
+          .map((url) => buildManagedImageUrl(url))
+          .filter((url): url is string => Boolean(url));
+        const reachableVideo = await pickReachableVideo(
+          uniqueNormalizedVideoUrls(sourceVideoCandidates.map((entry) => entry?.videoUrl ?? null), 3),
+          3,
+        );
+        const videoPoster = buildManagedImageUrl(
+          uniqueNormalizedImageUrls(
+            [sourceItem?.videoPosterUrl ?? null, researchLead?.videoPosterUrl ?? null, finalImage],
+            3,
+          )[0] ?? null,
+        );
 
         const finalSourceName = draft.sourceName ?? sourceItem?.sourceName ?? researchLead?.sourceName ?? defaultSourceName;
         const finalSourceUrl =
@@ -2889,7 +3062,14 @@ app.post("/backoffice/news/batch", boGuard, async (request, response, next) => {
               normalizeHttpUrl(researchLead?.sourceUrl) ??
               normalizeHttpUrl(defaultSourceUrl) ??
               "";
-        const finalBody = appendGalleryBlockToBody(draft.body ?? draft.excerpt ?? fallbackExcerpt, reachableGallery);
+        const finalBody = appendGalleryBlockToBody(
+          appendPrimaryVideoBlockToBody(
+            draft.body ?? draft.excerpt ?? fallbackExcerpt,
+            buildManagedVideoUrl(reachableVideo),
+            videoPoster,
+          ),
+          reachableGallery,
+        );
 
         const normalized = normalizeNewsInput({
           title: draft.title ?? fallbackTitle,
@@ -3401,7 +3581,10 @@ app.get("/backoffice/news/:id/edit", boGuard, async (request, response, next) =>
       renderNewsForm({
         mode: "edit",
         action: `/backoffice/news/${news.id}`,
-        data: news,
+        data: {
+          ...news,
+          imageUrl: buildManagedImageUrl(news.imageUrl) ?? news.imageUrl,
+        },
         aiResearch,
       }),
     );

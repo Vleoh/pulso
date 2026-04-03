@@ -98,19 +98,31 @@ export async function buildHomePayload(prisma: PrismaClient): Promise<HomePayloa
     const internalByProvince = internal.find((item) => item.province === provinceOption.value);
     if (internalByProvince) {
       return {
+        id: internalByProvince.id,
         province: provinceOption.label,
         headline: internalByProvince.title,
         section: sectionLabel(internalByProvince.section),
+        slug: internalByProvince.slug,
+        isExternal: Boolean(internalByProvince.isExternal),
+        imageUrl: internalByProvince.imageUrl,
+        excerpt: internalByProvince.excerpt,
         sourceUrl: internalByProvince.sourceUrl,
+        publishedAt: internalByProvince.publishedAt,
       };
     }
 
     const fallback = externalNews[index % Math.max(1, externalNews.length)] ?? hero;
     return {
+      id: fallback?.id ?? `federal-fallback-${provinceOption.value}`,
       province: provinceOption.label,
       headline: fallback?.title ?? "Cobertura federal en actualizacion",
       section: fallback ? sectionLabel(fallback.section) : "Pulso Federal",
+      slug: fallback?.slug ?? null,
+      isExternal: Boolean(fallback?.isExternal),
+      imageUrl: fallback?.imageUrl ?? null,
+      excerpt: fallback?.excerpt ?? null,
       sourceUrl: fallback?.sourceUrl ?? null,
+      publishedAt: fallback?.publishedAt ?? new Date().toISOString(),
     };
   });
 
