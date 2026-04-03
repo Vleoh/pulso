@@ -5981,19 +5981,29 @@ a {
 
 .cp-most-read-list {
   display: grid;
-  gap: 10px;
+  gap: 12px;
 }
 
 .cp-most-read-item {
   grid-template-columns: 40px 92px minmax(0, 1fr);
   gap: 10px;
-  padding: 10px 0 0;
+  padding: 10px;
   align-items: start;
+  border: 1px solid #ece6da;
+  border-radius: 18px;
+  background: linear-gradient(180deg, #ffffff, #fbfaf6);
+  transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.cp-most-read-item:hover {
+  transform: translateY(-1px);
+  border-color: #dbc589;
+  box-shadow: 0 14px 30px rgba(17, 17, 17, 0.06);
 }
 
 .cp-most-read-rank,
 .cp-most-read-item > span {
-  font-size: 30px;
+  font-size: 24px;
   line-height: 0.88;
   color: #cbcbc5;
 }
@@ -6022,8 +6032,12 @@ a {
 .cp-most-read-copy h4 {
   margin: 0;
   font-family: var(--font-headline), Georgia, serif;
-  font-size: 20px;
-  line-height: 0.98;
+  font-size: 17px;
+  line-height: 1.08;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .cp-most-read-copy p {
@@ -6068,8 +6082,8 @@ a {
 }
 
 .cp-article-body h3 {
-  font-size: 27px;
-  line-height: 1.02;
+  font-size: 23px;
+  line-height: 1.06;
   display: -webkit-box;
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
@@ -6084,15 +6098,15 @@ a {
 }
 
 .cp-opinion-card h4 {
-  font-size: 29px;
-  line-height: 1;
+  font-size: 24px;
+  line-height: 1.04;
 }
 
 .cp-election-copy h4,
 .cp-sponsored h4,
 .cp-poll-box h4 {
-  font-size: 27px;
-  line-height: 1;
+  font-size: 24px;
+  line-height: 1.04;
 }
 
 .cp-province-grid {
@@ -6101,7 +6115,7 @@ a {
 
 .cp-province-card {
   border: 1px solid #dfdfdb;
-  background: #ffffff;
+  background: linear-gradient(180deg, #ffffff, #fcfbf8);
   border-radius: 20px;
   overflow: hidden;
   display: grid;
@@ -6123,10 +6137,19 @@ a {
   overflow: hidden;
 }
 
+.cp-province-media::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0;
+  height: 40%;
+  background: linear-gradient(180deg, transparent, rgba(17, 17, 17, 0.2));
+  pointer-events: none;
+}
+
 .cp-province-copy {
   padding: 13px 14px 14px;
   display: grid;
-  gap: 8px;
+  gap: 10px;
 }
 
 .cp-province-topline {
@@ -6154,19 +6177,51 @@ a {
 .cp-province-copy h4 {
   margin: 0;
   font-family: var(--font-headline), Georgia, serif;
-  font-size: 24px;
-  line-height: 1;
+  font-size: 20px;
+  line-height: 1.06;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .cp-province-copy p {
   margin: 0;
   color: #5f5f5b;
-  font-size: 13px;
-  line-height: 1.45;
+  font-size: 12px;
+  line-height: 1.52;
   display: -webkit-box;
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+.cp-province-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #7d7b75;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.cp-province-arrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  border: 1px solid #e4dccb;
+  background: #ffffff;
+  color: #8b6a00;
+}
+
+.cp-province-arrow svg {
+  width: 14px;
+  height: 14px;
 }
 
 .cp-m-province-row article {
@@ -6202,6 +6257,14 @@ a {
   background: #0f0f0f;
 }
 
+.news-detail-video-embed iframe {
+  display: block;
+  width: 100%;
+  min-height: min(56vw, 520px);
+  border: 0;
+  background: #000;
+}
+
 .news-detail-video video {
   display: block;
   width: 100%;
@@ -6218,10 +6281,14 @@ a {
   grid-template-columns: 36px 92px minmax(0, 1fr);
   gap: 10px;
   align-items: start;
+  padding: 10px;
+  border: 1px solid #ece6da;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #ffffff, #fbfaf6);
 }
 
 .news-most-read-item > span {
-  font-size: 28px;
+  font-size: 22px;
   line-height: 0.88;
 }
 
@@ -6248,8 +6315,12 @@ a {
 .news-most-read-copy h4 {
   margin: 0;
   font-family: var(--font-headline), Georgia, serif;
-  font-size: 20px;
-  line-height: 1;
+  font-size: 17px;
+  line-height: 1.08;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .news-most-read-copy p {
@@ -6292,7 +6363,7 @@ a {
   }
 
   .news-most-read-copy h4 {
-    font-size: 18px;
+    font-size: 16px;
   }
 }
 

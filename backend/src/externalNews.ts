@@ -1,7 +1,6 @@
 import Parser from "rss-parser";
-import { buildManagedImageUrl } from "./mediaProxy";
 import { asNullable, normalizeHttpUrl, normalizeImageUrl, parseGdeltDate, readString } from "./utils";
-import { dedupeByKey, guessSectionFromText } from "./feed";
+import { dedupeByKey, guessSectionFromText, resolveManagedFeedImage } from "./feed";
 import type { FeedItem } from "./types";
 
 const rssParser = new Parser();
@@ -43,7 +42,10 @@ async function fetchExternalFromGdelt(): Promise<FeedItem[]> {
       title,
       kicker: "Pulso en tiempo real",
       excerpt: readString(article.snippet) || "Actualizacion automatica desde fuentes periodisticas abiertas.",
-      imageUrl: buildManagedImageUrl(normalizeImageUrl(article.socialimage)),
+      imageUrl: resolveManagedFeedImage(normalizeImageUrl(article.socialimage), {
+        sourceUrl,
+        seed: `${title} ${readString(article.domain)}`,
+      }),
       sourceName: asNullable(readString(article.domain)) ?? "Fuente Externa",
       sourceUrl,
       section,
@@ -75,7 +77,10 @@ async function fetchExternalFromGoogleRss(): Promise<FeedItem[]> {
       title,
       kicker: "Monitor nacional",
       excerpt: asNullable(readString(item.contentSnippet)),
-      imageUrl: buildManagedImageUrl(extractRssImage(content)),
+      imageUrl: resolveManagedFeedImage(extractRssImage(content), {
+        sourceUrl,
+        seed: `${title} ${readString(feed.title)}`,
+      }),
       sourceName: asNullable(readString(item.creator)) ?? asNullable(readString(feed.title)) ?? "Google News",
       sourceUrl,
       section: guessSectionFromText(`${title} ${readString(item.contentSnippet)}`),

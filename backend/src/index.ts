@@ -1,4 +1,4 @@
-import "dotenv/config";
+﻿import "dotenv/config";
 
 import crypto from "node:crypto";
 import cookieParser from "cookie-parser";
@@ -23,13 +23,14 @@ import {
 } from "./backofficeViews";
 import { buildHomePayload } from "./homePayload";
 import { ensureUniqueSlug, normalizeNewsInput } from "./newsInput";
-import { toFeedItem, dedupeByKey } from "./feed";
+import { dedupeByKey, resolveManagedFeedImage, toFeedItem } from "./feed";
 import { getExternalNews } from "./externalNews";
 import { getMarketData, getWeatherData } from "./signalData";
 import { buildManagedImageUrl, buildManagedVideoUrl, proxyManagedMediaRequest } from "./mediaProxy";
 import { PROVINCE_OPTIONS, SECTION_OPTIONS } from "./catalog";
 import {
   asNullable,
+  escapeHtml,
   isNewsSection,
   isNewsStatus,
   isPollStatus,
@@ -38,6 +39,7 @@ import {
   normalizeImageUrl,
   readString,
   readBoolean,
+  slugifyText,
 } from "./utils";
 import { prisma } from "./prismaClient";
 import {
@@ -48,6 +50,9 @@ import {
   generatePollDraftWithAi,
   generateDraftWithAi,
   getEditorialAiHealth,
+  planEditorialCommandWithAi,
+  type EditorialCommandOperation,
+  type EditorialCommandPlan,
   type EditorialReview,
 } from "./editorialAi";
 import { buildAiNewsContext } from "./newsContextWrapper";
@@ -107,6 +112,17 @@ const AUTH_RATE_LIMIT_MAX_ATTEMPTS = Math.max(3, Number(process.env.AUTH_RATE_LI
 const USER_EMAIL_CODE_SECRET = process.env.USER_EMAIL_CODE_SECRET ?? `${USER_SESSION_SECRET}-email-code`;
 const USER_EMAIL_CODE_TTL_MINUTES = Math.max(5, Math.min(60, Number(process.env.USER_EMAIL_CODE_TTL_MINUTES ?? 15)));
 
+type RuntimeVersionInfo = {
+  app: "backend" | "frontend";
+  provider: string;
+  commit: string;
+  branch: string | null;
+  deployment: string | null;
+  publicUrl: string;
+  generatedAt: string;
+  versionLabel: string;
+};
+
 function resolveFrontendPublicUrl(): string {
   const fallback = IS_PRODUCTION ? "https://pulso-pais.vercel.app" : "http://localhost:3000";
   const raw =
@@ -151,6 +167,86 @@ const VIDEO_BLOCK_REGEX = /\[\[VIDEO_PRINCIPAL\]\][\s\S]*?\[\[\/VIDEO_PRINCIPAL\
 const IMAGE_PROBE_TIMEOUT_MS = 4500;
 const IMAGE_PROBE_CACHE_TTL_MS = 15 * 60 * 1000;
 const imageProbeCache = new Map<string, { ok: boolean; expiresAt: number }>();
+
+function shortCommit(input: string | null | undefined): string {
+  const value = readString(input);
+  return value ? value.slice(0, 7) : "dev";
+}
+
+function buildBackendVersionInfo(): RuntimeVersionInfo {
+  const commit =
+    readString(process.env.RENDER_GIT_COMMIT) ||
+    readString(process.env.VERCEL_GIT_COMMIT_SHA) ||
+    readString(process.env.GIT_COMMIT_SHA) ||
+    "dev-local";
+  const branch =
+    readString(process.env.RENDER_GIT_BRANCH) ||
+    readString(process.env.VERCEL_GIT_COMMIT_REF) ||
+    null;
+  const deployment =
+    readString(process.env.RENDER_SERVICE_ID) ||
+    readString(process.env.RENDER_DEPLOY_ID) ||
+    readString(process.env.VERCEL_DEPLOYMENT_ID) ||
+    null;
+
+  return {
+    app: "backend",
+    provider: process.env.RENDER ? "render" : process.env.VERCEL ? "vercel" : "local",
+    commit,
+    branch,
+    deployment,
+    publicUrl: readString(process.env.BACKEND_PUBLIC_URL) || readString(process.env.RENDER_EXTERNAL_URL) || `http://localhost:${PORT}`,
+    generatedAt: new Date().toISOString(),
+    versionLabel: shortCommit(commit),
+  };
+}
+
+async function buildDeployStatusPayload(): Promise<{
+  backend: RuntimeVersionInfo;
+  frontend: RuntimeVersionInfo | null;
+  sync: "synced" | "drift" | "unknown";
+  error: string | null;
+}> {
+  const backend = buildBackendVersionInfo();
+
+  try {
+    const response = await fetch(`${normalizedFrontendBaseUrl().replace(/\/+$/, "")}/api/version`, {
+      headers: { accept: "application/json" },
+    });
+    if (!response.ok) {
+      return {
+        backend,
+        frontend: null,
+        sync: "unknown",
+        error: `Frontend respondio ${response.status}.`,
+      };
+    }
+    const frontend = (await response.json()) as RuntimeVersionInfo;
+    const sync =
+      frontend.commit &&
+      backend.commit &&
+      frontend.commit !== "dev-local" &&
+      backend.commit !== "dev-local" &&
+      frontend.commit === backend.commit
+        ? "synced"
+        : frontend.commit && backend.commit && frontend.commit !== backend.commit
+          ? "drift"
+          : "unknown";
+    return {
+      backend,
+      frontend,
+      sync,
+      error: null,
+    };
+  } catch (error) {
+    return {
+      backend,
+      frontend: null,
+      sync: "unknown",
+      error: (error as Error).message,
+    };
+  }
+}
 
 function uniqueNormalizedImageUrls(values: Array<string | null | undefined>, maxItems = 6): string[] {
   const normalized = values.map((item) => normalizeImageUrl(item)).filter((item): item is string => Boolean(item));
@@ -292,6 +388,57 @@ async function probeVideoUrl(url: string): Promise<boolean> {
   return probeMediaUrl(url, "video");
 }
 
+function isEmbeddableVideoUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+    return (
+      host.includes("youtube.com") ||
+      host.includes("youtu.be") ||
+      host.includes("youtube-nocookie.com") ||
+      host.includes("vimeo.com")
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function probeEmbeddableVideoUrl(url: string): Promise<boolean> {
+  const cacheKey = `embed:${url}`;
+  const cached = imageProbeCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.ok;
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), IMAGE_PROBE_TIMEOUT_MS);
+  const persist = (ok: boolean) => {
+    imageProbeCache.set(cacheKey, { ok, expiresAt: Date.now() + IMAGE_PROBE_CACHE_TTL_MS });
+    return ok;
+  };
+
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      signal: controller.signal,
+      headers: {
+        accept: "text/html,application/xhtml+xml",
+        range: "bytes=0-1024",
+        "user-agent": "PulsoPaisEmbedProbe/1.0",
+      },
+    });
+    if (!response.ok) {
+      return persist(false);
+    }
+    const contentType = response.headers.get("content-type") ?? "";
+    return persist(!contentType || contentType.includes("text/html") || contentType.includes("application/xhtml+xml"));
+  } catch {
+    return persist(false);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function pickReachableImage(imageUrls: string[], maxChecks = 4): Promise<string | null> {
   const unique = Array.from(new Set(imageUrls.map((item) => item.trim()).filter(Boolean)));
   const capped = unique.slice(0, Math.max(1, maxChecks));
@@ -310,7 +457,8 @@ async function pickReachableVideo(videoUrls: string[], maxChecks = 3): Promise<s
   const capped = unique.slice(0, Math.max(1, maxChecks));
 
   for (const url of capped) {
-    if (await probeVideoUrl(url)) {
+    const ok = isEmbeddableVideoUrl(url) ? await probeEmbeddableVideoUrl(url) : await probeVideoUrl(url);
+    if (ok) {
       return url;
     }
   }
@@ -539,6 +687,770 @@ async function postProcessResearchedSuggestion(
       : normalizeHttpUrl(suggestion.sourceUrl) || normalizeHttpUrl(leadSource?.sourceUrl) || normalizeHttpUrl(sources[0]?.sourceUrl) || null,
     notes: notes.slice(0, 8),
   };
+}
+
+async function findNewsMatchesForCommand(match: string, limit: number): Promise<News[]> {
+  const query = readString(match);
+  if (!query) {
+    return [];
+  }
+
+  const directId = await prisma.news.findUnique({ where: { id: query } });
+  if (directId) {
+    return [directId];
+  }
+
+  const directSlug = await prisma.news.findUnique({ where: { slug: query } });
+  if (directSlug) {
+    return [directSlug];
+  }
+
+  const slugCandidate = slugifyText(query);
+  const rows = await prisma.news.findMany({
+    where: {
+      OR: [
+        { slug: { contains: slugCandidate || query, mode: "insensitive" } },
+        { title: { contains: query, mode: "insensitive" } },
+        { kicker: { contains: query, mode: "insensitive" } },
+        { excerpt: { contains: query, mode: "insensitive" } },
+        { sourceName: { contains: query, mode: "insensitive" } },
+        { sourceUrl: { contains: query, mode: "insensitive" } },
+        ...(query.includes(" ") ? [] : [{ tags: { has: query } }]),
+      ],
+    },
+    orderBy: [{ updatedAt: "desc" }, { publishedAt: "desc" }],
+    take: Math.max(1, Math.min(80, limit)),
+  });
+
+  return rows;
+}
+
+async function createStoriesFromBatchState(formState: BatchNewsFormState): Promise<{
+  createdCount: number;
+  totalRequested: number;
+  researchSourcesUsed: number;
+  model: string;
+  errors: string[];
+}> {
+  const aiResearchSettings = await getAiResearchSettings(prisma);
+  const campaignSlots = Math.round((formState.totalItems * formState.campaignPercent) / 100);
+  const generalSlots = formState.totalItems - campaignSlots;
+
+  if (campaignSlots > 0 && formState.campaignTopic.length < 8) {
+    throw new Error("Con porcentaje de campana > 0, el tema de campana debe tener al menos 8 caracteres.");
+  }
+  if (generalSlots > 0 && formState.generalBrief.length < 12) {
+    throw new Error("Con bloque general activo, el brief general debe tener al menos 12 caracteres.");
+  }
+  if (formState.useResearchAgent && !aiResearchSettings.enabled) {
+    throw new Error("El agente periodista esta desactivado en Panel. Activalo o desmarca 'Modo periodista'.");
+  }
+
+  const safeCampaignTopic = campaignSlots > 0 ? formState.campaignTopic : "Sin bloque de campana";
+  const safeGeneralBrief = generalSlots > 0 ? formState.generalBrief : "Sin bloque general";
+
+  const context = await buildAiNewsContext(prisma);
+  let mergedContext = context.contextText;
+  let researchLead:
+    | {
+        sourceName: string | null;
+        sourceUrl: string;
+        imageUrl: string | null;
+        videoUrl: string | null;
+        videoPosterUrl: string | null;
+      }
+    | null = null;
+  let researchSources: Array<{
+    sourceName: string | null;
+    sourceUrl: string;
+    imageUrl: string | null;
+    videoUrl: string | null;
+    videoPosterUrl: string | null;
+  }> = [];
+  let researchSourcesUsed = 0;
+
+  if (formState.useResearchAgent) {
+    const researchBriefParts = [campaignSlots > 0 ? formState.campaignTopic : "", generalSlots > 0 ? formState.generalBrief : ""]
+      .map((part) => part.trim())
+      .filter(Boolean);
+    const researchBrief = researchBriefParts.join(" | ") || "Agenda politica federal Argentina";
+    const research = await buildNewsResearchContext({
+      brief: researchBrief,
+      limit: aiResearchSettings.hotNewsLimit,
+      fetchArticleText: aiResearchSettings.fetchArticleText,
+      campaignLine: formState.includeCampaignLine ? formState.campaignLine : "",
+    });
+    researchLead = research.lead;
+    researchSources = research.sources;
+    researchSourcesUsed = research.sources.length;
+    const sourceList = sourceFeedToText(research.sources, 12);
+    mergedContext = [context.contextText, "", research.contextText, sourceList ? `FUENTES INVESTIGADAS:\n${sourceList}` : ""]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  const batch = await generateBatchDraftsWithAi(
+    {
+      totalItems: formState.totalItems,
+      campaignPercent: formState.campaignPercent,
+      campaignTopic: safeCampaignTopic,
+      generalBrief: safeGeneralBrief,
+      sectionHint: formState.sectionHint || null,
+      provinceHint: formState.provinceHint || null,
+      publishStatus: formState.publishStatus,
+      requireImageUrl: formState.requireImageUrl || formState.useResearchAgent,
+    },
+    mergedContext,
+  );
+
+  let createdCount = 0;
+  const errors: string[] = [];
+  const nowBase = Date.now();
+
+  for (const [index, item] of batch.items.entries()) {
+    const draft = item.draft;
+    try {
+      const finalSection = draft.section && isNewsSection(draft.section) ? draft.section : formState.sectionHint || "NACION";
+      const finalProvince = draft.province && isProvince(draft.province) ? draft.province : formState.provinceHint || "";
+      const fallbackTitle = item.focus === "CAMPAIGN" ? `Radar de campana ${index + 1}` : `Agenda politica ${index + 1}`;
+      const fallbackKicker = item.focus === "CAMPAIGN" ? "Escenario Electoral" : "Mesa de situacion";
+      const fallbackExcerpt = item.focus === "CAMPAIGN" ? safeCampaignTopic : safeGeneralBrief;
+      const sourceItem = researchSources.length > 0 ? researchSources[index % researchSources.length] : null;
+      const sourceGalleryCandidates =
+        researchSources.length > 0
+          ? [researchSources[(index + 1) % researchSources.length], researchSources[(index + 2) % researchSources.length]]
+          : [];
+      const sourceVideoCandidates = researchSources.length > 0 ? [sourceItem, researchLead, ...sourceGalleryCandidates] : [];
+      const baseImageCandidatesRaw = uniqueNormalizedImageUrls(
+        [
+          draft.imageUrl,
+          sourceItem?.imageUrl ?? null,
+          researchLead?.imageUrl ?? null,
+          sourceItem?.videoPosterUrl ?? null,
+          formState.requireImageUrl || formState.useResearchAgent ? fallbackBatchImageByIndex(index) : null,
+        ],
+        5,
+      );
+      const baseImageCandidates = baseImageCandidatesRaw
+        .map((url) => applyResearchImageTransform(url, aiResearchSettings))
+        .filter((url): url is string => Boolean(url));
+      const reachableCover = await pickReachableImage(baseImageCandidates, 3);
+      const fallbackCover = applyResearchImageTransform(fallbackBatchImageByIndex(index), aiResearchSettings);
+      const finalImage = reachableCover ?? (fallbackCover && (await probeImageUrl(fallbackCover)) ? fallbackCover : "");
+      const galleryImages = uniqueNormalizedImageUrls(
+        sourceGalleryCandidates.map((entry) => entry?.imageUrl ?? null),
+        3,
+      )
+        .filter((url) => !baseImageCandidatesRaw.includes(url))
+        .map((url) => applyResearchImageTransform(url, aiResearchSettings))
+        .filter((url): url is string => Boolean(url));
+      const reachableGallery = (await pickReachableImages(galleryImages, 3, 8))
+        .filter((url) => url !== finalImage)
+        .map((url) => buildManagedImageUrl(url))
+        .filter((url): url is string => Boolean(url));
+      const reachableVideo = await pickReachableVideo(
+        uniqueNormalizedVideoUrls(sourceVideoCandidates.map((entry) => entry?.videoUrl ?? null), 3),
+        3,
+      );
+      const videoPoster = buildManagedImageUrl(
+        uniqueNormalizedImageUrls([sourceItem?.videoPosterUrl ?? null, researchLead?.videoPosterUrl ?? null, finalImage], 3)[0] ?? null,
+      );
+
+      const finalSourceName = draft.sourceName ?? sourceItem?.sourceName ?? researchLead?.sourceName ?? formState.defaultSourceName;
+      const finalSourceUrl =
+        formState.useResearchAgent && aiResearchSettings.internalizeSourceLinks
+          ? ""
+          : normalizeHttpUrl(draft.sourceUrl) ??
+            normalizeHttpUrl(sourceItem?.sourceUrl) ??
+            normalizeHttpUrl(researchLead?.sourceUrl) ??
+            normalizeHttpUrl(formState.defaultSourceUrl) ??
+            "";
+      const finalBody = appendGalleryBlockToBody(
+        appendPrimaryVideoBlockToBody(
+          draft.body ?? draft.excerpt ?? fallbackExcerpt,
+          buildManagedVideoUrl(reachableVideo),
+          videoPoster,
+        ),
+        reachableGallery,
+      );
+
+      const normalized = normalizeNewsInput({
+        title: draft.title ?? fallbackTitle,
+        slug: "",
+        kicker: draft.kicker ?? fallbackKicker,
+        excerpt: draft.excerpt ?? fallbackExcerpt,
+        body: finalBody ?? fallbackExcerpt,
+        imageUrl: finalImage,
+        sourceName: finalSourceName,
+        sourceUrl: finalSourceUrl,
+        authorName: draft.authorName ?? formState.defaultAuthorName,
+        section: finalSection,
+        province: finalProvince,
+        tags: draft.tags.length > 0 ? draft.tags : [item.focus === "CAMPAIGN" ? "campana" : "agenda", "pulso-pais"],
+        status: formState.publishStatus,
+        publishedAt: formState.publishStatus === NewsStatus.PUBLISHED ? new Date(nowBase + index * 1000).toISOString() : "",
+        isSponsored: false,
+        isFeatured: draft.flags.isFeatured,
+        isHero: false,
+        isInterview: draft.flags.isInterview,
+        isOpinion: draft.flags.isOpinion,
+        isRadar: draft.flags.isRadar || finalSection === "RADAR_ELECTORAL",
+      });
+
+      const uniqueSlug = await ensureUniqueSlug(prisma, normalized.slug);
+      await prisma.news.create({
+        data: {
+          ...normalized,
+          slug: uniqueSlug,
+          aiDecision: "ALLOW",
+          aiReason: `Generada en lote IA (${batch.model}) [${item.focus}]${formState.useResearchAgent ? " [AGENTE PERIODISTA]" : ""}`,
+          aiWarnings: draft.notes,
+          aiModel: batch.model,
+          aiEvaluatedAt: new Date(),
+        },
+      });
+      createdCount += 1;
+    } catch (error) {
+      errors.push(`Item ${index + 1}: ${(error as Error).message}`);
+    }
+  }
+
+  if (createdCount === 0) {
+    throw new Error(errors[0] ?? "No se pudo crear ninguna noticia del lote.");
+  }
+
+  return {
+    createdCount,
+    totalRequested: batch.items.length,
+    researchSourcesUsed,
+    model: batch.model,
+    errors,
+  };
+}
+
+async function internalizeExternalNewsFromState(rewriteState: ExternalRewriteFormState): Promise<{
+  createdCount: number;
+  updatedCount: number;
+  deletedCount: number;
+  errors: string[];
+}> {
+  const settings = await getAiResearchSettings(prisma);
+  if (!settings.enabled) {
+    throw new Error("El agente periodista esta desactivado en Panel. Activalo antes de internalizar fuentes externas.");
+  }
+  if (rewriteState.instruction.length < 18) {
+    throw new Error("La instruccion administrativa debe tener al menos 18 caracteres.");
+  }
+
+  const research = await buildNewsResearchContext({
+    brief: rewriteState.instruction,
+    limit: Math.min(16, Math.max(rewriteState.limit * 2, settings.hotNewsLimit)),
+    fetchArticleText: settings.fetchArticleText,
+    campaignLine: rewriteState.includeCampaignLine ? rewriteState.campaignLine : "",
+  });
+  const context = await buildAiNewsContext(prisma);
+  const existingRows = await prisma.news.findMany({
+    orderBy: [{ updatedAt: "desc" }],
+    take: 180,
+  });
+
+  const existingBySource = new Map<string, News[]>();
+  for (const row of existingRows) {
+    const key = normalizeExternalKey(row.sourceUrl);
+    if (!key) {
+      continue;
+    }
+    const bucket = existingBySource.get(key) ?? [];
+    bucket.push(row);
+    existingBySource.set(key, bucket);
+  }
+
+  const matchedFromResearch = research.sources
+    .map((source) => ({
+      source,
+      existing: (existingBySource.get(normalizeExternalKey(source.sourceUrl)) ?? []).find((row) => isLikelyThinExternalNews(row)) ?? null,
+    }))
+    .filter((item) => rewriteState.scope !== "existing" || item.existing)
+    .slice(0, rewriteState.limit);
+
+  const fallbackExistingCandidates =
+    rewriteState.scope === "existing"
+      ? existingRows
+          .filter((row) => isLikelyThinExternalNews(row))
+          .filter((row) => !matchedFromResearch.some((item) => item.existing?.id === row.id))
+          .slice(0, rewriteState.limit)
+          .map((row, index) => ({
+            source: {
+              rank: matchedFromResearch.length + index + 1,
+              title: row.title,
+              sourceName: row.sourceName,
+              sourceUrl: normalizeHttpUrl(row.sourceUrl) ?? "",
+              imageUrl: normalizeImageUrl(row.imageUrl),
+              videoUrl: null,
+              videoPosterUrl: null,
+              excerpt: row.excerpt,
+              section: row.section,
+              publishedAt: (row.publishedAt ?? row.updatedAt).toISOString(),
+              matchScore: 0,
+            },
+            existing: row,
+          }))
+          .filter((item) => item.source.sourceUrl.length > 0)
+      : [];
+
+  const candidates = [...matchedFromResearch, ...fallbackExistingCandidates].slice(0, rewriteState.limit);
+  if (candidates.length === 0) {
+    throw new Error("No se encontraron fuentes externas candidatas para internalizar con ese criterio.");
+  }
+
+  let createdCount = 0;
+  let updatedCount = 0;
+  let deletedCount = 0;
+  const errors: string[] = [];
+
+  for (const [index, candidate] of candidates.entries()) {
+    try {
+      const source = candidate.source;
+      const externalKey = normalizeExternalKey(source.sourceUrl);
+      const duplicateRows = existingBySource.get(externalKey) ?? [];
+      const existing = candidate.existing;
+
+      const assistInput = {
+        brief: `${rewriteState.instruction}\nFuente objetivo: ${source.title}`,
+        sectionHint: rewriteState.sectionHint || (isNewsSection(source.section) ? source.section : null),
+        provinceHint: rewriteState.provinceHint || null,
+        isSponsored: existing?.isSponsored ?? false,
+        currentTitle: existing?.title ?? null,
+        currentKicker: existing?.kicker ?? null,
+        currentExcerpt: existing?.excerpt ?? source.excerpt ?? null,
+        currentBody: existing?.body ?? null,
+        currentImageUrl: existing?.imageUrl ?? source.imageUrl ?? null,
+        currentSourceName: existing?.sourceName ?? source.sourceName ?? null,
+        currentSourceUrl: source.sourceUrl,
+        currentAuthorName: existing?.authorName ?? null,
+        currentStatus: rewriteState.publishStatus,
+        currentPublishedAt: existing?.publishedAt ? existing.publishedAt.toISOString() : null,
+        currentSection: existing?.section ?? null,
+        currentProvince: existing?.province ?? null,
+        currentFlags: {
+          isHero: existing?.isHero ?? false,
+          isFeatured: existing?.isFeatured ?? false,
+          isSponsored: existing?.isSponsored ?? false,
+          isInterview: existing?.isInterview ?? false,
+          isOpinion: existing?.isOpinion ?? false,
+          isRadar: existing?.isRadar ?? false,
+        },
+        currentTags: existing?.tags ?? [],
+      };
+
+      const mergedContext = [
+        context.contextText,
+        "",
+        research.contextText,
+        "FUENTE OBJETIVO:",
+        `- titulo: ${source.title}`,
+        `- medio: ${source.sourceName ?? "Fuente abierta"}`,
+        `- url: ${source.sourceUrl}`,
+        source.excerpt ? `- resumen: ${source.excerpt}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+
+      const suggestion = await generateDraftWithAi(assistInput, mergedContext);
+      const finalSuggestion = await postProcessResearchedSuggestion(suggestion, settings, source, [source], rewriteState.instruction);
+
+      const finalSection = rewriteState.sectionHint || existing?.section || (isNewsSection(source.section) ? source.section : "NACION");
+      const finalProvince = rewriteState.provinceHint || existing?.province || null;
+      const finalPublishedAt =
+        rewriteState.publishStatus === NewsStatus.PUBLISHED
+          ? existing?.publishedAt?.toISOString() ?? new Date(Date.now() + index * 1000).toISOString()
+          : "";
+
+      const normalized = normalizeNewsInput({
+        title: finalSuggestion.title ?? existing?.title ?? source.title,
+        slug: existing?.slug ?? "",
+        kicker:
+          finalSuggestion.kicker ??
+          existing?.kicker ??
+          (finalSection === "RADAR_ELECTORAL" ? "Escenario Electoral" : "Mesa de situacion"),
+        excerpt: finalSuggestion.excerpt ?? existing?.excerpt ?? source.excerpt ?? rewriteState.instruction,
+        body: finalSuggestion.body ?? existing?.body ?? source.excerpt ?? rewriteState.instruction,
+        imageUrl: finalSuggestion.imageUrl ?? source.imageUrl ?? "",
+        sourceName:
+          finalSuggestion.sourceName ??
+          existing?.sourceName ??
+          source.sourceName ??
+          "Pulso Pais (elaboracion propia sobre fuentes abiertas)",
+        sourceUrl: settings.internalizeSourceLinks ? "" : normalizeHttpUrl(source.sourceUrl) ?? "",
+        authorName: finalSuggestion.authorName ?? existing?.authorName ?? "Redaccion Pulso Pais",
+        section: finalSection,
+        province: finalProvince,
+        tags: finalSuggestion.tags.length > 0 ? finalSuggestion.tags : existing?.tags?.length ? existing.tags : ["pulso-pais", "agenda-propia"],
+        status: rewriteState.publishStatus,
+        publishedAt: finalPublishedAt,
+        isSponsored: existing?.isSponsored ?? false,
+        isFeatured: finalSuggestion.flags.isFeatured || existing?.isFeatured || false,
+        isHero: false,
+        isInterview: finalSuggestion.flags.isInterview || existing?.isInterview || false,
+        isOpinion: finalSuggestion.flags.isOpinion || existing?.isOpinion || false,
+        isRadar: finalSuggestion.flags.isRadar || existing?.isRadar || finalSection === "RADAR_ELECTORAL",
+      });
+
+      if (existing) {
+        const uniqueSlug = await ensureUniqueSlug(prisma, normalized.slug, existing.id);
+        await prisma.news.update({
+          where: { id: existing.id },
+          data: {
+            ...normalized,
+            slug: uniqueSlug,
+            aiDecision: "ALLOW",
+            aiReason: `Internalizada desde fuente externa (${finalSuggestion.model})`,
+            aiWarnings: finalSuggestion.notes,
+            aiModel: finalSuggestion.model,
+            aiEvaluatedAt: new Date(),
+          },
+        });
+        updatedCount += 1;
+
+        if (rewriteState.deleteDuplicates && duplicateRows.length > 1) {
+          const duplicateIds = duplicateRows.filter((row) => row.id !== existing.id).map((row) => row.id);
+          if (duplicateIds.length > 0) {
+            const deleted = await prisma.news.deleteMany({ where: { id: { in: duplicateIds } } });
+            deletedCount += deleted.count;
+          }
+        }
+      } else {
+        const uniqueSlug = await ensureUniqueSlug(prisma, normalized.slug);
+        await prisma.news.create({
+          data: {
+            ...normalized,
+            slug: uniqueSlug,
+            aiDecision: "ALLOW",
+            aiReason: `Creada desde fuente externa (${finalSuggestion.model})`,
+            aiWarnings: finalSuggestion.notes,
+            aiModel: finalSuggestion.model,
+            aiEvaluatedAt: new Date(),
+          },
+        });
+        createdCount += 1;
+      }
+    } catch (error) {
+      errors.push(`Fuente ${index + 1}: ${(error as Error).message}`);
+    }
+  }
+
+  if (createdCount === 0 && updatedCount === 0) {
+    throw new Error(errors[0] ?? "No se pudo internalizar ninguna fuente externa.");
+  }
+
+  return {
+    createdCount,
+    updatedCount,
+    deletedCount,
+    errors,
+  };
+}
+
+async function rewriteExistingNewsByCommand(operation: Extract<EditorialCommandOperation, { kind: "REWRITE_EXISTING" }>, campaignLine: string): Promise<{
+  updatedCount: number;
+  errors: string[];
+}> {
+  const rows = await findNewsMatchesForCommand(operation.match, operation.limit);
+  if (rows.length === 0) {
+    throw new Error(`No se encontraron noticias para reescribir con el criterio: ${operation.match}`);
+  }
+
+  const settings = await getAiResearchSettings(prisma);
+  if (operation.useResearchAgent && !settings.enabled) {
+    throw new Error("El agente periodista esta desactivado en Panel. Activalo antes de usar reescritura con investigacion.");
+  }
+
+  const context = await buildAiNewsContext(prisma);
+  let updatedCount = 0;
+  const errors: string[] = [];
+
+  for (const [index, row] of rows.entries()) {
+    try {
+      let mergedContext = context.contextText;
+      let researchLead: Awaited<ReturnType<typeof buildNewsResearchContext>>["lead"] = null;
+      let researchSources: Awaited<ReturnType<typeof buildNewsResearchContext>>["sources"] = [];
+
+      if (operation.useResearchAgent) {
+        const research = await buildNewsResearchContext({
+          brief: `${operation.instruction} | ${row.title} | ${row.excerpt ?? ""}`,
+          limit: Math.min(8, settings.hotNewsLimit),
+          fetchArticleText: settings.fetchArticleText,
+          campaignLine: operation.includeCampaignLine ? campaignLine : "",
+        });
+        researchLead = research.lead;
+        researchSources = research.sources;
+        const sourceList = sourceFeedToText(research.sources, 8);
+        mergedContext = [context.contextText, "", research.contextText, sourceList ? `FUENTES INVESTIGADAS:\n${sourceList}` : ""]
+          .filter(Boolean)
+          .join("\n");
+      }
+
+      const assistInput = {
+        brief: operation.instruction,
+        sectionHint: operation.sectionHint,
+        provinceHint: operation.provinceHint,
+        isSponsored: row.isSponsored,
+        currentTitle: row.title,
+        currentKicker: row.kicker,
+        currentExcerpt: row.excerpt,
+        currentBody: row.body,
+        currentImageUrl: row.imageUrl,
+        currentSourceName: row.sourceName,
+        currentSourceUrl: row.sourceUrl,
+        currentAuthorName: row.authorName,
+        currentStatus: operation.publishStatus ?? row.status,
+        currentPublishedAt: row.publishedAt?.toISOString() ?? null,
+        currentSection: row.section,
+        currentProvince: row.province,
+        currentFlags: {
+          isHero: row.isHero,
+          isFeatured: row.isFeatured,
+          isSponsored: row.isSponsored,
+          isInterview: row.isInterview,
+          isOpinion: row.isOpinion,
+          isRadar: row.isRadar,
+        },
+        currentTags: row.tags,
+      };
+
+      const suggestion = await generateDraftWithAi(assistInput, mergedContext);
+      const processed = operation.useResearchAgent
+        ? await postProcessResearchedSuggestion(suggestion, settings, researchLead, researchSources, `${operation.instruction} ${row.title}`)
+        : suggestion;
+
+      const baseCoverCandidates = uniqueNormalizedImageUrls(
+        [processed.imageUrl, row.imageUrl, fallbackResearchImage(row.title)],
+        4,
+      );
+      const reachableCover = await pickReachableImage(baseCoverCandidates, 4);
+      if (operation.requireImageUrl && !reachableCover) {
+        throw new Error("No se pudo asegurar una portada valida para la reescritura.");
+      }
+
+      const normalized = normalizeNewsInput({
+        title: processed.title ?? row.title,
+        slug: row.slug,
+        kicker: processed.kicker ?? row.kicker ?? "Mesa de situacion",
+        excerpt: processed.excerpt ?? row.excerpt ?? operation.instruction,
+        body: processed.body ?? row.body ?? operation.instruction,
+        imageUrl: reachableCover ?? processed.imageUrl ?? row.imageUrl ?? "",
+        sourceName: processed.sourceName ?? row.sourceName ?? "Pulso Pais",
+        sourceUrl: normalizeHttpUrl(processed.sourceUrl) ?? normalizeHttpUrl(row.sourceUrl) ?? "",
+        authorName: processed.authorName ?? row.authorName ?? "Redaccion Pulso Pais",
+        section: (processed.section && isNewsSection(processed.section) ? processed.section : operation.sectionHint) ?? row.section,
+        province: (processed.province && isProvince(processed.province) ? processed.province : operation.provinceHint) ?? row.province ?? "",
+        tags: processed.tags.length > 0 ? processed.tags : row.tags,
+        status: operation.publishStatus ?? row.status,
+        publishedAt:
+          (operation.publishStatus ?? row.status) === NewsStatus.PUBLISHED
+            ? row.publishedAt?.toISOString() ?? new Date(Date.now() + index * 1000).toISOString()
+            : "",
+        isSponsored: row.isSponsored,
+        isFeatured: processed.flags.isFeatured || row.isFeatured,
+        isHero: row.isHero,
+        isInterview: processed.flags.isInterview || row.isInterview,
+        isOpinion: processed.flags.isOpinion || row.isOpinion,
+        isRadar: processed.flags.isRadar || row.isRadar,
+      });
+
+      const uniqueSlug = await ensureUniqueSlug(prisma, normalized.slug, row.id);
+      await prisma.news.update({
+        where: { id: row.id },
+        data: {
+          ...normalized,
+          slug: uniqueSlug,
+          aiDecision: "ALLOW",
+          aiReason: `Reescrita por comando editorial (${processed.model})`,
+          aiWarnings: processed.notes,
+          aiModel: processed.model,
+          aiEvaluatedAt: new Date(),
+        },
+      });
+      updatedCount += 1;
+    } catch (error) {
+      errors.push(`Nota ${index + 1}: ${(error as Error).message}`);
+    }
+  }
+
+  if (updatedCount === 0) {
+    throw new Error(errors[0] ?? "No se pudo reescribir ninguna noticia.");
+  }
+
+  return { updatedCount, errors };
+}
+
+async function updateNewsMetadataByCommand(operation: Extract<EditorialCommandOperation, { kind: "UPDATE_METADATA" }>): Promise<{ updatedCount: number }> {
+  const rows = await findNewsMatchesForCommand(operation.match, operation.limit);
+  if (rows.length === 0) {
+    throw new Error(`No se encontraron noticias para actualizar con el criterio: ${operation.match}`);
+  }
+
+  const shouldForceHero = operation.fields.isHero === true;
+  if (shouldForceHero) {
+    await prisma.news.updateMany({
+      where: { isHero: true, id: { notIn: rows.map((row) => row.id) } },
+      data: { isHero: false },
+    });
+  }
+
+  let updatedCount = 0;
+  for (const [index, row] of rows.entries()) {
+    const nextTags = Array.from(
+      new Set(
+        row.tags
+          .filter((tag) => !operation.fields.removeTags.includes(tag))
+          .concat(operation.fields.addTags),
+      ),
+    ).slice(0, 16);
+
+    const updateData: Prisma.NewsUpdateInput = {
+      tags: nextTags,
+      aiReason: `Metadatos actualizados por comando editorial${operation.rationale ? `: ${operation.rationale}` : ""}`,
+      aiEvaluatedAt: new Date(),
+    };
+
+    if (operation.fields.kicker !== undefined) {
+      updateData.kicker = operation.fields.kicker;
+    }
+    if (operation.fields.section && isNewsSection(operation.fields.section)) {
+      updateData.section = operation.fields.section;
+    }
+    if (operation.fields.province === null) {
+      updateData.province = null;
+    } else if (operation.fields.province && isProvince(operation.fields.province)) {
+      updateData.province = operation.fields.province;
+    }
+    if (operation.fields.status) {
+      updateData.status = operation.fields.status;
+    }
+    if (typeof operation.fields.isFeatured === "boolean") {
+      updateData.isFeatured = operation.fields.isFeatured;
+    }
+    if (shouldForceHero) {
+      updateData.isHero = index === 0;
+    } else if (typeof operation.fields.isHero === "boolean") {
+      updateData.isHero = operation.fields.isHero;
+    }
+    if (typeof operation.fields.isSponsored === "boolean") {
+      updateData.isSponsored = operation.fields.isSponsored;
+    }
+    if (typeof operation.fields.isInterview === "boolean") {
+      updateData.isInterview = operation.fields.isInterview;
+    }
+    if (typeof operation.fields.isOpinion === "boolean") {
+      updateData.isOpinion = operation.fields.isOpinion;
+    }
+    if (typeof operation.fields.isRadar === "boolean") {
+      updateData.isRadar = operation.fields.isRadar;
+    }
+    if (operation.fields.authorName !== undefined) {
+      updateData.authorName = operation.fields.authorName;
+    }
+    if (operation.fields.sourceName !== undefined) {
+      updateData.sourceName = operation.fields.sourceName;
+    }
+
+    await prisma.news.update({
+      where: { id: row.id },
+      data: updateData,
+    });
+    updatedCount += 1;
+  }
+
+  return { updatedCount };
+}
+
+async function deleteNewsByCommand(operation: Extract<EditorialCommandOperation, { kind: "DELETE_NEWS" }>): Promise<{ deletedCount: number }> {
+  const rows = await findNewsMatchesForCommand(operation.match, operation.limit);
+  const filtered = operation.onlyThinExternal ? rows.filter((row) => isLikelyThinExternalNews(row)) : rows;
+  if (filtered.length === 0) {
+    throw new Error(`No se encontraron noticias para borrar con el criterio: ${operation.match}`);
+  }
+
+  const deleted = await prisma.news.deleteMany({
+    where: { id: { in: filtered.map((row) => row.id) } },
+  });
+  return { deletedCount: deleted.count };
+}
+
+async function executeEditorialCommandPlan(plan: EditorialCommandPlan, commandState: EditorialCommandFormState): Promise<string> {
+  if (plan.destructive && !commandState.allowDestructive) {
+    throw new Error("El plan contiene acciones destructivas. Activa 'Permitir acciones destructivas' para ejecutarlo.");
+  }
+
+  const resultLines: string[] = [];
+
+  for (const operation of plan.operations) {
+    if (operation.kind === "CREATE_STORIES") {
+      const count = Math.max(1, operation.count);
+      const campaignPercent = Math.max(0, Math.min(100, operation.campaignPercent));
+      const state: BatchNewsFormState = {
+        ...defaultBatchNewsFormState(),
+        totalItems: count,
+        campaignPercent,
+        campaignTopic: operation.campaignTopic ?? "",
+        generalBrief: operation.generalBrief || operation.brief,
+        useResearchAgent: operation.useResearchAgent,
+        includeCampaignLine: operation.includeCampaignLine,
+        campaignLine: commandState.campaignLine,
+        publishStatus: operation.publishStatus ?? NewsStatus.DRAFT,
+        sectionHint: operation.sectionHint ?? "",
+        provinceHint: operation.provinceHint ?? "",
+        requireImageUrl: operation.requireImageUrl,
+        defaultSourceName: "Pulso Pais IA",
+        defaultAuthorName: "Redaccion Pulso Pais",
+        defaultSourceUrl: "",
+      };
+      const result = await createStoriesFromBatchState(state);
+      const errorHint = result.errors.length > 0 ? ` &middot; alertas: ${result.errors.slice(0, 2).join(" | ")}` : "";
+      resultLines.push(`Crear: ${result.createdCount}/${result.totalRequested} notas (${result.model})${errorHint}`);
+      continue;
+    }
+
+    if (operation.kind === "INTERNALIZE_EXTERNALS") {
+      const state: ExternalRewriteFormState = {
+        ...defaultExternalRewriteFormState(commandState.campaignLine),
+        instruction: operation.instruction,
+        limit: operation.limit,
+        scope: operation.scope,
+        publishStatus: operation.publishStatus ?? NewsStatus.DRAFT,
+        sectionHint: operation.sectionHint ?? "",
+        provinceHint: operation.provinceHint ?? "",
+        includeCampaignLine: operation.includeCampaignLine,
+        campaignLine: commandState.campaignLine,
+        deleteDuplicates: operation.deleteDuplicates,
+      };
+      const result = await internalizeExternalNewsFromState(state);
+      const errorHint = result.errors.length > 0 ? ` &middot; alertas: ${result.errors.slice(0, 2).join(" | ")}` : "";
+      resultLines.push(`Internalizar: ${result.createdCount} creadas, ${result.updatedCount} actualizadas, ${result.deletedCount} eliminadas${errorHint}`);
+      continue;
+    }
+
+    if (operation.kind === "REWRITE_EXISTING") {
+      const result = await rewriteExistingNewsByCommand(operation, commandState.campaignLine);
+      const errorHint = result.errors.length > 0 ? ` &middot; alertas: ${result.errors.slice(0, 2).join(" | ")}` : "";
+      resultLines.push(`Reescritura: ${result.updatedCount} notas actualizadas${errorHint}`);
+      continue;
+    }
+
+    if (operation.kind === "UPDATE_METADATA") {
+      const result = await updateNewsMetadataByCommand(operation);
+      resultLines.push(`Metadatos: ${result.updatedCount} notas ajustadas`);
+      continue;
+    }
+
+    if (operation.kind === "DELETE_NEWS") {
+      const result = await deleteNewsByCommand(operation);
+      resultLines.push(`Borrado: ${result.deletedCount} notas eliminadas`);
+    }
+  }
+
+  return resultLines.join(" | ");
 }
 
 function buildPollAssistInput(raw: Record<string, unknown>) {
@@ -1020,6 +1932,29 @@ type ExternalRewriteFormState = {
   summary?: string;
 };
 
+type EditorialCommandPreviewState = {
+  summary: string;
+  notes: string[];
+  destructive: boolean;
+  requiresConfirmation: boolean;
+  operations: Array<{
+    kind: string;
+    title: string;
+    detail: string;
+  }>;
+  model: string;
+};
+
+type EditorialCommandFormState = {
+  instruction: string;
+  campaignLine: string;
+  allowDestructive: boolean;
+  autoExecuteSafe: boolean;
+  summary?: string;
+  planJson?: string;
+  preview?: EditorialCommandPreviewState | null;
+};
+
 function defaultBatchNewsFormState(): BatchNewsFormState {
   return {
     totalItems: 1,
@@ -1054,6 +1989,19 @@ function defaultExternalRewriteFormState(campaignLine = ""): ExternalRewriteForm
   };
 }
 
+function defaultEditorialCommandFormState(campaignLine = ""): EditorialCommandFormState {
+  return {
+    instruction:
+      "Revisa las notas externas del sitio, internaliza las mas relevantes como noticias propias de Pulso Pais y deja las candidatas listas para revision.",
+    campaignLine,
+    allowDestructive: false,
+    autoExecuteSafe: true,
+    summary: "",
+    planJson: "",
+    preview: null,
+  };
+}
+
 function normalizeExternalRewriteScope(raw: unknown): ExternalRewriteFormState["scope"] {
   const value = readString(raw).toLowerCase();
   if (value === "existing") {
@@ -1078,6 +2026,85 @@ function isLikelyThinExternalNews(item: {
   const bodyLength = readString(item.body).length;
   const hasImage = Boolean(normalizeImageUrl(item.imageUrl));
   return hasExternalSource && (bodyLength < 900 || !hasImage);
+}
+
+function encodeEditorialCommandPlan(plan: EditorialCommandPlan): string {
+  return Buffer.from(JSON.stringify(plan), "utf8").toString("base64url");
+}
+
+function decodeEditorialCommandPlan(input: string): EditorialCommandPlan {
+  try {
+    const raw = Buffer.from(input, "base64url").toString("utf8");
+    const parsed = JSON.parse(raw) as Partial<EditorialCommandPlan>;
+    if (!parsed || typeof parsed.summary !== "string" || !Array.isArray(parsed.operations) || typeof parsed.model !== "string") {
+      throw new Error("Plan incompleto.");
+    }
+    return parsed as EditorialCommandPlan;
+  } catch (error) {
+    throw new Error(`No se pudo leer el plan editorial (${(error as Error).message}).`);
+  }
+}
+
+function describeEditorialCommandOperation(operation: EditorialCommandOperation): { title: string; detail: string } {
+  if (operation.kind === "CREATE_STORIES") {
+    return {
+      title: `Crear ${operation.count} noticia${operation.count === 1 ? "" : "s"}`,
+      detail: `${operation.useResearchAgent ? "Modo periodista" : "Generacion directa"} &middot; ${operation.publishStatus ?? "DRAFT"} &middot; ${operation.requireImageUrl ? "con portada obligatoria" : "media opcional"}`,
+    };
+  }
+  if (operation.kind === "INTERNALIZE_EXTERNALS") {
+    return {
+      title: `Internalizar externas (${operation.limit})`,
+      detail: `${operation.scope} &middot; ${operation.publishStatus ?? "DRAFT"}${operation.deleteDuplicates ? " &middot; limpiar duplicados" : ""}`,
+    };
+  }
+  if (operation.kind === "REWRITE_EXISTING") {
+    return {
+      title: `Reescribir notas existentes (${operation.limit})`,
+      detail: `match: ${operation.match} &middot; ${operation.useResearchAgent ? "con investigacion" : "sin investigacion"}`,
+    };
+  }
+  if (operation.kind === "UPDATE_METADATA") {
+    const activeFields = [
+      operation.fields.kicker ? "volanta" : "",
+      operation.fields.section ? "seccion" : "",
+      operation.fields.province ? "distrito" : "",
+      operation.fields.status ? "estado" : "",
+      operation.fields.isFeatured !== null ? "destacada" : "",
+      operation.fields.isHero !== null ? "hero" : "",
+      operation.fields.isSponsored !== null ? "patrocinio" : "",
+      operation.fields.isInterview !== null ? "entrevista" : "",
+      operation.fields.isOpinion !== null ? "opinion" : "",
+      operation.fields.isRadar !== null ? "radar" : "",
+      operation.fields.authorName ? "autor" : "",
+      operation.fields.sourceName ? "fuente" : "",
+      operation.fields.addTags.length > 0 || operation.fields.removeTags.length > 0 ? "tags" : "",
+    ]
+      .filter(Boolean)
+      .join(", ");
+    return {
+      title: `Actualizar metadatos (${operation.limit})`,
+      detail: `match: ${operation.match}${activeFields ? ` &middot; ${activeFields}` : ""}`,
+    };
+  }
+  return {
+    title: `Borrar noticias (${operation.limit})`,
+    detail: `match: ${operation.match}${operation.onlyThinExternal ? " &middot; solo thin external" : ""}`,
+  };
+}
+
+function previewEditorialCommandPlan(plan: EditorialCommandPlan): EditorialCommandPreviewState {
+  return {
+    summary: plan.summary,
+    notes: Array.isArray(plan.notes) ? plan.notes.slice(0, 8) : [],
+    destructive: Boolean(plan.destructive),
+    requiresConfirmation: Boolean(plan.requiresConfirmation),
+    operations: plan.operations.map((operation) => ({
+      kind: operation.kind,
+      ...describeEditorialCommandOperation(operation),
+    })),
+    model: plan.model,
+  };
 }
 
 function renderBatchNewsForm(params: {
@@ -1267,11 +2294,12 @@ function currentErrorSafe(value: string): string {
 }
 
 async function renderUnifiedEditorialPage(params?: {
-  activeMode?: "single" | "batch" | "rewrite";
+  activeMode?: "single" | "batch" | "rewrite" | "command";
   error?: string;
   data?: Partial<Prisma.NewsUncheckedCreateInput>;
   batchState?: Partial<BatchNewsFormState>;
   rewriteState?: Partial<ExternalRewriteFormState>;
+  commandState?: Partial<EditorialCommandFormState>;
 }): Promise<string> {
   const aiResearch = await getAiResearchSettings(prisma);
   const renderParams: Parameters<typeof renderNewsForm>[0] = {
@@ -1288,6 +2316,10 @@ async function renderUnifiedEditorialPage(params?: {
       rewrite: {
         ...defaultExternalRewriteFormState(aiResearch.campaignLine),
         ...(params?.rewriteState ?? {}),
+      },
+      command: {
+        ...defaultEditorialCommandFormState(aiResearch.campaignLine),
+        ...(params?.commandState ?? {}),
       },
     },
   };
@@ -1337,6 +2369,18 @@ app.get("/health", (_request, response) => {
     service: "pulso-backend",
     now: new Date().toISOString(),
   });
+});
+
+app.get("/api/version", (_request, response) => {
+  response.json(buildBackendVersionInfo());
+});
+
+app.get("/api/deploy/status", async (_request, response, next) => {
+  try {
+    response.json(await buildDeployStatusPayload());
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.get("/api/home", async (_request, response, next) => {
@@ -1486,7 +2530,10 @@ app.get("/api/news/:slug", async (request, response, next) => {
     response.json({
       item: {
         ...item,
-        imageUrl: buildManagedImageUrl(normalizeImageUrl(item.imageUrl)),
+        imageUrl: resolveManagedFeedImage(item.imageUrl, {
+          sourceUrl: item.sourceUrl,
+          seed: item.title,
+        }),
         sourceUrl: normalizeHttpUrl(item.sourceUrl),
         publishedAt: (item.publishedAt ?? item.createdAt).toISOString(),
         createdAt: item.createdAt.toISOString(),
@@ -2774,7 +3821,7 @@ app.get("/backoffice/ai/health", boGuard, async (_request, response, next) => {
 
 app.get("/backoffice", boGuard, async (request, response, next) => {
   try {
-    const [news, homeTheme, engagementSettings, aiResearchSettings, pollRows] = await Promise.all([
+    const [news, homeTheme, engagementSettings, aiResearchSettings, pollRows, deployStatus] = await Promise.all([
       prisma.news.findMany({
         orderBy: [{ updatedAt: "desc" }],
         take: 300,
@@ -2783,6 +3830,7 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
       getHomeEngagementSettings(prisma),
       getAiResearchSettings(prisma),
       buildBackofficePollRows(),
+      buildDeployStatusPayload(),
     ]);
 
     const themeOptions = HOME_THEME_OPTIONS.map(
@@ -2799,6 +3847,9 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
     const pollVotes = pollRows.reduce((acc, item) => acc + item.totalVotes, 0);
     const externalLinked = news.filter((item) => normalizeExternalKey(item.sourceUrl).length > 0).length;
     const thinExternal = news.filter((item) => isLikelyThinExternalNews(item)).length;
+    const deployStatusClass =
+      deployStatus.sync === "synced" ? "is-synced" : deployStatus.sync === "drift" ? "is-drift" : "is-unknown";
+    const frontendVersionLabel = deployStatus.frontend?.versionLabel ?? "Sin respuesta publica";
     const recentNewsRows = news
       .slice(0, 4)
       .map((item) => {
@@ -2811,7 +3862,7 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
           <div class="bo-activity-time">${when}</div>
           <div class="bo-activity-copy">
             <strong>${event}</strong>
-            <span>${currentErrorSafe(item.section)}${item.province ? ` · ${currentErrorSafe(item.province)}` : ""} · IA ${currentErrorSafe(
+            <span>${currentErrorSafe(item.section)}${item.province ? ` &middot; ${currentErrorSafe(item.province)}` : ""} &middot; IA ${currentErrorSafe(
               item.aiDecision ?? "REVIEW",
             )}</span>
           </div>
@@ -2827,7 +3878,7 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
           <div class="bo-activity-time">${when}</div>
           <div class="bo-activity-copy">
             <strong>Encuesta ${currentErrorSafe(item.status.toLowerCase())}: "${currentErrorSafe(item.title)}"</strong>
-            <span>${item.totalVotes} votos · lider ${currentErrorSafe(item.leaderLabel ?? "sin definir")}</span>
+            <span>${item.totalVotes} votos &middot; lider ${currentErrorSafe(item.leaderLabel ?? "sin definir")}</span>
           </div>
           <a class="button" href="/backoffice/polls/${item.id}/edit">Abrir</a>
         </div>`;
@@ -2892,15 +3943,55 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
               </div>
             </div>
             <div class="bo-action-grid">
-              <a class="bo-action-tile" href="/backoffice/news/new"><span>+</span><strong>Crear nota</strong></a>
-              <a class="bo-action-tile" href="/backoffice/news/new?studio=batch"><span>◫</span><strong>Generar lote IA</strong></a>
-              <a class="bo-action-tile" href="/backoffice/news/new?studio=rewrite"><span>↺</span><strong>Reformular externas</strong></a>
-              <a class="bo-action-tile" href="/backoffice/users"><span>◎</span><strong>Ver usuarios</strong></a>
+              <a class="bo-action-tile" href="/backoffice/news/new">
+                <span class="bo-action-icon">NT</span>
+                <strong>Crear nota</strong>
+                <small>Brief puntual, periodista IA y revision manual en un solo flujo.</small>
+              </a>
+              <a class="bo-action-tile" href="/backoffice/news/new?studio=batch">
+                <span class="bo-action-icon">LT</span>
+                <strong>Cobertura en lote</strong>
+                <small>Lanza una corrida editorial con cantidad variable y peso de campana.</small>
+              </a>
+              <a class="bo-action-tile" href="/backoffice/news/new?studio=command">
+                <span class="bo-action-icon">CM</span>
+                <strong>Comando editorial</strong>
+                <small>Planifica y ejecuta crear, editar, borrar o internalizar con mitigaciones.</small>
+              </a>
+              <a class="bo-action-tile" href="/backoffice/users">
+                <span class="bo-action-icon">US</span>
+                <strong>Ver usuarios</strong>
+                <small>Consulta audiencia, trazabilidad y planes sin salir del dashboard.</small>
+              </a>
             </div>
           </article>
         </div>
 
         <aside class="bo-side-panel">
+          <div class="bo-side-card" id="boDeployStatus">
+            <div class="split-title">
+              <h3>Estado de despliegue</h3>
+              <span id="boDeployBadge" class="bo-deploy-status ${deployStatusClass}">${deployStatus.sync}</span>
+            </div>
+            <div class="bo-deploy-grid">
+              <div class="bo-deploy-row">
+                <strong>Backend Render</strong>
+                <span id="boDeployBackend">${escapeHtml(deployStatus.backend.versionLabel)}</span>
+              </div>
+              <div class="bo-deploy-row">
+                <strong>Frontend Vercel</strong>
+                <span id="boDeployFrontend">${escapeHtml(frontendVersionLabel)}</span>
+              </div>
+            </div>
+            <p id="boDeploySummary" class="muted">${
+              deployStatus.error ? escapeHtml(deployStatus.error) : `Sincronizacion actual: ${escapeHtml(deployStatus.sync)}.`
+            }</p>
+            <div class="actions">
+              <a class="button" href="${escapeHtml(normalizedFrontendBaseUrl())}" target="_blank" rel="noreferrer">Abrir front</a>
+              <a class="button" href="/backoffice/news/new?studio=command">Abrir comando</a>
+            </div>
+          </div>
+
           <div>
             <h3>Control de portada</h3>
             <p>Gestiona layout editorial, interacciones del front y comportamiento del agente periodista sin salir del dashboard.</p>
@@ -2975,6 +4066,39 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
       </section>
 
       ${renderNewsTable(news, { frontendBaseUrl: normalizedFrontendBaseUrl() })}
+      <script>
+        (function () {
+          const badge = document.getElementById("boDeployBadge");
+          const backendEl = document.getElementById("boDeployBackend");
+          const frontendEl = document.getElementById("boDeployFrontend");
+          const summaryEl = document.getElementById("boDeploySummary");
+
+          function renderStatus(payload) {
+            if (!payload || !badge || !backendEl || !frontendEl || !summaryEl) {
+              return;
+            }
+            const sync = payload.sync || "unknown";
+            badge.textContent = String(sync).toUpperCase();
+            badge.className = "bo-deploy-status " + (sync === "synced" ? "is-synced" : sync === "drift" ? "is-drift" : "is-unknown");
+            backendEl.textContent = payload.backend && payload.backend.versionLabel ? payload.backend.versionLabel : "Sin dato";
+            frontendEl.textContent = payload.frontend && payload.frontend.versionLabel ? payload.frontend.versionLabel : "Sin respuesta publica";
+            summaryEl.textContent = payload.error ? String(payload.error) : "Sincronizacion actual: " + String(sync) + ".";
+          }
+
+          async function refreshStatus() {
+            try {
+              const response = await fetch("/api/deploy/status", { headers: { accept: "application/json" } });
+              if (!response.ok) {
+                return;
+              }
+              renderStatus(await response.json());
+            } catch (_error) {}
+          }
+
+          window.setTimeout(refreshStatus, 600);
+          window.setInterval(refreshStatus, 15000);
+        })();
+      </script>
     </div>`;
 
     response.send(backofficeShell("Panel editorial", body, readString(request.query.ok)));
@@ -3558,7 +4682,7 @@ app.post("/backoffice/news/internalize", boGuard, async (request, response, next
     }
 
     response.redirect(
-      `/backoffice/news/new?studio=rewrite&ok=${encodeURIComponent(summaryParts.join(" � "))}`,
+      `/backoffice/news/new?studio=rewrite&ok=${encodeURIComponent(summaryParts.join(" | "))}`,
     );
   } catch (error) {
     if (error instanceof Error) {
@@ -3575,18 +4699,118 @@ app.post("/backoffice/news/internalize", boGuard, async (request, response, next
   }
 });
 
+app.post("/backoffice/editorial-command/plan", boGuard, async (request, response, next) => {
+  const commandState: EditorialCommandFormState = {
+    instruction: readString(request.body.instruction),
+    campaignLine: readString(request.body.campaignLine),
+    allowDestructive: readBoolean(request.body.allowDestructive),
+    autoExecuteSafe: readBoolean(request.body.autoExecuteSafe),
+  };
+
+  try {
+    if (commandState.instruction.length < 12) {
+      throw new Error("El comando editorial debe tener al menos 12 caracteres.");
+    }
+
+    const context = await buildAiNewsContext(prisma);
+    const plan = await planEditorialCommandWithAi(
+      {
+        instruction: commandState.instruction,
+        campaignLine: commandState.campaignLine || null,
+        allowDestructive: commandState.allowDestructive,
+      },
+      context.contextText,
+    );
+
+    if (commandState.autoExecuteSafe && !plan.destructive) {
+      const executionSummary = await executeEditorialCommandPlan(plan, commandState);
+      response.redirect(
+        `/backoffice/news/new?studio=command&ok=${encodeURIComponent(`Plan ejecutado automaticamente - ${executionSummary}`)}`,
+      );
+      return;
+    }
+
+    response.send(
+      await renderUnifiedEditorialPage({
+        activeMode: "command",
+        commandState: {
+          ...commandState,
+          summary: `Plan listo: ${plan.summary}`,
+          planJson: encodeEditorialCommandPlan(plan),
+          preview: previewEditorialCommandPlan(plan),
+        },
+      }),
+    );
+  } catch (error) {
+    if (error instanceof Error) {
+      response.status(400).send(
+        await renderUnifiedEditorialPage({
+          activeMode: "command",
+          error: error.message,
+          commandState,
+        }),
+      );
+      return;
+    }
+    next(error);
+  }
+});
+
+app.post("/backoffice/editorial-command/execute", boGuard, async (request, response, next) => {
+  const commandState: EditorialCommandFormState = {
+    instruction: "",
+    campaignLine: readString(request.body.campaignLine),
+    allowDestructive: readBoolean(request.body.allowDestructive),
+    autoExecuteSafe: false,
+  };
+
+  try {
+    const planJson = readString(request.body.planJson);
+    if (!planJson) {
+      throw new Error("No se recibio el plan editorial a ejecutar.");
+    }
+
+    const plan = decodeEditorialCommandPlan(planJson);
+    const executionSummary = await executeEditorialCommandPlan(plan, commandState);
+    response.redirect(
+      `/backoffice/news/new?studio=command&ok=${encodeURIComponent(`Comando ejecutado - ${executionSummary}`)}`,
+    );
+  } catch (error) {
+    if (error instanceof Error) {
+      response.status(400).send(
+        await renderUnifiedEditorialPage({
+          activeMode: "command",
+          error: error.message,
+          commandState: {
+            ...commandState,
+            summary: "El plan no se pudo ejecutar.",
+          },
+        }),
+      );
+      return;
+    }
+    next(error);
+  }
+});
+
 app.get("/backoffice/news/new", boGuard, async (request, response, next) => {
   try {
     const studio = readString(request.query.studio).toLowerCase();
     const ok = readString(request.query.ok);
     const pageParams: Parameters<typeof renderUnifiedEditorialPage>[0] = {
-      activeMode: studio === "batch" || studio === "rewrite" ? (studio as "batch" | "rewrite") : "single",
+      activeMode:
+        studio === "batch" || studio === "rewrite" || studio === "command"
+          ? (studio as "batch" | "rewrite" | "command")
+          : "single",
     };
     if (studio === "batch" && ok) {
       pageParams.batchState = { summary: ok };
     }
     if (studio === "rewrite" && ok) {
       pageParams.rewriteState = { summary: ok };
+    }
+    if (studio === "command" && ok) {
+      pageParams.commandState = { summary: ok };
     }
     response.send(
       await renderUnifiedEditorialPage(pageParams),
@@ -4025,7 +5249,11 @@ app.get("/backoffice/news/:id/edit", boGuard, async (request, response, next) =>
         action: `/backoffice/news/${news.id}`,
         data: {
           ...news,
-          imageUrl: buildManagedImageUrl(news.imageUrl) ?? news.imageUrl,
+          imageUrl:
+            resolveManagedFeedImage(news.imageUrl, {
+              sourceUrl: news.sourceUrl,
+              seed: news.title,
+            }) ?? news.imageUrl,
         },
         aiResearch,
       }),
@@ -4139,5 +5367,6 @@ const shutdown = async () => {
 
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
+
 
 

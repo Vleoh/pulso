@@ -28,6 +28,18 @@ function compactTopic(input: string): string {
     .slice(0, 28);
 }
 
+function feedVisualScore(item: { imageUrl: string | null; excerpt?: string | null; isExternal?: boolean; publishedAt: string; isFeatured?: boolean; isSponsored?: boolean }): number {
+  const ageHours = Math.max(0, (Date.now() - +new Date(item.publishedAt)) / (1000 * 60 * 60));
+  return [
+    item.imageUrl ? 12 : 0,
+    item.excerpt ? 4 : 0,
+    item.isFeatured ? 3 : 0,
+    item.isSponsored ? 0 : 1,
+    item.isExternal ? 0 : 6,
+    Math.max(0, 10 - Math.floor(ageHours / 8)),
+  ].reduce((acc, value) => acc + value, 0);
+}
+
 export async function buildHomePayload(prisma: PrismaClient): Promise<HomePayload> {
   const [internalNews, externalNews, theme, engagement, signalData] = await Promise.all([
     prisma.news.findMany({
@@ -94,8 +106,15 @@ export async function buildHomePayload(prisma: PrismaClient): Promise<HomePayloa
     .slice(0, 12)
     .map((item) => item.title);
 
-  const federalHighlights = PROVINCE_OPTIONS.map((provinceOption, index) => {
-    const internalByProvince = internal.find((item) => item.province === provinceOption.value);
+  const fallbackFederalPool = dedupeByKey([...internal, ...externalNews])
+    .sort((left, right) => feedVisualScore(right) - feedVisualScore(left))
+    .filter((item) => Boolean(item.imageUrl || item.excerpt));
+  const usedFederalFallbackIds = new Set<string>();
+
+  const federalHighlights = PROVINCE_OPTIONS.map((provinceOption) => {
+    const internalByProvince = [...internal]
+      .filter((item) => item.province === provinceOption.value)
+      .sort((left, right) => feedVisualScore(right) - feedVisualScore(left))[0];
     if (internalByProvince) {
       return {
         id: internalByProvince.id,
@@ -111,7 +130,16 @@ export async function buildHomePayload(prisma: PrismaClient): Promise<HomePayloa
       };
     }
 
-    const fallback = externalNews[index % Math.max(1, externalNews.length)] ?? hero;
+    const fallback =
+      fallbackFederalPool.find((item) => {
+        if (usedFederalFallbackIds.has(item.id)) {
+          return false;
+        }
+        usedFederalFallbackIds.add(item.id);
+        return true;
+      }) ??
+      fallbackFederalPool[0] ??
+      hero;
     return {
       id: fallback?.id ?? `federal-fallback-${provinceOption.value}`,
       province: provinceOption.label,

@@ -1,4 +1,4 @@
-import { type News, NewsStatus, type Poll, PollStatus, type Province, UserPlan } from "@prisma/client";
+﻿import { type News, NewsStatus, type Poll, PollStatus, type Province, UserPlan } from "@prisma/client";
 import { PROVINCE_OPTIONS, SECTION_OPTIONS, provinceLabel, sectionLabel } from "./catalog";
 import { escapeHtml } from "./utils";
 
@@ -316,11 +316,13 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
     .bo-stat-card span { color:#7b766e; font-size:11px; letter-spacing:.14em; text-transform:uppercase; font-weight:700; }
     .bo-stat-card.emphasis { border-color:#dfc06b; box-shadow:0 12px 26px rgba(242,183,5,.14); }
     .bo-module-grid { display:grid; gap:20px; grid-template-columns:minmax(0,1.6fr) 340px; align-items:start; }
-    .bo-side-panel { padding:22px; border-radius:24px; background:#191714; color:#fff; border:1px solid #2a2723; display:grid; gap:16px; position:sticky; top:24px; }
+    .bo-side-panel { padding:22px; border-radius:24px; background:#191714; color:#fff; border:1px solid #2a2723; display:grid; gap:16px; position:sticky; top:24px; box-shadow:0 24px 54px rgba(17,17,17,.16); }
     .bo-side-panel h3 { margin:0; font-size:15px; letter-spacing:.12em; text-transform:uppercase; color:#f2b705; }
     .bo-side-panel p { margin:0; color:#d0cbc2; font-size:13px; line-height:1.55; }
     .bo-side-panel .field label { color:#ddd3bd; }
     .bo-side-panel input, .bo-side-panel textarea, .bo-side-panel select { background:#24211d; border-color:#3a3630; color:#f6f4ee; }
+    .bo-side-card { padding:14px; border-radius:18px; border:1px solid rgba(255,255,255,.08); background:rgba(255,255,255,.03); display:grid; gap:10px; }
+    .bo-side-card .muted { color:#c2baae; }
     .bo-toggle-row { display:flex; align-items:center; justify-content:space-between; gap:14px; padding:10px 0; border-bottom:1px solid rgba(255,255,255,.08); }
     .bo-toggle-row:last-child { border-bottom:0; }
     .bo-toggle-row strong { font-size:13px; }
@@ -330,9 +332,11 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
     .bo-pill-switch.is-on { background:#f2b705; }
     .bo-pill-switch.is-on::after { transform:translateX(20px); background:#151311; }
     .bo-action-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
-    .bo-action-tile { display:grid; place-items:center; gap:8px; min-height:110px; padding:16px; text-decoration:none; text-align:center; border:1px solid #e0d8cb; border-radius:16px; background:#fff; }
+    .bo-action-tile { display:grid; gap:8px; min-height:138px; padding:16px; text-decoration:none; text-align:left; border:1px solid #e0d8cb; border-radius:18px; background:linear-gradient(180deg,#fff,#fbf9f4); box-shadow:0 14px 30px rgba(17,17,17,.05); transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease; }
+    .bo-action-tile:hover { transform:translateY(-2px); border-color:#d5bb7a; box-shadow:0 18px 36px rgba(17,17,17,.08); }
     .bo-action-tile strong { font-size:13px; letter-spacing:.06em; text-transform:uppercase; }
-    .bo-action-tile span { font-size:22px; color:#8c6910; }
+    .bo-action-tile small { color:#746f66; font-size:12px; line-height:1.45; }
+    .bo-action-icon { display:inline-grid; place-items:center; width:38px; height:38px; border-radius:12px; background:#191714; color:#f2b705; font-size:11px; font-weight:800; letter-spacing:.12em; text-transform:uppercase; }
     .bo-activity-list { display:grid; gap:0; }
     .bo-activity-row { display:grid; grid-template-columns:100px minmax(0,1fr) auto; gap:16px; align-items:center; padding:14px 0; border-top:1px solid #eee7dc; }
     .bo-activity-row:first-child { border-top:0; }
@@ -355,6 +359,14 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
     .bo-form-actions { display:flex; gap:10px; flex-wrap:wrap; }
     .bo-inline-stat { display:flex; gap:10px; flex-wrap:wrap; }
     .bo-inline-stat span { display:inline-flex; align-items:center; gap:8px; padding:8px 10px; border-radius:999px; background:#faf7ef; border:1px solid #e2ddd5; font-size:12px; }
+    .bo-deploy-status { display:inline-flex; align-items:center; gap:8px; padding:6px 10px; border-radius:999px; font-size:10px; letter-spacing:.12em; text-transform:uppercase; font-weight:700; }
+    .bo-deploy-status.is-synced { background:#edf8f0; color:#1f603b; border:1px solid #aed2bb; }
+    .bo-deploy-status.is-drift { background:#fff4d0; color:#775a00; border:1px solid #dfc06b; }
+    .bo-deploy-status.is-unknown { background:#f3efe7; color:#645f57; border:1px solid #d8d1c5; }
+    .bo-deploy-grid { display:grid; gap:10px; }
+    .bo-deploy-row { display:grid; gap:4px; padding:10px 12px; border-radius:14px; background:rgba(255,255,255,.04); border:1px solid rgba(255,255,255,.08); }
+    .bo-deploy-row strong { font-size:12px; letter-spacing:.1em; text-transform:uppercase; color:#f3ede0; }
+    .bo-deploy-row span { color:#c8c0b4; font-size:12px; line-height:1.45; }
     @keyframes toast-in { to { opacity:1; transform:translateY(0); } }
     @keyframes spin { from { transform:rotate(0deg); } to { transform:rotate(360deg); } }
     @media (max-width:1180px) {
@@ -391,15 +403,15 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
       </div>
       <div class="side-section-label">Navegacion</div>
       <nav class="side-nav">
-        ${backofficeNavLink({ href: "/backoffice", label: "Panel", icon: "▦", isActive: activeNav === "panel" })}
-        ${backofficeNavLink({ href: "/backoffice/news/new", label: "Centro IA", icon: "+", isActive: activeNav === "editorial" })}
-        ${backofficeNavLink({ href: "/backoffice/polls", label: "Encuestas", icon: "◫", isActive: activeNav === "polls" })}
-        ${backofficeNavLink({ href: "/backoffice/users", label: "Usuarios", icon: "◉", isActive: activeNav === "users" })}
-        ${backofficeNavLink({ href: "/backoffice#theme-control", label: "Control portada", icon: "≣", isActive: activeNav === "panel" })}
+        ${backofficeNavLink({ href: "/backoffice", label: "Panel", icon: "PN", isActive: activeNav === "panel" })}
+        ${backofficeNavLink({ href: "/backoffice/news/new", label: "Centro IA", icon: "IA", isActive: activeNav === "editorial" })}
+        ${backofficeNavLink({ href: "/backoffice/polls", label: "Encuestas", icon: "EN", isActive: activeNav === "polls" })}
+        ${backofficeNavLink({ href: "/backoffice/users", label: "Usuarios", icon: "US", isActive: activeNav === "users" })}
+        ${backofficeNavLink({ href: "/backoffice#theme-control", label: "Control portada", icon: "FD", isActive: activeNav === "panel" })}
       </nav>
       <div class="side-footer">
-        <a href="/backoffice/ia-lab"><span class="bo-nav-icon">i</span><span>Diagnostico IA</span></a>
-        <a href="/backoffice/logout"><span class="bo-nav-icon">×</span><span>Cerrar sesion</span></a>
+        <a href="/backoffice/ia-lab"><span class="bo-nav-icon">AI</span><span>Diagnostico IA</span></a>
+        <a href="/backoffice/logout"><span class="bo-nav-icon">XL</span><span>Cerrar sesion</span></a>
       </div>
     </aside>
     <main class="main">
@@ -412,7 +424,7 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
           </div>
           <div class="actions">
             <label class="bo-search" aria-label="Buscar contenido">
-              <span class="bo-nav-icon">⌕</span>
+              <span class="bo-nav-icon">SR</span>
               <input type="text" placeholder="Buscar contenido..." />
             </label>
             <div class="bo-user-chip">
@@ -649,9 +661,33 @@ type EditorialRewriteStudioState = {
   summary?: string | null;
 };
 
+type EditorialCommandPreview = {
+  summary: string;
+  notes: string[];
+  destructive: boolean;
+  requiresConfirmation: boolean;
+  operations: Array<{
+    kind: string;
+    title: string;
+    detail: string;
+  }>;
+  model: string;
+};
+
+type EditorialCommandStudioState = {
+  instruction: string;
+  campaignLine: string;
+  allowDestructive: boolean;
+  autoExecuteSafe: boolean;
+  summary?: string | null;
+  planJson?: string | null;
+  preview?: EditorialCommandPreview | null;
+};
+
 function renderEditorialStudio(params: {
   batch?: Partial<EditorialBatchStudioState>;
   rewrite?: Partial<EditorialRewriteStudioState>;
+  command?: Partial<EditorialCommandStudioState>;
   activeMode?: string;
 }): string {
   const batch: EditorialBatchStudioState = {
@@ -688,6 +724,18 @@ function renderEditorialStudio(params: {
     ...(params.rewrite ?? {}),
   };
 
+  const command: EditorialCommandStudioState = {
+    instruction:
+      "Revisa las noticias externas del sitio, conviertelas en notas propias de Pulso Pais y deja el sistema limpio de duplicados obvios.",
+    campaignLine: batch.campaignLine,
+    allowDestructive: false,
+    autoExecuteSafe: true,
+    summary: "",
+    planJson: "",
+    preview: null,
+    ...(params.command ?? {}),
+  };
+
   const activeMode = (params.activeMode ?? "single").toLowerCase();
 
   return `<div class="editor-card" id="studio">
@@ -696,19 +744,20 @@ function renderEditorialStudio(params: {
         <div class="bo-kicker">Centro Editorial IA</div>
         <h3 style="margin-top:8px;">Operacion editorial unificada</h3>
       </div>
-      <span class="mini-tag">nota puntual + lote + rewrite</span>
+      <span class="mini-tag">nota puntual + lote + internalizacion + comando</span>
     </div>
-    <p class="muted">Usa una sola consola para generar 1 nota, lanzar una corrida de cobertura o internalizar enlaces externos en noticias propias. La edicion manual sigue abajo para revisar y publicar.</p>
+    <p class="muted">Usa una sola consola para generar 1 nota, lanzar una corrida de cobertura, internalizar externas o darle instrucciones operativas a la IA sobre el CMS. La edicion manual sigue abajo para revisar y publicar.</p>
     <div class="bo-tabs" id="studioTabs">
       <button type="button" class="bo-tab-btn ${activeMode === "single" ? "is-active" : ""}" data-studio-tab="single">Nota puntual</button>
       <button type="button" class="bo-tab-btn ${activeMode === "batch" ? "is-active" : ""}" data-studio-tab="batch">Cobertura en lote</button>
       <button type="button" class="bo-tab-btn ${activeMode === "rewrite" ? "is-active" : ""}" data-studio-tab="rewrite">Internalizar externas</button>
+      <button type="button" class="bo-tab-btn ${activeMode === "command" ? "is-active" : ""}" data-studio-tab="command">Comando editorial</button>
     </div>
 
     <section class="bo-tab-panel ${activeMode === "single" ? "is-active" : ""}" data-studio-panel="single">
       <div class="bo-note-box">
         <strong>Operacion puntual</strong>
-        <p>Escribe el brief en el bloque IA de abajo y elige entre <em>Genera con IA</em> o <em>Investigar y generar nota propia</em>. Si el agente periodista encuentra fuentes calientes, traerá contexto, imagen y media para autocompletar el formulario.</p>
+        <p>Escribe el brief en el bloque IA de abajo y elige entre <em>Genera con IA</em> o <em>Investigar y generar nota propia</em>. Si el agente periodista encuentra fuentes calientes, traera contexto, imagen y media para autocompletar el formulario.</p>
       </div>
       <div class="bo-inline-stat">
         <span>Cantidad fija: <strong>1</strong></span>
@@ -849,6 +898,78 @@ function renderEditorialStudio(params: {
         </div>
       </form>
     </section>
+
+    <section class="bo-tab-panel ${activeMode === "command" ? "is-active" : ""}" data-studio-panel="command">
+      ${command.summary ? `<div class="flash">${escapeHtml(command.summary)}</div>` : ""}
+      <form method="post" action="/backoffice/editorial-command/plan" data-studio-submit="command">
+        <div class="field">
+          <label for="commandInstruction">Comando libre para IA</label>
+          <textarea id="commandInstruction" name="instruction" rows="5" placeholder="Ej: fijate todas las noticias que sigan mandando a portales externos, internalizalas como notas propias, con imagen valida, y deja 3 nuevas sobre el cierre de alianzas en PBA.">${escapeHtml(command.instruction)}</textarea>
+          <p class="hint">La IA traduce este pedido a operaciones concretas del CMS: crear, editar, borrar, actualizar metadatos o internalizar externas. Primero planifica, despues ejecuta.</p>
+        </div>
+        <div class="field">
+          <label for="commandCampaignLine">Bajada editorial / campana activa</label>
+          <textarea id="commandCampaignLine" name="campaignLine" rows="2">${escapeHtml(command.campaignLine)}</textarea>
+        </div>
+        <div class="checks">
+          <label><input type="checkbox" name="allowDestructive" ${command.allowDestructive ? "checked" : ""} /> Permitir acciones destructivas si el pedido realmente exige borrar</label>
+          <label><input type="checkbox" name="autoExecuteSafe" ${command.autoExecuteSafe ? "checked" : ""} /> Ejecutar automaticamente si el plan no incluye borrados</label>
+        </div>
+        <div class="bo-form-actions">
+          <button type="submit" class="primary" data-submit-label="Planificando comando editorial con IA...">Planificar comando editorial</button>
+          <span class="muted">Mitigacion: primero se genera un plan estructurado. Si incluye borrados o acciones sensibles, queda obligado a confirmacion manual.</span>
+        </div>
+      </form>
+
+      ${
+        command.preview
+          ? `<div class="editor-card">
+              <div class="split-title">
+                <div>
+                  <div class="bo-kicker">Plan IA listo</div>
+                  <h3 style="margin-top:8px;">${escapeHtml(command.preview.summary)}</h3>
+                </div>
+                <span class="mini-tag">${escapeHtml(command.preview.model)}</span>
+              </div>
+              <div class="bo-inline-stat">
+                <span>${command.preview.operations.length} operacion${command.preview.operations.length === 1 ? "" : "es"}</span>
+                <span>${command.preview.destructive ? "Plan destructivo" : "Sin borrados"}</span>
+                <span>${command.preview.requiresConfirmation ? "Requiere confirmacion" : "Ejecucion directa permitida"}</span>
+              </div>
+              <div class="grid" style="gap:12px;">
+                ${command.preview.operations
+                  .map(
+                    (operation, index) => `<article class="bo-note-box">
+                      <strong>${String(index + 1).padStart(2, "0")} | ${escapeHtml(operation.title)}</strong>
+                      <p><span class="pill">${escapeHtml(operation.kind)}</span> ${escapeHtml(operation.detail)}</p>
+                    </article>`,
+                  )
+                  .join("")}
+              </div>
+              ${
+                command.preview.notes.length > 0
+                  ? `<div class="bo-note-box">
+                      <strong>Notas del planner</strong>
+                      <p>${command.preview.notes.map((note) => escapeHtml(note)).join(" | ")}</p>
+                    </div>`
+                  : ""
+              }
+              <form method="post" action="/backoffice/editorial-command/execute" data-studio-submit="command-execute">
+                <textarea name="planJson" class="editor-hidden">${escapeHtml(command.planJson ?? "")}</textarea>
+                <input type="hidden" name="campaignLine" value="${escapeHtml(command.campaignLine)}" />
+                <label class="ai-inline">
+                  <input type="checkbox" name="allowDestructive" ${command.allowDestructive ? "checked" : ""} />
+                  Confirmo que la IA puede ejecutar este plan con el nivel de riesgo indicado.
+                </label>
+                <div class="bo-form-actions">
+                  <button type="submit" class="primary" data-submit-label="Ejecutando plan editorial...">Ejecutar plan</button>
+                  <span class="muted">Si cambias el texto del comando, vuelve a planificar antes de ejecutar.</span>
+                </div>
+              </form>
+            </div>`
+          : ""
+      }
+    </section>
   </div>`;
 }
 
@@ -871,6 +992,7 @@ export function renderNewsForm(params: {
     activeMode?: string;
     batch?: Partial<EditorialBatchStudioState>;
     rewrite?: Partial<EditorialRewriteStudioState>;
+    command?: Partial<EditorialCommandStudioState>;
   };
 }): string {
   const { mode, action, data, error } = params;
@@ -917,6 +1039,7 @@ export function renderNewsForm(params: {
     activeMode?: string;
     batch?: Partial<EditorialBatchStudioState>;
     rewrite?: Partial<EditorialRewriteStudioState>;
+    command?: Partial<EditorialCommandStudioState>;
   } = {};
 
   if (params.editorialStudio?.activeMode) {
@@ -927,6 +1050,9 @@ export function renderNewsForm(params: {
   }
   if (params.editorialStudio?.rewrite) {
     studioParams.rewrite = params.editorialStudio.rewrite;
+  }
+  if (params.editorialStudio?.command) {
+    studioParams.command = params.editorialStudio.command;
   }
 
   const studioBlock =
@@ -1205,7 +1331,29 @@ export function renderNewsForm(params: {
 
             function updateImagePreview() {
               const imageUrl = value("imageUrl");
-              if (!imageUrl) {
+              const sourceUrl = value("sourceUrl");
+
+              function normalizePreviewUrl(raw) {
+                if (!raw) {
+                  return "";
+                }
+                try {
+                  const parsed = new URL(String(raw).trim());
+                  const host = parsed.hostname.toLowerCase();
+                  if ((host.includes("weserv.nl") || host === "wsrv.nl") && parsed.searchParams.has("url")) {
+                    return decodeURIComponent(parsed.searchParams.get("url") || "");
+                  }
+                  return parsed.toString();
+                } catch (_error) {
+                  return String(raw).trim();
+                }
+              }
+
+              const previewUrl =
+                normalizePreviewUrl(imageUrl) ||
+                (sourceUrl ? "https://s.wordpress.com/mshots/v1/" + encodeURIComponent(sourceUrl) + "?w=1200" : "");
+
+              if (!previewUrl) {
                 imagePreview.classList.remove("has-image");
                 imagePreview.innerHTML = "Sin imagen cargada";
                 return;
@@ -1214,7 +1362,7 @@ export function renderNewsForm(params: {
               const imageEl = document.createElement("img");
               imageEl.alt = "Preview";
               imageEl.loading = "lazy";
-              imageEl.src = imageUrl;
+              imageEl.src = previewUrl;
               imageEl.addEventListener("error", function () {
                 imagePreview.classList.remove("has-image");
                 imagePreview.textContent = "No se pudo cargar la imagen.";
@@ -2586,5 +2734,6 @@ export function renderIaLab(): string {
     </div>`,
   );
 }
+
 
 

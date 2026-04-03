@@ -166,6 +166,42 @@ function extractPrimaryVideoFromBody(body: string | null): {
   };
 }
 
+function normalizeEmbeddableVideoUrl(input: string | null): string | null {
+  if (!input) {
+    return null;
+  }
+  try {
+    const parsed = new URL(input);
+    const host = parsed.hostname.toLowerCase();
+
+    if (host === "youtu.be") {
+      const id = parsed.pathname.replace(/^\/+/, "").split("/")[0] ?? "";
+      return id ? `https://www.youtube.com/embed/${id}` : null;
+    }
+
+    if (host.includes("youtube.com") || host.includes("youtube-nocookie.com")) {
+      if (parsed.pathname.startsWith("/embed/")) {
+        return parsed.toString();
+      }
+      const watchId = parsed.searchParams.get("v") ?? "";
+      return watchId ? `https://www.youtube.com/embed/${watchId}` : null;
+    }
+
+    if (host === "vimeo.com") {
+      const id = parsed.pathname.replace(/^\/+/, "").split("/")[0] ?? "";
+      return /^\d+$/.test(id) ? `https://player.vimeo.com/video/${id}` : null;
+    }
+
+    if (host.includes("player.vimeo.com")) {
+      return parsed.toString();
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 function storyLink(item: { slug: string | null; sourceUrl: string | null; isExternal?: boolean }): { href: string; external: boolean } | null {
   if (item.slug && !item.isExternal) {
     return { href: `/noticias/${item.slug}`, external: false };
@@ -278,6 +314,7 @@ export default async function NewsDetailPage({ params }: NewsDetailPageProps) {
   const { bodyWithoutVideo, videoUrl, posterUrl } = extractPrimaryVideoFromBody(payload.item.body);
   const { bodyWithoutGallery, galleryUrls } = extractGalleryFromBody(bodyWithoutVideo);
   const paragraphs = detailParagraphs(bodyWithoutGallery, payload.item.excerpt);
+  const embedVideoUrl = normalizeEmbeddableVideoUrl(videoUrl);
 
   return (
     <main className="news-detail-screen">
@@ -342,7 +379,19 @@ export default async function NewsDetailPage({ params }: NewsDetailPageProps) {
             />
           </figure>
 
-          {videoUrl ? (
+          {embedVideoUrl ? (
+            <section className="news-detail-video news-detail-video-embed">
+              <iframe
+                src={embedVideoUrl}
+                title={`Video: ${cleanTitle({ title: payload.item.title, section: payload.item.section })}`}
+                loading="lazy"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                allowFullScreen
+              />
+            </section>
+          ) : null}
+
+          {!embedVideoUrl && videoUrl ? (
             <section className="news-detail-video">
               <video controls preload="metadata" poster={posterUrl ?? undefined}>
                 <source src={videoUrl} />

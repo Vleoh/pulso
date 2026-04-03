@@ -184,6 +184,34 @@ function fillList(primary: FeedItem[], fallback: FeedItem[], max: number): FeedI
   return dedupe([...primary, ...fallback]).slice(0, max);
 }
 
+function rankStoryForDisplay(item: FeedItem): number {
+  const ageHours = Math.max(0, (Date.now() - +new Date(item.publishedAt)) / (1000 * 60 * 60));
+  return [
+    item.imageUrl ? 10 : 0,
+    item.excerpt ? 3 : 0,
+    item.isExternal ? 0 : 5,
+    item.isFeatured ? 3 : 0,
+    Math.max(0, 10 - Math.floor(ageHours / 8)),
+  ].reduce((acc, value) => acc + value, 0);
+}
+
+function prioritizeStories(items: FeedItem[], max: number): FeedItem[] {
+  return dedupe(items)
+    .sort((left, right) => rankStoryForDisplay(right) - rankStoryForDisplay(left))
+    .slice(0, max);
+}
+
+function prioritizeFederalEntries(items: FederalCardItem[], max: number): FederalCardItem[] {
+  return Array.from(new Map(items.map((item) => [item.id, item])).values())
+    .sort((left, right) => {
+      const leftScore = (left.imageUrl ? 8 : 0) + (left.excerpt ? 3 : 0) - Math.floor((Date.now() - +new Date(left.publishedAt)) / (1000 * 60 * 60 * 12));
+      const rightScore =
+        (right.imageUrl ? 8 : 0) + (right.excerpt ? 3 : 0) - Math.floor((Date.now() - +new Date(right.publishedAt)) / (1000 * 60 * 60 * 12));
+      return rightScore - leftScore;
+    })
+    .slice(0, max);
+}
+
 function findSports(items: FeedItem[]): FeedItem | null {
   return items.find((item) => /deporte|futbol|liga|seleccion|partido|torneo|ascenso/i.test(item.title)) ?? null;
 }
@@ -335,7 +363,7 @@ function DesktopArticleCard({
 }
 
 function ProvinceFeatureCard({ entry }: { entry: FederalCardItem }) {
-  const cleanHeadline = shortText(stripCategoryPrefix(sanitizeDisplayText(entry.headline), entry.section), 78);
+  const cleanHeadline = shortText(stripCategoryPrefix(sanitizeDisplayText(entry.headline), entry.section), 70);
   const story = {
     slug: entry.slug,
     sourceUrl: entry.sourceUrl,
@@ -364,10 +392,12 @@ function ProvinceFeatureCard({ entry }: { entry: FederalCardItem }) {
             {cleanHeadline}
           </StoryAnchor>
         </h4>
-        <p>{shortText(sanitizeDisplayText(entry.excerpt ?? "Cobertura territorial con foco institucional y agenda local."), 116)}</p>
-        <div className="cp-meta-line">
-          <span>Pulso Federal</span>
+        <p>{shortText(sanitizeDisplayText(entry.excerpt ?? "Cobertura territorial con foco institucional, agenda local y lectura nacional."), 102)}</p>
+        <div className="cp-province-foot">
           <span>{relativeMinutes(entry.publishedAt)}</span>
+          <span className="cp-province-arrow" aria-hidden="true">
+            <UiIcon name="arrow-right" />
+          </span>
         </div>
       </div>
     </article>
@@ -982,12 +1012,14 @@ export default async function Home() {
   const hero = home.hero ?? allItems[0] ?? null;
   const rest = allItems.filter((item) => item.id !== hero?.id);
 
-  const mostRead = fillList(dedupe([...home.latest, ...home.externalPulse]), rest, 3);
+  const mostRead = prioritizeStories(fillList(dedupe([...home.secondary, ...home.latest, ...home.externalPulse]), rest, 6), 4);
   const opinionStories = fillList(dedupe([...home.opinion, ...rest.filter((item) => item.section === "OPINION")]), rest, 3);
   const buenosAiresStories = fillList(rest.filter((item) => item.province === "BUENOS_AIRES" || item.province === "CABA"), rest, 2);
   const interviewStory = home.interviews[0] ?? rest.find((item) => item.section === "ENTREVISTAS") ?? rest[0] ?? null;
   const electionStory = home.radarElectoral[0] ?? rest.find((item) => item.section === "RADAR_ELECTORAL") ?? rest[1] ?? null;
   const sportsStory = findSports(rest);
+  const federalDesktop = prioritizeFederalEntries(home.federalHighlights, 8);
+  const federalMobile = prioritizeFederalEntries(home.federalHighlights, 6);
 
   const controls: EngagementControls = {
     commentsEnabled: home.engagement.commentsEnabled,
@@ -1010,7 +1042,7 @@ export default async function Home() {
           interviewStory={interviewStory}
           electionStory={electionStory}
           sportsStory={sportsStory}
-          provinces={home.federalHighlights.slice(0, 8)}
+          provinces={federalDesktop}
           poll={featuredPoll}
           markets={home.social.markets}
           weatherLabel={weatherLabel}
@@ -1023,7 +1055,7 @@ export default async function Home() {
         <MobileEdition
           hero={hero}
           stream={mobileStream}
-          provinces={home.federalHighlights.slice(0, 6)}
+          provinces={federalMobile}
           interviewStory={interviewStory}
           opinionStories={opinionStories}
           sportsStory={sportsStory}

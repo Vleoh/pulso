@@ -105,6 +105,92 @@ export type EditorialBatchAssistOutput = {
   model: string;
 };
 
+export type EditorialCommandOperation =
+  | {
+      kind: "CREATE_STORIES";
+      count: number;
+      brief: string;
+      campaignPercent: number;
+      campaignTopic: string | null;
+      generalBrief: string;
+      useResearchAgent: boolean;
+      requireImageUrl: boolean;
+      publishStatus: NewsStatus | null;
+      sectionHint: string | null;
+      provinceHint: string | null;
+      includeCampaignLine: boolean;
+      rationale: string | null;
+    }
+  | {
+      kind: "INTERNALIZE_EXTERNALS";
+      instruction: string;
+      limit: number;
+      scope: "mixed" | "existing" | "feed";
+      publishStatus: NewsStatus | null;
+      sectionHint: string | null;
+      provinceHint: string | null;
+      includeCampaignLine: boolean;
+      deleteDuplicates: boolean;
+      rationale: string | null;
+    }
+  | {
+      kind: "REWRITE_EXISTING";
+      match: string;
+      limit: number;
+      instruction: string;
+      useResearchAgent: boolean;
+      requireImageUrl: boolean;
+      publishStatus: NewsStatus | null;
+      sectionHint: string | null;
+      provinceHint: string | null;
+      includeCampaignLine: boolean;
+      rationale: string | null;
+    }
+  | {
+      kind: "UPDATE_METADATA";
+      match: string;
+      limit: number;
+      fields: {
+        kicker: string | null;
+        section: string | null;
+        province: string | null;
+        status: NewsStatus | null;
+        isFeatured: boolean | null;
+        isHero: boolean | null;
+        isSponsored: boolean | null;
+        isInterview: boolean | null;
+        isOpinion: boolean | null;
+        isRadar: boolean | null;
+        authorName: string | null;
+        sourceName: string | null;
+        addTags: string[];
+        removeTags: string[];
+      };
+      rationale: string | null;
+    }
+  | {
+      kind: "DELETE_NEWS";
+      match: string;
+      limit: number;
+      onlyThinExternal: boolean;
+      rationale: string | null;
+    };
+
+export type EditorialCommandPlanInput = {
+  instruction: string;
+  campaignLine: string | null;
+  allowDestructive: boolean;
+};
+
+export type EditorialCommandPlan = {
+  summary: string;
+  notes: string[];
+  destructive: boolean;
+  requiresConfirmation: boolean;
+  operations: EditorialCommandOperation[];
+  model: string;
+};
+
 export type PollAssistInput = {
   brief: string;
   currentTitle: string | null;
@@ -297,6 +383,169 @@ function asBoolean(value: unknown): boolean {
     return normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "on";
   }
   return false;
+}
+
+function asNullableCleanText(value: unknown, maxLength = 280): string | null {
+  const cleaned = asCleanText(value, maxLength);
+  if (!cleaned || cleaned.toLowerCase() === "null") {
+    return null;
+  }
+  return cleaned;
+}
+
+function asPositiveInt(value: unknown, fallback: number, min = 1, max = 40): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+  return Math.max(min, Math.min(max, Math.floor(numeric)));
+}
+
+function normalizeCmsStatus(value: unknown): NewsStatus | null {
+  const cleaned = asNullableCleanText(value, 24);
+  if (!cleaned) {
+    return null;
+  }
+  return cleaned === NewsStatus.PUBLISHED ? NewsStatus.PUBLISHED : cleaned === NewsStatus.DRAFT ? NewsStatus.DRAFT : null;
+}
+
+function normalizeCmsSection(value: unknown): string | null {
+  const cleaned = normalizeHintToken(asNullableCleanText(value, 48));
+  return cleaned && VALID_SECTIONS.has(cleaned) ? cleaned : null;
+}
+
+function normalizeCmsProvince(value: unknown): string | null {
+  const cleaned = normalizeHintToken(asNullableCleanText(value, 48));
+  return cleaned && VALID_PROVINCES.has(cleaned) ? cleaned : null;
+}
+
+function normalizeCommandScope(value: unknown): "mixed" | "existing" | "feed" {
+  const cleaned = asNullableCleanText(value, 24)?.toLowerCase();
+  if (cleaned === "existing") {
+    return "existing";
+  }
+  if (cleaned === "feed") {
+    return "feed";
+  }
+  return "mixed";
+}
+
+function normalizeCommandOperation(raw: unknown): EditorialCommandOperation | null {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  const data = raw as Record<string, unknown>;
+  const kind = asNullableCleanText(data.kind, 40)?.toUpperCase();
+
+  if (kind === "CREATE_STORIES") {
+    const count = asPositiveInt(data.count, 1, 1, 40);
+    const brief = asNullableCleanText(data.brief, 1200) ?? "";
+    const generalBrief = asNullableCleanText(data.general_brief, 1200) ?? brief;
+    if (!brief && !generalBrief) {
+      return null;
+    }
+    return {
+      kind: "CREATE_STORIES",
+      count,
+      brief: brief || generalBrief,
+      campaignPercent: asPositiveInt(data.campaign_percent, 0, 0, 100),
+      campaignTopic: asNullableCleanText(data.campaign_topic, 900),
+      generalBrief: generalBrief || brief,
+      useResearchAgent: asBoolean(data.use_research_agent),
+      requireImageUrl: asBoolean(data.require_image_url) || true,
+      publishStatus: normalizeCmsStatus(data.publish_status),
+      sectionHint: normalizeCmsSection(data.section_hint),
+      provinceHint: normalizeCmsProvince(data.province_hint),
+      includeCampaignLine: asBoolean(data.include_campaign_line),
+      rationale: asNullableCleanText(data.rationale, 420),
+    };
+  }
+
+  if (kind === "INTERNALIZE_EXTERNALS") {
+    const instruction = asNullableCleanText(data.instruction, 1600);
+    if (!instruction) {
+      return null;
+    }
+    return {
+      kind: "INTERNALIZE_EXTERNALS",
+      instruction,
+      limit: asPositiveInt(data.limit, 6, 1, 20),
+      scope: normalizeCommandScope(data.scope),
+      publishStatus: normalizeCmsStatus(data.publish_status),
+      sectionHint: normalizeCmsSection(data.section_hint),
+      provinceHint: normalizeCmsProvince(data.province_hint),
+      includeCampaignLine: asBoolean(data.include_campaign_line),
+      deleteDuplicates: asBoolean(data.delete_duplicates),
+      rationale: asNullableCleanText(data.rationale, 420),
+    };
+  }
+
+  if (kind === "REWRITE_EXISTING") {
+    const instruction = asNullableCleanText(data.instruction, 1200);
+    const match = asNullableCleanText(data.match, 260);
+    if (!instruction || !match) {
+      return null;
+    }
+    return {
+      kind: "REWRITE_EXISTING",
+      match,
+      limit: asPositiveInt(data.limit, 6, 1, 30),
+      instruction,
+      useResearchAgent: asBoolean(data.use_research_agent),
+      requireImageUrl: asBoolean(data.require_image_url) || true,
+      publishStatus: normalizeCmsStatus(data.publish_status),
+      sectionHint: normalizeCmsSection(data.section_hint),
+      provinceHint: normalizeCmsProvince(data.province_hint),
+      includeCampaignLine: asBoolean(data.include_campaign_line),
+      rationale: asNullableCleanText(data.rationale, 420),
+    };
+  }
+
+  if (kind === "UPDATE_METADATA") {
+    const match = asNullableCleanText(data.match, 260);
+    if (!match) {
+      return null;
+    }
+    const rawFields = data.fields && typeof data.fields === "object" ? (data.fields as Record<string, unknown>) : {};
+    return {
+      kind: "UPDATE_METADATA",
+      match,
+      limit: asPositiveInt(data.limit, 8, 1, 40),
+      fields: {
+        kicker: asNullableCleanText(rawFields.kicker, 120),
+        section: normalizeCmsSection(rawFields.section),
+        province: normalizeCmsProvince(rawFields.province),
+        status: normalizeCmsStatus(rawFields.status),
+        isFeatured: rawFields.is_featured === undefined ? null : asBoolean(rawFields.is_featured),
+        isHero: rawFields.is_hero === undefined ? null : asBoolean(rawFields.is_hero),
+        isSponsored: rawFields.is_sponsored === undefined ? null : asBoolean(rawFields.is_sponsored),
+        isInterview: rawFields.is_interview === undefined ? null : asBoolean(rawFields.is_interview),
+        isOpinion: rawFields.is_opinion === undefined ? null : asBoolean(rawFields.is_opinion),
+        isRadar: rawFields.is_radar === undefined ? null : asBoolean(rawFields.is_radar),
+        authorName: asNullableCleanText(rawFields.author_name, 120),
+        sourceName: asNullableCleanText(rawFields.source_name, 120),
+        addTags: asStringList(rawFields.add_tags, 12, 48),
+        removeTags: asStringList(rawFields.remove_tags, 12, 48),
+      },
+      rationale: asNullableCleanText(data.rationale, 420),
+    };
+  }
+
+  if (kind === "DELETE_NEWS") {
+    const match = asNullableCleanText(data.match, 260);
+    if (!match) {
+      return null;
+    }
+    return {
+      kind: "DELETE_NEWS",
+      match,
+      limit: asPositiveInt(data.limit, 5, 1, 80),
+      onlyThinExternal: asBoolean(data.only_thin_external),
+      rationale: asNullableCleanText(data.rationale, 420),
+    };
+  }
+
+  return null;
 }
 
 function extractJsonPayload(raw: string): string {
@@ -1003,6 +1252,130 @@ function buildAskPrompt(input: EditorialAssistInput, guidelineText: string, news
   ].join("\n");
 }
 
+function buildEditorialCommandPrompt(input: EditorialCommandPlanInput, guidelineText: string, newsContext: string | null): string {
+  const payload = {
+    instruction: input.instruction,
+    campaign_line: input.campaignLine,
+    allow_destructive: input.allowDestructive,
+  };
+
+  return [
+    "LINEA EDITORIAL DE REFERENCIA:",
+    guidelineText,
+    "",
+    "CONTEXTO DE INVENTARIO Y AGENDA:",
+    newsContext ?? "Sin contexto adicional disponible.",
+    "",
+    "PEDIDO DEL ADMIN:",
+    JSON.stringify(payload, null, 2),
+    "",
+    "ROL:",
+    "Sos un command center editorial de Pulso Pais. Convertis instrucciones libres del admin en operaciones concretas de CMS.",
+    "",
+    "OPERACIONES PERMITIDAS:",
+    "1) CREATE_STORIES -> crear 1 o mas noticias nuevas.",
+    "2) INTERNALIZE_EXTERNALS -> convertir notas externas/enlaces a notas propias.",
+    "3) REWRITE_EXISTING -> reescribir notas ya existentes del CMS con nueva linea editorial.",
+    "4) UPDATE_METADATA -> cambiar metadatos/flags de notas existentes.",
+    "5) DELETE_NEWS -> borrar notas del CMS solo si el pedido es explicito.",
+    "",
+    "REGLAS:",
+    "- Si el pedido se puede resolver con INTERNALIZE_EXTERNALS o REWRITE_EXISTING, priorizalo antes de CREATE_STORIES.",
+    "- DELETE_NEWS solo si el usuario pide borrar, eliminar, limpiar o depurar de forma explicita.",
+    "- No inventes IDs. Usa match en lenguaje natural para que luego el backend busque las noticias.",
+    "- CREATE_STORIES debe usar count y brief; si count=1 sigue siendo CREATE_STORIES.",
+    "- UPDATE_METADATA solo para cambios de flags, seccion, provincia, status, kicker, autor, fuente y tags.",
+    "- Si hay riesgo destructivo, marca destructive=true y requires_confirmation=true.",
+    "- Si no hay riesgo destructivo, igual devuelve un plan ejecutable pero conservador.",
+    "- Todo en espanol neutro.",
+    "",
+    "VALORES PERMITIDOS DE SECTION:",
+    "NACION, PROVINCIAS, MUNICIPIOS, OPINION, ENTREVISTAS, PUBLINOTAS, RADAR_ELECTORAL, ECONOMIA, INTERNACIONALES, DISTRITOS",
+    "",
+    "VALORES PERMITIDOS DE PROVINCE (o null):",
+    "CABA, BUENOS_AIRES, CATAMARCA, CHACO, CHUBUT, CORDOBA, CORRIENTES, ENTRE_RIOS, FORMOSA, JUJUY, LA_PAMPA, LA_RIOJA, MENDOZA, MISIONES, NEUQUEN, RIO_NEGRO, SALTA, SAN_JUAN, SAN_LUIS, SANTA_CRUZ, SANTA_FE, SANTIAGO_DEL_ESTERO, TIERRA_DEL_FUEGO, TUCUMAN",
+    "",
+    "RESPUESTA OBLIGATORIA EN JSON ESTRICTO:",
+    "{",
+    '  "summary": "que va a hacer el sistema en una frase",',
+    '  "destructive": false,',
+    '  "requires_confirmation": true,',
+    '  "notes": ["riesgo o criterio aplicado"],',
+    '  "operations": [',
+    "    {",
+    '      "kind": "CREATE_STORIES",',
+    '      "count": 10,',
+    '      "brief": "pedido general del lote",',
+    '      "campaign_percent": 30,',
+    '      "campaign_topic": "bloque estrategico opcional",',
+    '      "general_brief": "resto de agenda",',
+    '      "use_research_agent": true,',
+    '      "require_image_url": true,',
+    '      "publish_status": "DRAFT",',
+    '      "section_hint": "NACION|null",',
+    '      "province_hint": "BUENOS_AIRES|null",',
+    '      "include_campaign_line": true,',
+    '      "rationale": "por que esta operacion aplica"',
+    "    },",
+    "    {",
+    '      "kind": "INTERNALIZE_EXTERNALS",',
+    '      "instruction": "reescribe portales externos como nota propia",',
+    '      "limit": 6,',
+    '      "scope": "mixed",',
+    '      "publish_status": "DRAFT",',
+    '      "section_hint": null,',
+    '      "province_hint": null,',
+    '      "include_campaign_line": true,',
+    '      "delete_duplicates": false,',
+    '      "rationale": "criterio"',
+    "    },",
+    "    {",
+    '      "kind": "REWRITE_EXISTING",',
+    '      "match": "gebel",',
+    '      "limit": 3,',
+    '      "instruction": "reformula con foco social y economico",',
+    '      "use_research_agent": true,',
+    '      "require_image_url": true,',
+    '      "publish_status": "DRAFT",',
+    '      "section_hint": "OPINION|null",',
+    '      "province_hint": null,',
+    '      "include_campaign_line": true,',
+    '      "rationale": "criterio"',
+    "    },",
+    "    {",
+    '      "kind": "UPDATE_METADATA",',
+    '      "match": "economia",',
+    '      "limit": 5,',
+    '      "fields": {',
+    '        "kicker": "Mercado y poder",',
+    '        "section": "ECONOMIA",',
+    '        "province": null,',
+    '        "status": "PUBLISHED",',
+    '        "is_featured": true,',
+    '        "is_hero": false,',
+    '        "is_sponsored": false,',
+    '        "is_interview": false,',
+    '        "is_opinion": false,',
+    '        "is_radar": false,',
+    '        "author_name": null,',
+    '        "source_name": null,',
+    '        "add_tags": ["mercados"],',
+    '        "remove_tags": []',
+    "      },",
+    '      "rationale": "criterio"',
+    "    },",
+    "    {",
+    '      "kind": "DELETE_NEWS",',
+    '      "match": "duplicados externos",',
+    '      "limit": 5,',
+    '      "only_thin_external": true,',
+    '      "rationale": "solo si el pedido es explicito"',
+    "    }",
+    "  ]",
+    "}",
+  ].join("\n");
+}
+
 function buildPollAssistPrompt(input: PollAssistInput, guidelineText: string, newsContext: string | null): string {
   const fixedCandidates = FIXED_CANDIDATE_OPTIONS.map(
     (candidate, index) => `${index + 1}. ${candidate.label} (${candidate.colorHex})`,
@@ -1151,6 +1524,139 @@ function normalizeAskResponse(parsed: Record<string, unknown>, modelUsed: string
     shouldApplyDraft,
     draft,
     model: modelUsed,
+  };
+}
+
+function normalizeEditorialCommandPlan(parsed: Record<string, unknown>, modelUsed: string): EditorialCommandPlan {
+  const operations = Array.isArray(parsed.operations)
+    ? parsed.operations.map((entry) => normalizeCommandOperation(entry)).filter((entry): entry is EditorialCommandOperation => Boolean(entry))
+    : [];
+
+  if (operations.length === 0) {
+    throw new Error("La IA no devolvio operaciones ejecutables para el comando editorial.");
+  }
+
+  const destructive = asBoolean(parsed.destructive) || operations.some((entry) => entry.kind === "DELETE_NEWS");
+  const requiresConfirmation = destructive || asBoolean(parsed.requires_confirmation) || operations.length > 1;
+
+  return {
+    summary: asCleanText(parsed.summary, 320) ?? "Plan editorial generado.",
+    notes: asStringList(parsed.notes, 10, 220),
+    destructive,
+    requiresConfirmation,
+    operations,
+    model: modelUsed,
+  };
+}
+
+function extractFirstCount(text: string): number | null {
+  const match = text.match(/\b(\d{1,2})\b/);
+  if (!match) {
+    return null;
+  }
+  const value = Number(match[1]);
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+  return Math.max(1, Math.min(40, Math.floor(value)));
+}
+
+function buildHeuristicEditorialCommandPlan(input: EditorialCommandPlanInput, cause: string): EditorialCommandPlan {
+  const instruction = input.instruction.trim();
+  const normalized = instruction.toLowerCase();
+  const count = extractFirstCount(instruction) ?? 1;
+
+  if (/(extern|portal|link|otros medios|otros medios|otros portales)/i.test(normalized)) {
+    return {
+      summary: "Plan heuristico: internalizar notas externas como noticias propias.",
+      notes: [`Fallback local activado por indisponibilidad IA: ${cause.slice(0, 180)}`],
+      destructive: false,
+      requiresConfirmation: true,
+      model: "fallback-heuristico",
+      operations: [
+        {
+          kind: "INTERNALIZE_EXTERNALS",
+          instruction,
+          limit: Math.min(12, Math.max(3, count)),
+          scope: "mixed",
+          publishStatus: NewsStatus.DRAFT,
+          sectionHint: null,
+          provinceHint: null,
+          includeCampaignLine: Boolean(input.campaignLine),
+          deleteDuplicates: /duplicad|limpia/i.test(normalized),
+          rationale: "Se detecto un pedido de convertir enlaces externos en notas propias.",
+        },
+      ],
+    };
+  }
+
+  if (/(borr|elimin|depur|limpia)/i.test(normalized)) {
+    return {
+      summary: "Plan heuristico: borrar noticias segun coincidencia textual.",
+      notes: [`Fallback local activado por indisponibilidad IA: ${cause.slice(0, 180)}`],
+      destructive: true,
+      requiresConfirmation: true,
+      model: "fallback-heuristico",
+      operations: [
+        {
+          kind: "DELETE_NEWS",
+          match: instruction,
+          limit: Math.min(20, count),
+          onlyThinExternal: /extern|thin/i.test(normalized),
+          rationale: "El pedido contiene verbos destructivos explicitos.",
+        },
+      ],
+    };
+  }
+
+  if (/(edit|reescrib|reformula|actualiza|cambia el enfoque|mejora las notas)/i.test(normalized)) {
+    return {
+      summary: "Plan heuristico: reescribir notas existentes con nueva linea editorial.",
+      notes: [`Fallback local activado por indisponibilidad IA: ${cause.slice(0, 180)}`],
+      destructive: false,
+      requiresConfirmation: true,
+      model: "fallback-heuristico",
+      operations: [
+        {
+          kind: "REWRITE_EXISTING",
+          match: instruction,
+          limit: Math.min(10, count),
+          instruction,
+          useResearchAgent: true,
+          requireImageUrl: true,
+          publishStatus: NewsStatus.DRAFT,
+          sectionHint: null,
+          provinceHint: null,
+          includeCampaignLine: Boolean(input.campaignLine),
+          rationale: "Se detecto un pedido de edicion/reformulacion sobre notas existentes.",
+        },
+      ],
+    };
+  }
+
+  return {
+    summary: "Plan heuristico: crear cobertura nueva con IA.",
+    notes: [`Fallback local activado por indisponibilidad IA: ${cause.slice(0, 180)}`],
+    destructive: false,
+    requiresConfirmation: count > 1,
+    model: "fallback-heuristico",
+    operations: [
+      {
+        kind: "CREATE_STORIES",
+        count,
+        brief: instruction,
+        campaignPercent: 0,
+        campaignTopic: null,
+        generalBrief: instruction,
+        useResearchAgent: true,
+        requireImageUrl: true,
+        publishStatus: NewsStatus.DRAFT,
+        sectionHint: null,
+        provinceHint: null,
+        includeCampaignLine: Boolean(input.campaignLine),
+        rationale: "No se detecto una accion destructiva ni de edicion; se interpreta como pedido de generacion.",
+      },
+    ],
   };
 }
 
@@ -1529,6 +2035,33 @@ export async function generatePollDraftWithAi(
     return normalized;
   } catch (error) {
     throw new Error(`No se pudo generar encuesta con IA (${(error as Error).message}).`);
+  }
+}
+
+export async function planEditorialCommandWithAi(
+  input: EditorialCommandPlanInput,
+  newsContext: string | null = null,
+): Promise<EditorialCommandPlan> {
+  if (!AI_FILTER_ENABLED) {
+    throw new Error("Asistencia IA desactivada por configuracion.");
+  }
+
+  if (input.instruction.trim().length < 12) {
+    throw new Error("El comando editorial debe tener al menos 12 caracteres.");
+  }
+
+  try {
+    const guidelineText = await readGuidelines();
+    const prompt = buildEditorialCommandPrompt(input, guidelineText, newsContext);
+    const { parsed, modelUsed } = await runAiJson({
+      systemPrompt:
+        "Sos director de operaciones editoriales de Pulso Pais. Traducis pedidos de admin a planes JSON ejecutables de CMS. Responde SIEMPRE en JSON valido y en espanol neutro.",
+      userPrompt: prompt,
+      temperature: 0.2,
+    });
+    return normalizeEditorialCommandPlan(parsed, modelUsed);
+  } catch (error) {
+    return buildHeuristicEditorialCommandPlan(input, (error as Error).message);
   }
 }
 

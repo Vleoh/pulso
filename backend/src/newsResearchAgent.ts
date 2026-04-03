@@ -128,13 +128,56 @@ function extractImageCandidates(html: string, pageUrl: string): string[] {
     ...extractAttributeCandidates(html, /<img[^>]+(?:src|data-src|data-lazy-src)=["']([^"']+)["']/gi),
   ];
 
+  const screenshotCandidates = [
+    `https://s.wordpress.com/mshots/v1/${encodeURIComponent(pageUrl)}?w=1600`,
+    `https://image.thum.io/get/width/1600/noanimate/${pageUrl}`,
+  ];
+
   return Array.from(
     new Set(
-      rawCandidates
+      [...rawCandidates, ...screenshotCandidates]
         .map((candidate) => absoluteMediaUrl(pageUrl, candidate, "image"))
         .filter((candidate): candidate is string => Boolean(candidate)),
     ),
   ).slice(0, 8);
+}
+
+function normalizeEmbeddableVideoUrl(pageUrl: string, candidate: string | null): string | null {
+  const resolved = absoluteMediaUrl(pageUrl, candidate, "video");
+  if (!resolved) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(resolved);
+    const host = parsed.hostname.toLowerCase();
+
+    if (host === "youtu.be") {
+      const id = parsed.pathname.replace(/^\/+/, "").split("/")[0] ?? "";
+      return id ? `https://www.youtube.com/embed/${id}` : null;
+    }
+
+    if (host.includes("youtube.com") || host.includes("youtube-nocookie.com")) {
+      if (parsed.pathname.startsWith("/embed/")) {
+        return parsed.toString();
+      }
+      const watchId = parsed.searchParams.get("v") ?? "";
+      return watchId ? `https://www.youtube.com/embed/${watchId}` : null;
+    }
+
+    if (host === "vimeo.com") {
+      const id = parsed.pathname.replace(/^\/+/, "").split("/")[0] ?? "";
+      return /^\d+$/.test(id) ? `https://player.vimeo.com/video/${id}` : null;
+    }
+
+    if (host.includes("player.vimeo.com")) {
+      return parsed.toString();
+    }
+
+    return parsed.toString();
+  } catch {
+    return resolved;
+  }
 }
 
 function extractVideoSnapshot(html: string, pageUrl: string): { videoUrl: string | null; videoPosterUrl: string | null } {
@@ -142,8 +185,10 @@ function extractVideoSnapshot(html: string, pageUrl: string): { videoUrl: string
     ...findMetaCandidates(html, "og:video"),
     ...findMetaCandidates(html, "og:video:url"),
     ...findMetaCandidates(html, "twitter:player:stream"),
+    ...findMetaCandidates(html, "twitter:player"),
     ...extractAttributeCandidates(html, /<video[^>]+src=["']([^"']+)["']/gi),
     ...extractAttributeCandidates(html, /<source[^>]+src=["']([^"']+)["'][^>]*type=["']video\/[^"']+["']/gi),
+    ...extractAttributeCandidates(html, /<iframe[^>]+src=["']([^"']+)["']/gi),
   ];
 
   const posterCandidates = [
@@ -155,7 +200,7 @@ function extractVideoSnapshot(html: string, pageUrl: string): { videoUrl: string
   return {
     videoUrl:
       videoCandidates
-        .map((candidate) => absoluteMediaUrl(pageUrl, candidate, "video"))
+        .map((candidate) => normalizeEmbeddableVideoUrl(pageUrl, candidate))
         .find((candidate): candidate is string => Boolean(candidate)) ?? null,
     videoPosterUrl:
       posterCandidates
