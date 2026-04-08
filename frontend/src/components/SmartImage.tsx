@@ -63,11 +63,45 @@ function isRemote(src: string): boolean {
   return /^https?:\/\//i.test(src);
 }
 
+function isLowTrustVisualUrl(src: string): boolean {
+  const normalized = src.trim().toLowerCase();
+  if (!normalized) {
+    return true;
+  }
+
+  const blockedSignals = [
+    "mshots",
+    "thum.io",
+    "googleusercontent.com",
+    "gstatic.com",
+    "docs.google.com",
+    "drive.google.com",
+    "placeholder",
+    "favicon",
+    "logo",
+    "icon",
+    "avatar",
+    "document",
+    "docs",
+    "sheet",
+    "sprite",
+    "spacer",
+  ];
+
+  if (blockedSignals.some((signal) => normalized.includes(signal))) {
+    return true;
+  }
+  if (/\.(svg|ico|pdf)(\?|$)/i.test(normalized)) {
+    return true;
+  }
+  return false;
+}
+
 export function SmartImage(props: SmartImageProps) {
   const [failed, setFailed] = useState(false);
 
   const normalizedSrc = useMemo(() => normalizeImageUrl(props.src ?? ""), [props.src]);
-  const canRender = normalizedSrc.length > 0 && !failed;
+  const canRender = normalizedSrc.length > 0 && !failed && !isLowTrustVisualUrl(normalizedSrc);
 
   if (!canRender) {
     return <div className={props.fallbackClassName ?? props.className} aria-hidden="true" />;

@@ -612,7 +612,7 @@ async function postProcessResearchedSuggestion(
   fallbackSeed: string,
 ): Promise<Awaited<ReturnType<typeof generateDraftWithAi>>> {
   const notes = Array.isArray(suggestion.notes) ? suggestion.notes.slice(0, 7) : [];
-  notes.unshift("Borrador generado con agente periodista (agenda caliente + reescritura propia).");
+  notes.unshift("Borrador generado con agente periodista + agente fotografo (agenda caliente + reescritura propia).");
 
   const sourceImageCandidates = uniqueNormalizedImageUrls(sources.map((item) => item.imageUrl), 8);
   const coverImageCandidatesRaw = uniqueNormalizedImageUrls(
@@ -632,6 +632,9 @@ async function postProcessResearchedSuggestion(
   if (!finalImage) {
     const fallbackImage = applyResearchImageTransform(fallbackResearchImage(fallbackSeed), settings);
     finalImage = fallbackImage && (await probeImageUrl(fallbackImage)) ? fallbackImage : null;
+  }
+  if (!finalImage) {
+    throw new Error("El agente fotografo no encontro una portada editorial valida en la fuente. La pieza queda en revision.");
   }
 
   const gallerySourceRaw = sourceImageCandidates
@@ -666,9 +669,7 @@ async function postProcessResearchedSuggestion(
     buildManagedImageUrl(finalVideoPoster),
   );
   finalBody = appendGalleryBlockToBody(finalBody, galleryImages);
-  if (finalImage) {
-    notes.push("Portada visual confirmada por agente periodista.");
-  }
+  notes.push("Portada visual confirmada por agente fotografo.");
   if (galleryImages.length > 0) {
     notes.push(`Galeria IA agregada (${galleryImages.length} fotos).`);
   }
@@ -853,6 +854,9 @@ async function createStoriesFromBatchState(formState: BatchNewsFormState): Promi
       const reachableCover = await pickReachableImage(baseImageCandidates, 3);
       const fallbackCover = applyResearchImageTransform(fallbackBatchImageByIndex(index), aiResearchSettings);
       const finalImage = reachableCover ?? (fallbackCover && (await probeImageUrl(fallbackCover)) ? fallbackCover : "");
+      if (!finalImage) {
+        throw new Error("El agente fotografo no encontro una portada editorial valida para este item.");
+      }
       const galleryImages = uniqueNormalizedImageUrls(
         sourceGalleryCandidates.map((entry) => entry?.imageUrl ?? null),
         3,
@@ -1749,6 +1753,18 @@ function clampInteger(rawValue: unknown, min: number, max: number, fallback: num
   return Math.max(min, Math.min(max, Math.floor(source)));
 }
 
+function clampOptionalInteger(rawValue: unknown, min: number, max: number): number | null {
+  const raw = readString(rawValue);
+  if (!raw) {
+    return null;
+  }
+  const source = Number(raw);
+  if (!Number.isFinite(source)) {
+    return null;
+  }
+  return Math.max(min, Math.min(max, Math.floor(source)));
+}
+
 function fallbackBatchImageByIndex(index: number): string {
   void index;
   return "";
@@ -2123,7 +2139,7 @@ type EditorialCommandFormState = {
   summary?: string;
   planJson?: string;
   preview?: EditorialCommandPreviewState | null;
-  quantityHint?: number;
+  quantityHint?: number | null;
   history?: EditorialCommandChatMessage[];
   logs?: EditorialCommandLogEntry[];
   pendingPlan?: {
@@ -2182,7 +2198,7 @@ function defaultEditorialCommandFormState(campaignLine = ""): EditorialCommandFo
     campaignLine,
     allowDestructive: false,
     autoExecuteSafe: true,
-    quantityHint: 1,
+    quantityHint: null,
     summary: "",
     planJson: "",
     preview: null,
@@ -2210,7 +2226,7 @@ function resolveEditorialCommandTemplate(template: string, campaignLine = ""): P
         campaignLine,
         allowDestructive: true,
         autoExecuteSafe: false,
-        quantityHint: 1,
+        quantityHint: null,
       };
     case "coverage":
       return {
@@ -2228,7 +2244,7 @@ function resolveEditorialCommandTemplate(template: string, campaignLine = ""): P
         campaignLine,
         allowDestructive: false,
         autoExecuteSafe: false,
-        quantityHint: 1,
+        quantityHint: null,
       };
     default:
       return {};
@@ -5442,7 +5458,7 @@ app.post("/backoffice/editorial-command/chat", boGuard, async (request, response
     campaignLine: readString(request.body.campaignLine),
     allowDestructive: readBoolean(request.body.allowDestructive),
     autoExecuteSafe: readBoolean(request.body.autoExecuteSafe),
-    quantityHint: clampInteger(request.body.quantityHint, 1, 40, 1),
+    quantityHint: clampOptionalInteger(request.body.quantityHint, 1, 40),
   };
 
   try {
@@ -5452,7 +5468,7 @@ app.post("/backoffice/editorial-command/chat", boGuard, async (request, response
 
     const chatState = await getEditorialCommandChatState(prisma);
     const effectiveInstruction =
-      (commandState.quantityHint ?? 1) > 1
+      (commandState.quantityHint ?? 0) > 1
         ? `${commandState.instruction}\n\nCantidad objetivo sugerida por editor: ${commandState.quantityHint} notas.`
         : commandState.instruction;
     const memoryContext = formatEditorialChatMemory(chatState.history, chatState.logs);
@@ -5561,7 +5577,7 @@ app.post("/backoffice/editorial-command/confirm", boGuard, async (request, respo
     campaignLine: readString(request.body.campaignLine),
     allowDestructive: readBoolean(request.body.allowDestructive),
     autoExecuteSafe: false,
-    quantityHint: 1,
+    quantityHint: null,
   };
 
   try {

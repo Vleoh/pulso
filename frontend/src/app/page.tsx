@@ -180,6 +180,35 @@ function dedupe(items: FeedItem[]): FeedItem[] {
   });
 }
 
+function hasRenderableImage(src: string | null | undefined): boolean {
+  const normalized = sanitizeDisplayText(src ?? "").toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  const blockedSignals = [
+    "mshots",
+    "thum.io",
+    "googleusercontent.com",
+    "gstatic.com",
+    "docs.google.com",
+    "drive.google.com",
+    "placeholder",
+    "favicon",
+    "logo",
+    "icon",
+    "avatar",
+    "document",
+    "docs",
+    "sheet",
+    "sprite",
+    "spacer",
+  ];
+  if (blockedSignals.some((signal) => normalized.includes(signal))) {
+    return false;
+  }
+  return !/\.(svg|ico|pdf)(\?|$)/i.test(normalized);
+}
+
 function fillList(primary: FeedItem[], fallback: FeedItem[], max: number): FeedItem[] {
   return dedupe([...primary, ...fallback]).slice(0, max);
 }
@@ -187,7 +216,7 @@ function fillList(primary: FeedItem[], fallback: FeedItem[], max: number): FeedI
 function rankStoryForDisplay(item: FeedItem): number {
   const ageHours = Math.max(0, (Date.now() - +new Date(item.publishedAt)) / (1000 * 60 * 60));
   return [
-    item.imageUrl ? 10 : 0,
+    hasRenderableImage(item.imageUrl) ? 10 : 0,
     item.excerpt ? 3 : 0,
     item.isExternal ? 0 : 5,
     item.isFeatured ? 3 : 0,
@@ -204,9 +233,14 @@ function prioritizeStories(items: FeedItem[], max: number): FeedItem[] {
 function prioritizeFederalEntries(items: FederalCardItem[], max: number): FederalCardItem[] {
   return Array.from(new Map(items.map((item) => [item.id, item])).values())
     .sort((left, right) => {
-      const leftScore = (left.imageUrl ? 8 : 0) + (left.excerpt ? 3 : 0) - Math.floor((Date.now() - +new Date(left.publishedAt)) / (1000 * 60 * 60 * 12));
+      const leftScore =
+        (hasRenderableImage(left.imageUrl) ? 8 : 0) +
+        (left.excerpt ? 3 : 0) -
+        Math.floor((Date.now() - +new Date(left.publishedAt)) / (1000 * 60 * 60 * 12));
       const rightScore =
-        (right.imageUrl ? 8 : 0) + (right.excerpt ? 3 : 0) - Math.floor((Date.now() - +new Date(right.publishedAt)) / (1000 * 60 * 60 * 12));
+        (hasRenderableImage(right.imageUrl) ? 8 : 0) +
+        (right.excerpt ? 3 : 0) -
+        Math.floor((Date.now() - +new Date(right.publishedAt)) / (1000 * 60 * 60 * 12));
       return rightScore - leftScore;
     })
     .slice(0, max);

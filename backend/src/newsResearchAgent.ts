@@ -118,6 +118,101 @@ function extractAttributeCandidates(html: string, expression: RegExp): string[] 
   return Array.from(new Set(results));
 }
 
+function scoreImageCandidate(candidate: string): number {
+  const normalized = candidate.trim().toLowerCase();
+  if (!normalized) {
+    return -100;
+  }
+
+  let score = 0;
+  const negativeSignals = [
+    "logo",
+    "icon",
+    "favicon",
+    "avatar",
+    "placeholder",
+    "sprite",
+    "spacer",
+    "document",
+    "docs",
+    "sheet",
+    "mshots",
+    "thum.io",
+    "googleusercontent.com",
+    "gstatic.com",
+    "google.com",
+    "screenshot",
+    "wp-content/uploads/elementor",
+    "ads",
+    "banner",
+    "pixel",
+  ];
+  const positiveSignals = [
+    "og-image",
+    "featured",
+    "hero",
+    "cover",
+    "nota",
+    "article",
+    "news",
+    "media",
+    "upload",
+    "image",
+    "photo",
+    "foto",
+  ];
+
+  for (const token of negativeSignals) {
+    if (normalized.includes(token)) {
+      score -= 7;
+    }
+  }
+  for (const token of positiveSignals) {
+    if (normalized.includes(token)) {
+      score += 3;
+    }
+  }
+
+  if (/\.(jpe?g|png|webp)(\?|$)/i.test(normalized)) {
+    score += 5;
+  }
+  if (/\.(svg|ico|gif)(\?|$)/i.test(normalized)) {
+    score -= 10;
+  }
+  if (/\/(wp-json|api|embed)\//i.test(normalized)) {
+    score -= 6;
+  }
+
+  return score;
+}
+
+function isLikelyEditorialImage(candidate: string): boolean {
+  const normalized = candidate.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (/^data:/i.test(normalized)) {
+    return false;
+  }
+  if (/\.(svg|ico)(\?|$)/i.test(normalized)) {
+    return false;
+  }
+  if (scoreImageCandidate(normalized) < 0) {
+    return false;
+  }
+  return true;
+}
+
+function pickBestEditorialImageUrl(candidates: Array<string | null | undefined>): string | null {
+  const normalized = candidates
+    .map((candidate) => normalizeImageUrl(candidate))
+    .filter((candidate): candidate is string => Boolean(candidate))
+    .filter((candidate) => isLikelyEditorialImage(candidate))
+    .sort((left, right) => scoreImageCandidate(right) - scoreImageCandidate(left));
+
+  return normalized[0] ?? null;
+}
+
 function extractImageCandidates(html: string, pageUrl: string): string[] {
   const rawCandidates = [
     ...findMetaCandidates(html, "og:image"),
@@ -128,15 +223,14 @@ function extractImageCandidates(html: string, pageUrl: string): string[] {
     ...extractAttributeCandidates(html, /<img[^>]+(?:src|data-src|data-lazy-src)=["']([^"']+)["']/gi),
   ];
 
-  const screenshotCandidates = [
-    `https://s.wordpress.com/mshots/v1/${encodeURIComponent(pageUrl)}?w=1600`,
-    `https://image.thum.io/get/width/1600/noanimate/${pageUrl}`,
-  ];
-
   return Array.from(
     new Set(
-      [...rawCandidates, ...screenshotCandidates]
+      rawCandidates
         .map((candidate) => absoluteMediaUrl(pageUrl, candidate, "image"))
+        .filter((candidate): candidate is string => Boolean(candidate))
+        .filter((candidate) => isLikelyEditorialImage(candidate))
+        .sort((left, right) => scoreImageCandidate(right) - scoreImageCandidate(left))
+        .map((candidate) => normalizeImageUrl(candidate))
         .filter((candidate): candidate is string => Boolean(candidate)),
     ),
   ).slice(0, 8);
@@ -357,7 +451,11 @@ async function buildRankedSources(options: NewsResearchOptions): Promise<RankedS
     const withSnapshot = item.sourceUrl ? snapshotByUrl.get(item.sourceUrl) ?? null : null;
     const title = withSnapshot?.title || item.title;
     const excerpt = withSnapshot?.description || item.excerpt || null;
-    const imageUrl = normalizeImageUrl(withSnapshot?.imageUrl || item.imageUrl || withSnapshot?.videoPosterUrl || null);
+    const imageUrl = pickBestEditorialImageUrl([
+      withSnapshot?.imageUrl,
+      item.imageUrl,
+      withSnapshot?.videoPosterUrl,
+    ]);
     const paragraphText = withSnapshot?.paragraphs.join(" || ") || "";
     const sourceText = `${title} ${excerpt ?? ""} ${paragraphText}`.trim();
     const score = scoreByBrief(sourceText, tokens);

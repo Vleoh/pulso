@@ -748,7 +748,7 @@ type EditorialCommandStudioState = {
   campaignLine: string;
   allowDestructive: boolean;
   autoExecuteSafe: boolean;
-  quantityHint: number;
+  quantityHint?: number | null;
   summary?: string | null;
   planJson?: string | null;
   preview?: EditorialCommandPreview | null;
@@ -774,7 +774,7 @@ function renderEditorialStudio(params: {
     campaignLine: "",
     allowDestructive: false,
     autoExecuteSafe: true,
-    quantityHint: 1,
+    quantityHint: null,
     summary: "",
     planJson: "",
     preview: null,
@@ -876,7 +876,7 @@ function renderEditorialStudio(params: {
           <div class="bo-compact-grid">
             <div class="field">
               <label for="commandQuantityHint">Cantidad objetivo (opcional)</label>
-              <input id="commandQuantityHint" name="quantityHint" type="number" min="1" max="40" value="${Number.isFinite(command.quantityHint) ? command.quantityHint : 1}" />
+              <input id="commandQuantityHint" name="quantityHint" type="number" min="1" max="40" value="${typeof command.quantityHint === "number" && Number.isFinite(command.quantityHint) ? command.quantityHint : ""}" />
             </div>
             <div class="field">
               <label for="commandCampaignLine">Bajada editorial / foco temporal</label>
@@ -1014,7 +1014,7 @@ export function renderNewsForm(params: {
             : ""
         }
         ${studioBlock}
-        <div id="ia" class="ai-box">
+        <div id="ia" class="ai-box" hidden>
           <div class="ai-head">
             <div>
               <h3 class="ai-title">Herramientas rapidas del editor</h3>
@@ -1290,9 +1290,7 @@ export function renderNewsForm(params: {
                 }
               }
 
-              const previewUrl =
-                normalizePreviewUrl(imageUrl) ||
-                (sourceUrl ? "https://s.wordpress.com/mshots/v1/" + encodeURIComponent(sourceUrl) + "?w=1200" : "");
+              const previewUrl = normalizePreviewUrl(imageUrl);
 
               if (!previewUrl) {
                 imagePreview.classList.remove("has-image");
