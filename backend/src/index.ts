@@ -45,6 +45,7 @@ import { prisma } from "./prismaClient";
 import {
   applyEditorialSuggestions,
   askEditorialWithAi,
+  chatEditorialCommandWithAi,
   evaluateEditorialWithAi,
   generateBatchDraftsWithAi,
   generatePollDraftWithAi,
@@ -70,6 +71,10 @@ import {
   setHomeTheme,
   setInstagramPublishingSettings,
   EDITORIAL_AUTOPILOT_MODE_OPTIONS,
+  getEditorialCommandChatState,
+  setEditorialCommandChatState,
+  type EditorialCommandChatMessage,
+  type EditorialCommandLogEntry,
 } from "./siteSettings";
 import { buildCroppedImageUrl, buildNewsResearchContext, sourceFeedToText } from "./newsResearchAgent";
 import {
@@ -693,6 +698,17 @@ async function findNewsMatchesForCommand(match: string, limit: number): Promise<
   const query = readString(match);
   if (!query) {
     return [];
+  }
+  const normalizedQuery = query.toLowerCase();
+  const deleteAllSignal = /(todas las noticias|todas las notas|todo el medio|todo el sitio|borra todo|elimina todo|limpia todo|eran de prueba)/i.test(
+    normalizedQuery,
+  );
+
+  if (deleteAllSignal) {
+    return prisma.news.findMany({
+      orderBy: [{ updatedAt: "desc" }, { publishedAt: "desc" }],
+      take: Math.max(1, Math.min(500, limit || 500)),
+    });
   }
 
   const directId = await prisma.news.findUnique({ where: { id: query } });
@@ -2107,6 +2123,15 @@ type EditorialCommandFormState = {
   summary?: string;
   planJson?: string;
   preview?: EditorialCommandPreviewState | null;
+  quantityHint?: number;
+  history?: EditorialCommandChatMessage[];
+  logs?: EditorialCommandLogEntry[];
+  pendingPlan?: {
+    summary: string;
+    planJson: string;
+    destructive: boolean;
+    requiresConfirmation: boolean;
+  } | null;
 };
 
 type AutopilotRunSummary = {
@@ -2157,10 +2182,124 @@ function defaultEditorialCommandFormState(campaignLine = ""): EditorialCommandFo
     campaignLine,
     allowDestructive: false,
     autoExecuteSafe: true,
+    quantityHint: 1,
     summary: "",
     planJson: "",
     preview: null,
+    history: [],
+    logs: [],
+    pendingPlan: null,
   };
+}
+
+function resolveEditorialCommandTemplate(template: string, campaignLine = ""): Partial<EditorialCommandFormState> {
+  switch (template.trim().toLowerCase()) {
+    case "internalize":
+      return {
+        instruction:
+          "Revisa las noticias externas del sitio, prioriza las mas relevantes y conviertelas en notas propias de Pulso Pais con imagen valida, contexto adicional y tono editorial consistente.",
+        campaignLine,
+        allowDestructive: false,
+        autoExecuteSafe: true,
+        quantityHint: 4,
+      };
+    case "cleanup":
+      return {
+        instruction:
+          "Elimina todas las noticias de prueba y deja el medio listo para empezar a publicar solo noticias reales propias basadas en fuentes externas. Antes de ejecutar, explicame el alcance y prepara confirmacion obligatoria.",
+        campaignLine,
+        allowDestructive: true,
+        autoExecuteSafe: false,
+        quantityHint: 1,
+      };
+    case "coverage":
+      return {
+        instruction:
+          "Investiga la agenda politica argentina mas caliente del momento y genera varias notas propias de Pulso Pais con foto valida, foco en impacto real y continuidad federal.",
+        campaignLine,
+        allowDestructive: false,
+        autoExecuteSafe: true,
+        quantityHint: 4,
+      };
+    case "status":
+      return {
+        instruction:
+          "Explicame que estas haciendo ahora, que logs recientes tienes, que pendientes detectas en el CMS y cuales son las mejores 3 oportunidades editoriales inmediatas.",
+        campaignLine,
+        allowDestructive: false,
+        autoExecuteSafe: false,
+        quantityHint: 1,
+      };
+    default:
+      return {};
+  }
+}
+
+function renderDashboardActionIcon(name: "create" | "internalize" | "cleanup" | "autopilot" | "users"): string {
+  switch (name) {
+    case "create":
+      return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"></path><path d="M5 12h14"></path><rect x="4" y="4" width="16" height="16" rx="4"></rect></svg>`;
+    case "internalize":
+      return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6"></path><path d="M10 20H4v-6"></path><path d="m20 4-8 8"></path><path d="m4 20 8-8"></path></svg>`;
+    case "cleanup":
+      return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"></path><path d="M9 7V4h6v3"></path><path d="M7 7l1 12h8l1-12"></path><path d="M10 11v5"></path><path d="M14 11v5"></path></svg>`;
+    case "autopilot":
+      return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4l2.2 4.7L19 10l-3.5 3.4.8 4.8L12 16l-4.3 2.2.8-4.8L5 10l4.8-1.3L12 4Z"></path></svg>`;
+    case "users":
+      return `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.25"></circle><path d="M3.5 19a5.5 5.5 0 0 1 11 0"></path><circle cx="17.25" cy="9.5" r="2.5"></circle><path d="M15 18.5a4.5 4.5 0 0 1 6 0"></path></svg>`;
+  }
+}
+
+function createEditorialChatId(prefix = "chat"): string {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function formatEditorialChatMemory(history: EditorialCommandChatMessage[], logs: EditorialCommandLogEntry[]): string {
+  const historyText = history
+    .slice(-10)
+    .map((item) => `[${item.role.toUpperCase()}|${item.kind}] ${item.text}`)
+    .join("\n");
+  const logText = logs
+    .slice(-8)
+    .map((item) => `[${item.level.toUpperCase()}] ${item.title} :: ${item.detail}`)
+    .join("\n");
+  return [historyText ? `HISTORIAL:\n${historyText}` : "", logText ? `LOGS:\n${logText}` : ""].filter(Boolean).join("\n\n");
+}
+
+function appendChatHistory(
+  current: EditorialCommandChatMessage[],
+  entry: Omit<EditorialCommandChatMessage, "id" | "createdAt"> & { createdAt?: string; id?: string },
+): EditorialCommandChatMessage[] {
+  const nextEntry: EditorialCommandChatMessage = {
+    id: entry.id ?? createEditorialChatId("msg"),
+    createdAt: entry.createdAt ?? new Date().toISOString(),
+    role: entry.role,
+    kind: entry.kind,
+    text: entry.text,
+  };
+  if (entry.meta) {
+    nextEntry.meta = entry.meta;
+  }
+  return [
+    ...current,
+    nextEntry,
+  ].slice(-24);
+}
+
+function appendChatLog(
+  current: EditorialCommandLogEntry[],
+  entry: Omit<EditorialCommandLogEntry, "id" | "createdAt"> & { createdAt?: string; id?: string },
+): EditorialCommandLogEntry[] {
+  return [
+    ...current,
+    {
+      id: entry.id ?? createEditorialChatId("log"),
+      createdAt: entry.createdAt ?? new Date().toISOString(),
+      level: entry.level,
+      title: entry.title,
+      detail: entry.detail,
+    },
+  ].slice(-40);
 }
 
 function normalizeExternalRewriteScope(raw: unknown): ExternalRewriteFormState["scope"] {
@@ -2272,6 +2411,7 @@ function buildAutopilotInstruction(settings: Awaited<ReturnType<typeof getEditor
   const guidance = [
     settings.instruction,
     settings.temporalPrompt,
+    "Opera como radar, reportero, editor y estilista de marca; compliance manda sobre el resto.",
     `Limite operativo por corrida: hasta ${settings.maxStoriesPerRun} piezas nuevas o reformuladas.`,
     settings.internalizeLimit > 0
       ? `Si detectas thin external o enlaces a portales, internaliza hasta ${settings.internalizeLimit} primero.`
@@ -2282,7 +2422,7 @@ function buildAutopilotInstruction(settings: Awaited<ReturnType<typeof getEditor
     settings.allowDelete
       ? "Puedes proponer depuracion o borrado si esta claramente justificado."
       : "No borres contenidos; si ves ruido, reescribe o actualiza en lugar de eliminar.",
-    "Prioriza novedad, impacto nacional, continuidad federal y claridad editorial.",
+    "Prioriza evidencia, novedad, impacto nacional, continuidad federal, claridad editorial y consecuencias reales.",
     "No dejes enlaces externos como destino principal si puedes internalizar la historia.",
   ];
 
@@ -2572,13 +2712,30 @@ async function renderUnifiedEditorialPage(params?: {
   rewriteState?: Partial<ExternalRewriteFormState>;
   commandState?: Partial<EditorialCommandFormState>;
 }): Promise<string> {
-  const aiResearch = await getAiResearchSettings(prisma);
+  const [aiResearch, chatState] = await Promise.all([
+    getAiResearchSettings(prisma),
+    getEditorialCommandChatState(prisma),
+  ]);
+  let pendingPlan: EditorialCommandFormState["pendingPlan"] = null;
+  if (chatState.pendingPlanJson) {
+    try {
+      const parsedPending = decodeEditorialCommandPlan(chatState.pendingPlanJson);
+      pendingPlan = {
+        summary: parsedPending.summary,
+        planJson: chatState.pendingPlanJson,
+        destructive: parsedPending.destructive,
+        requiresConfirmation: parsedPending.requiresConfirmation,
+      };
+    } catch {
+      pendingPlan = null;
+    }
+  }
   const renderParams: Parameters<typeof renderNewsForm>[0] = {
     mode: "create",
     action: "/backoffice/news",
     aiResearch,
     editorialStudio: {
-      activeMode: params?.activeMode ?? "single",
+      activeMode: params?.activeMode ?? "command",
       batch: {
         ...defaultBatchNewsFormState(),
         campaignLine: aiResearch.campaignLine,
@@ -2590,6 +2747,9 @@ async function renderUnifiedEditorialPage(params?: {
       },
       command: {
         ...defaultEditorialCommandFormState(aiResearch.campaignLine),
+        history: chatState.history,
+        logs: chatState.logs,
+        pendingPlan,
         ...(params?.commandState ?? {}),
       },
     },
@@ -4325,7 +4485,7 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
                 </div>
                 <div class="bo-form-actions">
                   <button class="primary" type="submit">Guardar IA editorial</button>
-                  <a class="button" href="/backoffice/news/new?studio=command">Abrir comando editorial</a>
+                  <a class="button" href="/backoffice/news/new?template=status">Abrir IA editorial</a>
                 </div>
               </form>
 
@@ -4383,7 +4543,7 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
             <p class="muted">Crea encuestas para Instagram y trafico del sitio, monitorea conversion de votos y ranking de candidatos con analiticas en vivo.</p>
             <div class="actions">
               <a class="button" href="/backoffice/polls">Gestionar encuestas</a>
-              <a class="button" href="/backoffice/news/new?studio=rewrite">Internalizar externas</a>
+              <a class="button" href="/backoffice/news/new?template=internalize">Abrir IA editorial</a>
             </div>
           </article>
 
@@ -4408,30 +4568,30 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
               </div>
             </div>
             <div class="bo-action-grid">
-              <a class="bo-action-tile" href="/backoffice/news/new">
-                <span class="bo-action-icon">NT</span>
+              <a class="bo-action-tile" href="/backoffice/news/new?template=coverage">
+                <span class="bo-action-icon">${renderDashboardActionIcon("create")}</span>
                 <strong>Crear nota</strong>
-                <small>Brief puntual, periodista IA y revision manual en un solo flujo.</small>
+                <small>Un solo chat para pedir 1 nota o una cobertura completa, con memoria, plan y ejecucion.</small>
               </a>
-              <a class="bo-action-tile" href="/backoffice/news/new?studio=batch">
-                <span class="bo-action-icon">LT</span>
-                <strong>Cobertura en lote</strong>
-                <small>Lanza una corrida editorial con cantidad variable y peso de campana.</small>
+              <a class="bo-action-tile" href="/backoffice/news/new?template=internalize">
+                <span class="bo-action-icon">${renderDashboardActionIcon("internalize")}</span>
+                <strong>Internalizar externas</strong>
+                <small>Transforma notas ajenas en notas propias con foto valida, contexto y tono Pulso Pais.</small>
               </a>
-              <a class="bo-action-tile" href="/backoffice/news/new?studio=command">
-                <span class="bo-action-icon">CM</span>
-                <strong>Comando editorial</strong>
-                <small>Planifica y ejecuta crear, editar, borrar o internalizar con mitigaciones.</small>
+              <a class="bo-action-tile" href="/backoffice/news/new?template=cleanup">
+                <span class="bo-action-icon">${renderDashboardActionIcon("cleanup")}</span>
+                <strong>Depurar CMS</strong>
+                <small>Pidele a la IA corregir errores, limpiar pruebas o preparar borrados masivos con confirmacion.</small>
               </a>
               <form class="bo-action-tile" method="post" action="/backoffice/autopilot/run" style="padding:0; border:0; background:none;">
                 <button type="submit" class="bo-action-tile" style="width:100%; text-align:left;">
-                  <span class="bo-action-icon">AP</span>
+                  <span class="bo-action-icon">${renderDashboardActionIcon("autopilot")}</span>
                   <strong>Ejecutar ciclo IA</strong>
                   <small>Corre investigacion, internalizacion, publicacion web y social segun tu configuracion.</small>
                 </button>
               </form>
               <a class="bo-action-tile" href="/backoffice/users">
-                <span class="bo-action-icon">US</span>
+                <span class="bo-action-icon">${renderDashboardActionIcon("users")}</span>
                 <strong>Ver usuarios</strong>
                 <small>Consulta audiencia, trazabilidad y planes sin salir del dashboard.</small>
               </a>
@@ -4460,7 +4620,7 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
             }</p>
             <div class="actions">
               <a class="button" href="${escapeHtml(normalizedFrontendBaseUrl())}" target="_blank" rel="noreferrer">Abrir front</a>
-              <a class="button" href="/backoffice/news/new?studio=command">Abrir comando</a>
+              <a class="button" href="/backoffice/news/new?template=status">Abrir IA</a>
             </div>
           </div>
 
@@ -4987,13 +5147,13 @@ app.post("/backoffice/news/batch", boGuard, async (request, response, next) => {
 
     const researchDetail = useResearchAgent ? ` Fuentes investigadas: ${researchSourcesUsed}.` : "";
     response.redirect(
-      `/backoffice/news/new?studio=batch&ok=${encodeURIComponent(`${detail}${researchDetail} Modelo: ${batch.model}.`)}`,
+      `/backoffice/news/new?studio=command&ok=${encodeURIComponent(`${detail}${researchDetail} Modelo: ${batch.model}.`)}`,
     );
   } catch (error) {
     if (error instanceof Error) {
       response.status(400).send(
         await renderUnifiedEditorialPage({
-          activeMode: "batch",
+          activeMode: "command",
           error: error.message,
           batchState: formState,
         }),
@@ -5259,19 +5419,224 @@ app.post("/backoffice/news/internalize", boGuard, async (request, response, next
     }
 
     response.redirect(
-      `/backoffice/news/new?studio=rewrite&ok=${encodeURIComponent(summaryParts.join(" | "))}`,
+      `/backoffice/news/new?studio=command&ok=${encodeURIComponent(summaryParts.join(" | "))}`,
     );
   } catch (error) {
     if (error instanceof Error) {
       response.status(400).send(
         await renderUnifiedEditorialPage({
-          activeMode: "rewrite",
+          activeMode: "command",
           error: error.message,
           rewriteState,
         }),
       );
       return;
     }
+    next(error);
+  }
+});
+
+app.post("/backoffice/editorial-command/chat", boGuard, async (request, response, next) => {
+  const commandState: EditorialCommandFormState = {
+    instruction: readString(request.body.instruction),
+    campaignLine: readString(request.body.campaignLine),
+    allowDestructive: readBoolean(request.body.allowDestructive),
+    autoExecuteSafe: readBoolean(request.body.autoExecuteSafe),
+    quantityHint: clampInteger(request.body.quantityHint, 1, 40, 1),
+  };
+
+  try {
+    if (commandState.instruction.length < 8) {
+      throw new Error("La instruccion para la IA editorial debe tener al menos 8 caracteres.");
+    }
+
+    const chatState = await getEditorialCommandChatState(prisma);
+    const effectiveInstruction =
+      (commandState.quantityHint ?? 1) > 1
+        ? `${commandState.instruction}\n\nCantidad objetivo sugerida por editor: ${commandState.quantityHint} notas.`
+        : commandState.instruction;
+    const memoryContext = formatEditorialChatMemory(chatState.history, chatState.logs);
+    const context = await buildAiNewsContext(prisma);
+    const aiResponse = await chatEditorialCommandWithAi(
+      {
+        instruction: effectiveInstruction,
+        campaignLine: commandState.campaignLine || null,
+        allowDestructive: commandState.allowDestructive,
+        memoryContext,
+      },
+      context.contextText,
+    );
+
+    let nextHistory = appendChatHistory(chatState.history, {
+      role: "user",
+      kind: "message",
+      text: commandState.instruction,
+    });
+    let nextLogs = appendChatLog(chatState.logs, {
+      level: "info",
+      title: "Pedido del editor",
+      detail: commandState.instruction.slice(0, 320),
+    });
+    let nextPendingPlanJson = chatState.pendingPlanJson;
+    let summary = aiResponse.answer;
+
+    if (aiResponse.plan) {
+      const preview = previewEditorialCommandPlan(aiResponse.plan);
+      nextHistory = appendChatHistory(nextHistory, {
+        role: "assistant",
+        kind: "plan",
+        text: `${aiResponse.answer}\n\nPlan: ${preview.summary}`,
+        meta: {
+          destructive: aiResponse.plan.destructive,
+          requiresConfirmation: aiResponse.plan.requiresConfirmation,
+          model: aiResponse.model,
+        },
+      });
+      nextLogs = appendChatLog(nextLogs, {
+        level: aiResponse.plan.destructive ? "warn" : "info",
+        title: "Plan editorial generado",
+        detail: `${preview.summary} | ${preview.operations.length} operacion(es) | modelo ${aiResponse.model}`,
+      });
+
+      if (commandState.autoExecuteSafe && !aiResponse.plan.destructive) {
+        const executionSummary = await executeEditorialCommandPlan(aiResponse.plan, commandState);
+        nextHistory = appendChatHistory(nextHistory, {
+          role: "assistant",
+          kind: "execution",
+          text: `Plan ejecutado automaticamente.\n${executionSummary}`,
+          meta: { model: aiResponse.model },
+        });
+        nextLogs = appendChatLog(nextLogs, {
+          level: "success",
+          title: "Plan ejecutado",
+          detail: executionSummary,
+        });
+        nextPendingPlanJson = "";
+        summary = `Plan ejecutado automaticamente - ${executionSummary}`;
+      } else {
+        nextPendingPlanJson = encodeEditorialCommandPlan(aiResponse.plan);
+        summary = aiResponse.plan.destructive
+          ? `Plan listo con confirmacion obligatoria - ${aiResponse.plan.summary}`
+          : `Plan listo - ${aiResponse.plan.summary}`;
+      }
+    } else {
+      nextHistory = appendChatHistory(nextHistory, {
+        role: "assistant",
+        kind: "message",
+        text: aiResponse.answer,
+        meta: { model: aiResponse.model },
+      });
+      nextLogs = appendChatLog(nextLogs, {
+        level: "info",
+        title: "Consulta editorial respondida",
+        detail: aiResponse.answer.slice(0, 320),
+      });
+    }
+
+    await setEditorialCommandChatState(prisma, {
+      history: nextHistory,
+      logs: nextLogs,
+      pendingPlanJson: nextPendingPlanJson,
+    });
+
+    response.redirect(`/backoffice/news/new?studio=command&ok=${encodeURIComponent(summary)}`);
+  } catch (error) {
+    if (error instanceof Error) {
+      response.status(400).send(
+        await renderUnifiedEditorialPage({
+          activeMode: "command",
+          error: error.message,
+          commandState,
+        }),
+      );
+      return;
+    }
+    next(error);
+  }
+});
+
+app.post("/backoffice/editorial-command/confirm", boGuard, async (request, response, next) => {
+  const commandState: EditorialCommandFormState = {
+    instruction: "",
+    campaignLine: readString(request.body.campaignLine),
+    allowDestructive: readBoolean(request.body.allowDestructive),
+    autoExecuteSafe: false,
+    quantityHint: 1,
+  };
+
+  try {
+    const planJson = readString(request.body.planJson);
+    const chatState = await getEditorialCommandChatState(prisma);
+    const effectivePlanJson = planJson || chatState.pendingPlanJson;
+    if (!effectivePlanJson) {
+      throw new Error("No hay ningun plan pendiente para confirmar.");
+    }
+    const plan = decodeEditorialCommandPlan(effectivePlanJson);
+    const executionSummary = await executeEditorialCommandPlan(plan, commandState);
+    await setEditorialCommandChatState(prisma, {
+      history: appendChatHistory(chatState.history, {
+        role: "assistant",
+        kind: "execution",
+        text: `Plan confirmado y ejecutado.\n${executionSummary}`,
+        meta: { destructive: plan.destructive, requiresConfirmation: false, model: plan.model },
+      }),
+      logs: appendChatLog(chatState.logs, {
+        level: plan.destructive ? "warn" : "success",
+        title: "Plan confirmado y ejecutado",
+        detail: executionSummary,
+      }),
+      pendingPlanJson: "",
+    });
+    response.redirect(`/backoffice/news/new?studio=command&ok=${encodeURIComponent(`Comando ejecutado - ${executionSummary}`)}`);
+  } catch (error) {
+    if (error instanceof Error) {
+      response.status(400).send(
+        await renderUnifiedEditorialPage({
+          activeMode: "command",
+          error: error.message,
+          commandState: {
+            ...commandState,
+            summary: "El plan no se pudo confirmar.",
+          },
+        }),
+      );
+      return;
+    }
+    next(error);
+  }
+});
+
+app.post("/backoffice/editorial-command/history/clear", boGuard, async (_request, response, next) => {
+  try {
+    await setEditorialCommandChatState(prisma, {
+      history: [],
+      logs: [],
+      pendingPlanJson: "",
+    });
+    response.redirect(`/backoffice/news/new?studio=command&ok=${encodeURIComponent("Historial y logs de la consola IA limpiados.")}`);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/backoffice/editorial-command/history/clear-pending", boGuard, async (_request, response, next) => {
+  try {
+    const chatState = await getEditorialCommandChatState(prisma);
+    await setEditorialCommandChatState(prisma, {
+      history: appendChatHistory(chatState.history, {
+        role: "system",
+        kind: "warning",
+        text: "El editor descarto el plan pendiente antes de ejecutarlo.",
+      }),
+      logs: appendChatLog(chatState.logs, {
+        level: "warn",
+        title: "Plan pendiente descartado",
+        detail: "Se removio el plan pendiente sin ejecutar cambios en el CMS.",
+      }),
+      pendingPlanJson: "",
+    });
+    response.redirect(`/backoffice/news/new?studio=command&ok=${encodeURIComponent("Plan pendiente descartado.")}`);
+  } catch (error) {
     next(error);
   }
 });
@@ -5374,11 +5739,11 @@ app.get("/backoffice/news/new", boGuard, async (request, response, next) => {
   try {
     const studio = readString(request.query.studio).toLowerCase();
     const ok = readString(request.query.ok);
+    const template = readString(request.query.template).toLowerCase();
+    const aiResearch = await getAiResearchSettings(prisma);
     const pageParams: Parameters<typeof renderUnifiedEditorialPage>[0] = {
-      activeMode:
-        studio === "batch" || studio === "rewrite" || studio === "command"
-          ? (studio as "batch" | "rewrite" | "command")
-          : "single",
+      activeMode: "command",
+      commandState: resolveEditorialCommandTemplate(template, aiResearch.campaignLine),
     };
     if (studio === "batch" && ok) {
       pageParams.batchState = { summary: ok };
@@ -5386,8 +5751,11 @@ app.get("/backoffice/news/new", boGuard, async (request, response, next) => {
     if (studio === "rewrite" && ok) {
       pageParams.rewriteState = { summary: ok };
     }
-    if (studio === "command" && ok) {
-      pageParams.commandState = { summary: ok };
+    if (ok) {
+      pageParams.commandState = {
+        ...(pageParams.commandState ?? {}),
+        summary: ok,
+      };
     }
     response.send(
       await renderUnifiedEditorialPage(pageParams),

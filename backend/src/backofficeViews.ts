@@ -1,5 +1,6 @@
 ﻿import { type News, NewsStatus, type Poll, PollStatus, type Province, UserPlan } from "@prisma/client";
 import { PROVINCE_OPTIONS, SECTION_OPTIONS, provinceLabel, sectionLabel } from "./catalog";
+import type { EditorialCommandChatMessage, EditorialCommandLogEntry } from "./siteSettings";
 import { escapeHtml } from "./utils";
 
 function resolveBackofficeNav(title: string): "panel" | "editorial" | "polls" | "users" {
@@ -359,10 +360,30 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
     .bo-soft-card { padding:16px; border-radius:18px; border:1px solid #e3dccf; background:linear-gradient(180deg,#fff,#fbf9f4); display:grid; gap:10px; }
     .bo-soft-card h4 { margin:0; font-size:13px; text-transform:uppercase; letter-spacing:.1em; color:#2d2924; }
     .bo-soft-card p { margin:0; color:#625d55; font-size:13px; line-height:1.5; }
+    .bo-soft-line { display:grid; gap:4px; padding:10px 12px; border-radius:12px; border:1px solid #e5ded3; background:#fff; }
+    .bo-soft-line strong { font-size:13px; }
+    .bo-soft-line span { color:#6b665e; font-size:12px; line-height:1.45; }
     .bo-kpi-row { display:grid; gap:10px; grid-template-columns:repeat(2,minmax(0,1fr)); }
     .bo-kpi { padding:12px; border-radius:14px; background:#faf7ef; border:1px solid #e4ddd2; display:grid; gap:4px; }
     .bo-kpi strong { font-family:Newsreader, Georgia, serif; font-size:24px; line-height:1; }
     .bo-kpi span { color:#7b766e; font-size:11px; letter-spacing:.12em; text-transform:uppercase; font-weight:700; }
+    .bo-chat-layout { display:grid; gap:16px; grid-template-columns:minmax(0,1.45fr) minmax(280px,.86fr); align-items:start; }
+    .bo-chat-main, .bo-chat-side { display:grid; gap:14px; }
+    .bo-chat-feed, .bo-log-list { display:grid; gap:10px; }
+    .bo-chat-feed.is-empty, .bo-log-list.is-empty { min-height:120px; }
+    .bo-chat-message, .bo-log-item { padding:14px 16px; border-radius:16px; border:1px solid #e5ddd1; background:#fff; display:grid; gap:8px; }
+    .bo-chat-message.is-user { background:#fff7df; border-color:#e5c56a; }
+    .bo-chat-message.is-assistant { background:#fcfbf7; }
+    .bo-chat-message.is-system { background:#f4f0e8; }
+    .bo-log-item.is-success { border-color:#b9d8c2; background:#f0f8f3; }
+    .bo-log-item.is-warn { border-color:#e2c06a; background:#fff7df; }
+    .bo-log-item.is-error { border-color:#d9aaaa; background:#fff0f0; }
+    .bo-chat-meta { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+    .bo-chat-meta strong { font-size:13px; }
+    .bo-chat-meta span { color:#7a756d; font-size:11px; letter-spacing:.08em; text-transform:uppercase; }
+    .bo-chat-body { color:#27241f; font-size:14px; line-height:1.6; }
+    .bo-chat-form { display:grid; gap:12px; padding:16px; border-radius:18px; border:1px solid #e5ded3; background:linear-gradient(180deg,#fff,#fbf9f4); }
+    .bo-note-box-warn { border-color:#e0bd61; background:#fff7df; }
     .bo-side-panel { padding:22px; border-radius:24px; background:#191714; color:#fff; border:1px solid #2a2723; display:grid; gap:16px; position:sticky; top:24px; box-shadow:0 24px 54px rgba(17,17,17,.16); }
     .bo-side-panel h3 { margin:0; font-size:15px; letter-spacing:.12em; text-transform:uppercase; color:#f2b705; }
     .bo-side-panel p { margin:0; color:#d0cbc2; font-size:13px; line-height:1.55; }
@@ -384,6 +405,7 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
     .bo-action-tile strong { font-size:13px; letter-spacing:.06em; text-transform:uppercase; }
     .bo-action-tile small { color:#746f66; font-size:12px; line-height:1.45; }
     .bo-action-icon { display:inline-grid; place-items:center; width:38px; height:38px; border-radius:12px; background:#191714; color:#f2b705; font-size:11px; font-weight:800; letter-spacing:.12em; text-transform:uppercase; }
+    .bo-action-icon svg { width:18px; height:18px; stroke:currentColor; fill:none; stroke-width:1.85; stroke-linecap:round; stroke-linejoin:round; }
     .bo-activity-list { display:grid; gap:0; }
     .bo-activity-row { display:grid; grid-template-columns:100px minmax(0,1fr) auto; gap:16px; align-items:center; padding:14px 0; border-top:1px solid #eee7dc; }
     .bo-activity-row:first-child { border-top:0; }
@@ -427,7 +449,7 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
       .bo-side-panel { position:static; }
     }
     @media (max-width:900px) {
-      .cols-2, .checks, .table-tools, .cms-layout, .bo-compact-grid, .bo-subgrid-3, .bo-editorial-grid, .bo-kpi-row { grid-template-columns:1fr; }
+      .cols-2, .checks, .table-tools, .cms-layout, .bo-compact-grid, .bo-subgrid-3, .bo-editorial-grid, .bo-kpi-row, .bo-chat-layout { grid-template-columns:1fr; }
       .table-count { text-align:left; }
       table, thead, tbody, th, td, tr { display:block; }
       thead { display:none; }
@@ -726,9 +748,18 @@ type EditorialCommandStudioState = {
   campaignLine: string;
   allowDestructive: boolean;
   autoExecuteSafe: boolean;
+  quantityHint: number;
   summary?: string | null;
   planJson?: string | null;
   preview?: EditorialCommandPreview | null;
+  history?: EditorialCommandChatMessage[];
+  logs?: EditorialCommandLogEntry[];
+  pendingPlan?: {
+    summary: string;
+    planJson: string;
+    destructive: boolean;
+    requiresConfirmation: boolean;
+  } | null;
 };
 
 function renderEditorialStudio(params: {
@@ -737,286 +768,149 @@ function renderEditorialStudio(params: {
   command?: Partial<EditorialCommandStudioState>;
   activeMode?: string;
 }): string {
-  const batch: EditorialBatchStudioState = {
-    totalItems: 1,
-    campaignPercent: 0,
-    campaignTopic: "",
-    generalBrief: "",
-    useResearchAgent: true,
-    includeCampaignLine: true,
-    campaignLine: "",
-    publishStatus: "DRAFT",
-    sectionHint: "",
-    provinceHint: "",
-    requireImageUrl: true,
-    defaultSourceName: "Pulso Pais IA",
-    defaultAuthorName: "Redaccion Pulso Pais",
-    defaultSourceUrl: "",
-    summary: "",
-    ...(params.batch ?? {}),
-  };
-
-  const rewrite: EditorialRewriteStudioState = {
-    instruction:
-      "Convierte las noticias externas relevantes en notas propias de Pulso Pais, manteniendo los hechos, reformulando el enfoque a nuestra editorial y asegurando imagen valida.",
-    limit: 6,
-    scope: "mixed",
-    publishStatus: "DRAFT",
-    sectionHint: "",
-    provinceHint: "",
-    includeCampaignLine: true,
-    campaignLine: batch.campaignLine,
-    deleteDuplicates: false,
-    summary: "",
-    ...(params.rewrite ?? {}),
-  };
-
   const command: EditorialCommandStudioState = {
     instruction:
-      "Revisa las noticias externas del sitio, conviertelas en notas propias de Pulso Pais y deja el sistema limpio de duplicados obvios.",
-    campaignLine: batch.campaignLine,
+      "Revisa las notas externas del sitio, internalizalas como notas propias de Pulso Pais y deja listas las piezas mas relevantes para publicar.",
+    campaignLine: "",
     allowDestructive: false,
     autoExecuteSafe: true,
+    quantityHint: 1,
     summary: "",
     planJson: "",
     preview: null,
+    history: [],
+    logs: [],
+    pendingPlan: null,
     ...(params.command ?? {}),
   };
 
-  const activeMode = (params.activeMode ?? "single").toLowerCase();
+  const historyItems = (command.history ?? []).map((item) => {
+    const roleLabel = item.role === "user" ? "Editor" : item.role === "assistant" ? "IA periodista" : "Sistema";
+    const kindLabel = item.kind === "plan" ? "Plan" : item.kind === "execution" ? "Ejecucion" : item.kind === "warning" ? "Alerta" : "Conversacion";
+    return `<article class="bo-chat-message ${item.role === "user" ? "is-user" : item.role === "assistant" ? "is-assistant" : "is-system"}">
+      <div class="bo-chat-meta">
+        <strong>${escapeHtml(roleLabel)}</strong>
+        <span>${escapeHtml(kindLabel)} &middot; ${escapeHtml(new Date(item.createdAt).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" }))}</span>
+      </div>
+      <div class="bo-chat-body">${escapeHtml(item.text).replace(/\r?\n/g, "<br />")}</div>
+    </article>`;
+  }).join("");
+
+  const logItems = (command.logs ?? []).map((item) => {
+    return `<article class="bo-log-item is-${escapeHtml(item.level)}">
+      <div class="bo-chat-meta">
+        <strong>${escapeHtml(item.title)}</strong>
+        <span>${escapeHtml(new Date(item.createdAt).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" }))}</span>
+      </div>
+      <div class="bo-chat-body">${escapeHtml(item.detail).replace(/\r?\n/g, "<br />")}</div>
+    </article>`;
+  }).join("");
+
+  const previewBlock = command.preview
+    ? `<div class="bo-note-box">
+        <strong>Plan propuesto por la IA</strong>
+        <p>${escapeHtml(command.preview.summary)}</p>
+        <div class="bo-inline-stat">
+          <span>${command.preview.operations.length} operacion${command.preview.operations.length === 1 ? "" : "es"}</span>
+          <span>${command.preview.destructive ? "Plan destructivo" : "Sin borrados"}</span>
+          <span>${command.preview.requiresConfirmation ? "Requiere confirmacion" : "Apto para autoejecucion"}</span>
+        </div>
+        <div class="grid" style="gap:10px; margin-top:10px;">
+          ${command.preview.operations
+            .map((operation, index) => `<div class="bo-soft-line"><strong>${String(index + 1).padStart(2, "0")} | ${escapeHtml(operation.title)}</strong><span>${escapeHtml(operation.detail)}</span></div>`)
+            .join("")}
+        </div>
+      </div>`
+    : "";
+
+  const pendingBlock = command.pendingPlan
+    ? `<div class="bo-note-box bo-note-box-warn">
+        <strong>Confirmacion pendiente</strong>
+        <p>${escapeHtml(command.pendingPlan.summary)}</p>
+        <div class="bo-inline-stat">
+          <span>${command.pendingPlan.destructive ? "Incluye borrados" : "Sin borrados"}</span>
+          <span>${command.pendingPlan.requiresConfirmation ? "Confirmacion obligatoria" : "Listo para correr"}</span>
+        </div>
+        <form method="post" action="/backoffice/editorial-command/confirm" style="display:grid; gap:10px; margin-top:12px;">
+          <textarea name="planJson" class="editor-hidden">${escapeHtml(command.pendingPlan.planJson)}</textarea>
+          <input type="hidden" name="campaignLine" value="${escapeHtml(command.campaignLine)}" />
+          <label class="ai-inline">
+            <input type="checkbox" name="allowDestructive" ${command.allowDestructive ? "checked" : ""} />
+            Confirmo la ejecucion del plan y acepto el nivel de riesgo informado.
+          </label>
+          <div class="bo-form-actions">
+            <button type="submit" class="primary">Confirmar y ejecutar</button>
+            <button type="submit" class="button" formaction="/backoffice/editorial-command/history/clear-pending">Descartar plan pendiente</button>
+          </div>
+        </form>
+      </div>`
+    : "";
 
   return `<div class="editor-card" id="studio">
     <div class="split-title">
       <div>
-        <div class="bo-kicker">Centro Editorial IA</div>
-        <h3 style="margin-top:8px;">Operacion editorial unificada</h3>
+        <div class="bo-kicker">IA periodista</div>
+        <h3 style="margin-top:8px;">Consola editorial conversacional</h3>
       </div>
-      <span class="mini-tag">nota puntual + lote + internalizacion + comando</span>
+      <span class="mini-tag">chat + plan + ejecucion + memoria</span>
     </div>
-    <p class="muted">Usa una sola consola para generar 1 nota, lanzar una corrida de cobertura, internalizar externas o darle instrucciones operativas a la IA sobre el CMS. La edicion manual sigue abajo para revisar y publicar.</p>
-    <div class="bo-tabs" id="studioTabs">
-      <button type="button" class="bo-tab-btn ${activeMode === "single" ? "is-active" : ""}" data-studio-tab="single">Nota puntual</button>
-      <button type="button" class="bo-tab-btn ${activeMode === "batch" ? "is-active" : ""}" data-studio-tab="batch">Cobertura en lote</button>
-      <button type="button" class="bo-tab-btn ${activeMode === "rewrite" ? "is-active" : ""}" data-studio-tab="rewrite">Internalizar externas</button>
-      <button type="button" class="bo-tab-btn ${activeMode === "command" ? "is-active" : ""}" data-studio-tab="command">Comando editorial</button>
+    <p class="muted">Habla con la IA como si fuera tu mesa editorial. Puede investigar, explicar que esta haciendo, crear una nota o varias, internalizar externas, editar metadatos y preparar borrados con confirmacion. Todo lo conversado queda en contexto y el sistema guarda logs operativos.</p>
+
+    ${command.summary ? `<div class="flash">${escapeHtml(command.summary)}</div>` : ""}
+
+    <div class="bo-chat-layout">
+      <section class="bo-chat-main">
+        <div class="bo-chat-feed ${historyItems ? '' : 'is-empty'}">
+          ${historyItems || `<div class="bo-note-box"><strong>Sin historial todavia</strong><p>La consola empieza a construir memoria cuando le das la primera instruccion. Puedes pedir estado, investigar agenda, crear varias notas o limpiar pruebas.</p></div>`}
+        </div>
+
+        ${previewBlock}
+        ${pendingBlock}
+
+        <form method="post" action="/backoffice/editorial-command/chat" class="bo-chat-form">
+          <div class="field">
+            <label for="commandInstruction">Habla con la IA periodista</label>
+            <textarea id="commandInstruction" name="instruction" rows="5" placeholder="Ej: elimina todas las noticias de prueba y luego investiga agenda caliente para publicar 4 notas propias con foto valida.">${escapeHtml(command.instruction)}</textarea>
+            <p class="hint">Puedes pedir crear una nota o varias, reescribir externas, limpiar pruebas, explicar que esta haciendo o consultar logs. Si el pedido es destructivo, el sistema obligara confirmacion antes de ejecutar.</p>
+          </div>
+          <div class="bo-compact-grid">
+            <div class="field">
+              <label for="commandQuantityHint">Cantidad objetivo (opcional)</label>
+              <input id="commandQuantityHint" name="quantityHint" type="number" min="1" max="40" value="${Number.isFinite(command.quantityHint) ? command.quantityHint : 1}" />
+            </div>
+            <div class="field">
+              <label for="commandCampaignLine">Bajada editorial / foco temporal</label>
+              <textarea id="commandCampaignLine" name="campaignLine" rows="2">${escapeHtml(command.campaignLine)}</textarea>
+            </div>
+          </div>
+          <div class="checks">
+            <label><input type="checkbox" name="allowDestructive" ${command.allowDestructive ? "checked" : ""} /> Permitir que la IA proponga borrados si el pedido lo exige</label>
+            <label><input type="checkbox" name="autoExecuteSafe" ${command.autoExecuteSafe ? "checked" : ""} /> Autoejecutar si el plan no incluye riesgo destructivo</label>
+          </div>
+          <div class="bo-form-actions">
+            <button type="submit" class="primary" data-submit-label="Consultando a la IA periodista...">Enviar a IA editorial</button>
+            <button type="submit" class="button" formaction="/backoffice/editorial-command/history/clear">Limpiar historial</button>
+          </div>
+        </form>
+      </section>
+
+      <aside class="bo-chat-side">
+        <div class="bo-soft-card">
+          <h4>Que puede hacer</h4>
+          <p>Crear 1 nota o varias en un mismo pedido, internalizar noticias externas, reescribir existentes, actualizar flags y preparar limpieza total o parcial del CMS con confirmacion.</p>
+        </div>
+        <div class="bo-soft-card">
+          <h4>Bitacora operativa</h4>
+          <div class="bo-log-list ${logItems ? '' : 'is-empty'}">
+            ${logItems || `<p class="muted">Todavia no hay logs. Cada plan, ejecucion o error importante queda registrado aca.</p>`}
+          </div>
+        </div>
+        <div class="bo-soft-card">
+          <h4>Metodo editorial</h4>
+          <p>La IA trabaja como radar, reportero, editor y estilista de marca, con compliance encima. No se le asigna ideologia: se le imponen reglas de interes publico, verificacion minima, foco en consecuencias reales y veto a propaganda obvia.</p>
+        </div>
+      </aside>
     </div>
-
-    <section class="bo-tab-panel ${activeMode === "single" ? "is-active" : ""}" data-studio-panel="single">
-      <div class="bo-note-box">
-        <strong>Operacion puntual</strong>
-        <p>Escribe el brief en el bloque IA de abajo y elige entre <em>Genera con IA</em> o <em>Investigar y generar nota propia</em>. Si el agente periodista encuentra fuentes calientes, traera contexto, imagen y media para autocompletar el formulario.</p>
-      </div>
-      <div class="bo-inline-stat">
-        <span>Cantidad fija: <strong>1</strong></span>
-        <span>Revision manual: <strong>obligatoria</strong></span>
-        <span>Destino: <strong>editor de noticia</strong></span>
-      </div>
-    </section>
-
-    <section class="bo-tab-panel ${activeMode === "batch" ? "is-active" : ""}" data-studio-panel="batch">
-      ${batch.summary ? `<div class="flash">${escapeHtml(batch.summary)}</div>` : ""}
-      <form method="post" action="/backoffice/news/batch" data-studio-submit="batch">
-        <div class="bo-compact-grid">
-          <div class="field">
-            <label for="batchTotalItems">Cantidad total</label>
-            <input id="batchTotalItems" name="totalItems" type="number" min="1" max="40" value="${batch.totalItems}" />
-          </div>
-          <div class="field">
-            <label for="batchCampaignPercent">Porcentaje campana (%)</label>
-            <input id="batchCampaignPercent" name="campaignPercent" type="number" min="0" max="100" value="${batch.campaignPercent}" />
-          </div>
-        </div>
-        <div class="field">
-          <label for="batchCampaignTopic">Tema de campana</label>
-          <textarea id="batchCampaignTopic" name="campaignTopic" rows="3" placeholder="Ej: 30% sobre Dante Gebel, ascenso social, humor cultural y consolidacion argentina.">${escapeHtml(batch.campaignTopic)}</textarea>
-        </div>
-        <div class="field">
-          <label for="batchGeneralBrief">Brief general para el resto</label>
-          <textarea id="batchGeneralBrief" name="generalBrief" rows="3" placeholder="Ej: agenda politica federal, gobernadores, Congreso, economia real y radar electoral.">${escapeHtml(batch.generalBrief)}</textarea>
-        </div>
-        <div class="checks">
-          <label><input type="checkbox" name="useResearchAgent" ${batch.useResearchAgent ? "checked" : ""} /> Modo periodista (investiga antes de escribir)</label>
-          <label><input type="checkbox" name="includeCampaignLine" ${batch.includeCampaignLine ? "checked" : ""} /> Incluir bajada/campana activa</label>
-          <label><input type="checkbox" name="requireImageUrl" ${batch.requireImageUrl ? "checked" : ""} /> Exigir imagen valida</label>
-        </div>
-        <div class="field">
-          <label for="batchCampaignLine">Bajada editorial / campana activa</label>
-          <textarea id="batchCampaignLine" name="campaignLine" rows="2">${escapeHtml(batch.campaignLine)}</textarea>
-        </div>
-        <div class="bo-subgrid-3">
-          <div class="field">
-            <label for="batchPublishStatus">Estado</label>
-            <select id="batchPublishStatus" name="publishStatus">
-              <option value="DRAFT" ${batch.publishStatus === "DRAFT" ? "selected" : ""}>DRAFT</option>
-              <option value="PUBLISHED" ${batch.publishStatus === "PUBLISHED" ? "selected" : ""}>PUBLISHED</option>
-            </select>
-          </div>
-          <div class="field">
-            <label for="batchSectionHint">Seccion base</label>
-            <select id="batchSectionHint" name="sectionHint">
-              <option value="">Sin forzar</option>
-              ${SECTION_OPTIONS.map((option) => `<option value="${option.value}" ${batch.sectionHint === option.value ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}
-            </select>
-          </div>
-          <div class="field">
-            <label for="batchProvinceHint">Distrito base</label>
-            <select id="batchProvinceHint" name="provinceHint">
-              <option value="">Sin distrito especifico</option>
-              ${PROVINCE_OPTIONS.map((option) => `<option value="${option.value}" ${batch.provinceHint === option.value ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}
-            </select>
-          </div>
-        </div>
-        <div class="bo-compact-grid">
-          <div class="field">
-            <label for="batchSourceName">Fuente por defecto</label>
-            <input id="batchSourceName" name="defaultSourceName" value="${escapeHtml(batch.defaultSourceName)}" />
-          </div>
-          <div class="field">
-            <label for="batchAuthorName">Autor por defecto</label>
-            <input id="batchAuthorName" name="defaultAuthorName" value="${escapeHtml(batch.defaultAuthorName)}" />
-          </div>
-        </div>
-        <div class="field">
-          <label for="batchSourceUrl">URL fuente fallback (opcional)</label>
-          <input id="batchSourceUrl" name="defaultSourceUrl" value="${escapeHtml(batch.defaultSourceUrl)}" />
-        </div>
-        <div class="bo-form-actions">
-          <button type="submit" class="primary" data-submit-label="Lanzando cobertura IA...">Lanzar cobertura IA</button>
-          <span class="muted">La IA crea y guarda directamente el lote. Si activas modo periodista, primero investiga agenda caliente.</span>
-        </div>
-      </form>
-    </section>
-
-    <section class="bo-tab-panel ${activeMode === "rewrite" ? "is-active" : ""}" data-studio-panel="rewrite">
-      ${rewrite.summary ? `<div class="flash">${escapeHtml(rewrite.summary)}</div>` : ""}
-      <form method="post" action="/backoffice/news/internalize" data-studio-submit="rewrite">
-        <div class="field">
-          <label for="rewriteInstruction">Instruccion administrativa para IA</label>
-          <textarea id="rewriteInstruction" name="instruction" rows="4" placeholder="Ej: fijate todas las noticias que apunten a portales externos, reescribilas como notas propias de Pulso Pais, con tono editorial federal y fotografia portada valida.">${escapeHtml(rewrite.instruction)}</textarea>
-        </div>
-        <div class="bo-compact-grid">
-          <div class="field">
-            <label for="rewriteLimit">Cantidad maxima</label>
-            <input id="rewriteLimit" name="limit" type="number" min="1" max="20" value="${rewrite.limit}" />
-          </div>
-          <div class="field">
-            <label for="rewriteScope">Alcance</label>
-            <select id="rewriteScope" name="scope">
-              <option value="mixed" ${rewrite.scope === "mixed" ? "selected" : ""}>Mixto: actualiza existentes + crea faltantes</option>
-              <option value="existing" ${rewrite.scope === "existing" ? "selected" : ""}>Solo notas existentes con fuente externa</option>
-              <option value="feed" ${rewrite.scope === "feed" ? "selected" : ""}>Solo nuevas desde agenda externa</option>
-            </select>
-          </div>
-        </div>
-        <div class="checks">
-          <label><input type="checkbox" name="includeCampaignLine" ${rewrite.includeCampaignLine ? "checked" : ""} /> Incluir bajada/campana activa</label>
-          <label><input type="checkbox" name="deleteDuplicates" ${rewrite.deleteDuplicates ? "checked" : ""} /> Limpiar duplicados externos sobrantes</label>
-        </div>
-        <div class="field">
-          <label for="rewriteCampaignLine">Bajada editorial / campana activa</label>
-          <textarea id="rewriteCampaignLine" name="campaignLine" rows="2">${escapeHtml(rewrite.campaignLine)}</textarea>
-        </div>
-        <div class="bo-subgrid-3">
-          <div class="field">
-            <label for="rewritePublishStatus">Estado</label>
-            <select id="rewritePublishStatus" name="publishStatus">
-              <option value="DRAFT" ${rewrite.publishStatus === "DRAFT" ? "selected" : ""}>DRAFT</option>
-              <option value="PUBLISHED" ${rewrite.publishStatus === "PUBLISHED" ? "selected" : ""}>PUBLISHED</option>
-            </select>
-          </div>
-          <div class="field">
-            <label for="rewriteSectionHint">Seccion base</label>
-            <select id="rewriteSectionHint" name="sectionHint">
-              <option value="">Sin forzar</option>
-              ${SECTION_OPTIONS.map((option) => `<option value="${option.value}" ${rewrite.sectionHint === option.value ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}
-            </select>
-          </div>
-          <div class="field">
-            <label for="rewriteProvinceHint">Distrito base</label>
-            <select id="rewriteProvinceHint" name="provinceHint">
-              <option value="">Sin distrito especifico</option>
-              ${PROVINCE_OPTIONS.map((option) => `<option value="${option.value}" ${rewrite.provinceHint === option.value ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}
-            </select>
-          </div>
-        </div>
-        <div class="bo-form-actions">
-          <button type="submit" class="primary" data-submit-label="Internalizando noticias externas...">Convertir externas a notas propias</button>
-          <span class="muted">Esta operacion usa el agente periodista, toma la fuente, reformula cuerpo e imagen, y actualiza o crea noticias internas.</span>
-        </div>
-      </form>
-    </section>
-
-    <section class="bo-tab-panel ${activeMode === "command" ? "is-active" : ""}" data-studio-panel="command">
-      ${command.summary ? `<div class="flash">${escapeHtml(command.summary)}</div>` : ""}
-      <form method="post" action="/backoffice/editorial-command/plan" data-studio-submit="command">
-        <div class="field">
-          <label for="commandInstruction">Comando libre para IA</label>
-          <textarea id="commandInstruction" name="instruction" rows="5" placeholder="Ej: fijate todas las noticias que sigan mandando a portales externos, internalizalas como notas propias, con imagen valida, y deja 3 nuevas sobre el cierre de alianzas en PBA.">${escapeHtml(command.instruction)}</textarea>
-          <p class="hint">La IA traduce este pedido a operaciones concretas del CMS: crear, editar, borrar, actualizar metadatos o internalizar externas. Primero planifica, despues ejecuta.</p>
-        </div>
-        <div class="field">
-          <label for="commandCampaignLine">Bajada editorial / campana activa</label>
-          <textarea id="commandCampaignLine" name="campaignLine" rows="2">${escapeHtml(command.campaignLine)}</textarea>
-        </div>
-        <div class="checks">
-          <label><input type="checkbox" name="allowDestructive" ${command.allowDestructive ? "checked" : ""} /> Permitir acciones destructivas si el pedido realmente exige borrar</label>
-          <label><input type="checkbox" name="autoExecuteSafe" ${command.autoExecuteSafe ? "checked" : ""} /> Ejecutar automaticamente si el plan no incluye borrados</label>
-        </div>
-        <div class="bo-form-actions">
-          <button type="submit" class="primary" data-submit-label="Planificando comando editorial con IA...">Planificar comando editorial</button>
-          <span class="muted">Mitigacion: primero se genera un plan estructurado. Si incluye borrados o acciones sensibles, queda obligado a confirmacion manual.</span>
-        </div>
-      </form>
-
-      ${
-        command.preview
-          ? `<div class="editor-card">
-              <div class="split-title">
-                <div>
-                  <div class="bo-kicker">Plan IA listo</div>
-                  <h3 style="margin-top:8px;">${escapeHtml(command.preview.summary)}</h3>
-                </div>
-                <span class="mini-tag">${escapeHtml(command.preview.model)}</span>
-              </div>
-              <div class="bo-inline-stat">
-                <span>${command.preview.operations.length} operacion${command.preview.operations.length === 1 ? "" : "es"}</span>
-                <span>${command.preview.destructive ? "Plan destructivo" : "Sin borrados"}</span>
-                <span>${command.preview.requiresConfirmation ? "Requiere confirmacion" : "Ejecucion directa permitida"}</span>
-              </div>
-              <div class="grid" style="gap:12px;">
-                ${command.preview.operations
-                  .map(
-                    (operation, index) => `<article class="bo-note-box">
-                      <strong>${String(index + 1).padStart(2, "0")} | ${escapeHtml(operation.title)}</strong>
-                      <p><span class="pill">${escapeHtml(operation.kind)}</span> ${escapeHtml(operation.detail)}</p>
-                    </article>`,
-                  )
-                  .join("")}
-              </div>
-              ${
-                command.preview.notes.length > 0
-                  ? `<div class="bo-note-box">
-                      <strong>Notas del planner</strong>
-                      <p>${command.preview.notes.map((note) => escapeHtml(note)).join(" | ")}</p>
-                    </div>`
-                  : ""
-              }
-              <form method="post" action="/backoffice/editorial-command/execute" data-studio-submit="command-execute">
-                <textarea name="planJson" class="editor-hidden">${escapeHtml(command.planJson ?? "")}</textarea>
-                <input type="hidden" name="campaignLine" value="${escapeHtml(command.campaignLine)}" />
-                <label class="ai-inline">
-                  <input type="checkbox" name="allowDestructive" ${command.allowDestructive ? "checked" : ""} />
-                  Confirmo que la IA puede ejecutar este plan con el nivel de riesgo indicado.
-                </label>
-                <div class="bo-form-actions">
-                  <button type="submit" class="primary" data-submit-label="Ejecutando plan editorial...">Ejecutar plan</button>
-                  <span class="muted">Si cambias el texto del comando, vuelve a planificar antes de ejecutar.</span>
-                </div>
-              </form>
-            </div>`
-          : ""
-      }
-    </section>
   </div>`;
 }
 
@@ -1123,8 +1017,8 @@ export function renderNewsForm(params: {
         <div id="ia" class="ai-box">
           <div class="ai-head">
             <div>
-              <h3 class="ai-title">Generacion IA de Noticia</h3>
-              <p class="ai-sub">Escribe el brief y usa <strong>Genera con IA</strong>. Se autocompleta titulo, volanta, bajada, cuerpo, tags, seccion y metadatos para que luego solo revises y publiques.</p>
+              <h3 class="ai-title">Herramientas rapidas del editor</h3>
+              <p class="ai-sub">Este bloque queda como apoyo puntual para autocompletar el formulario manual. La operacion principal ahora vive en la consola conversacional de arriba.</p>
             </div>
             <span class="ai-badge" id="aiConnBadge">Chequeando IA...</span>
           </div>
