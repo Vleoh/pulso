@@ -3,6 +3,7 @@ import { normalizeHttpUrl, readString } from "./utils";
 
 const META_GRAPH_API_BASE = readString(process.env.META_GRAPH_API_BASE) || "https://graph.facebook.com/v23.0";
 const INSTAGRAM_GRAPH_ACCESS_TOKEN = readString(process.env.INSTAGRAM_GRAPH_ACCESS_TOKEN);
+const INSTAGRAM_IG_USER_ID = readString(process.env.INSTAGRAM_IG_USER_ID);
 
 export type InstagramEnvConfig = {
   configured: boolean;
@@ -121,6 +122,40 @@ function resolvePublishToken(accounts: InstagramManagedAccount[], accountId: str
   return readString(matched?.pageAccessToken) || INSTAGRAM_GRAPH_ACCESS_TOKEN;
 }
 
+async function fetchInstagramAccountById(accountId: string): Promise<InstagramManagedAccount | null> {
+  const normalizedAccountId = readString(accountId);
+  if (!normalizedAccountId) {
+    return null;
+  }
+
+  try {
+    const payload = await graphJson<{
+      id?: string;
+      username?: string;
+      media_count?: number;
+    }>(`/${normalizedAccountId}`, {
+      params: {
+        fields: "id,username,media_count",
+      },
+    });
+
+    const resolvedId = readString(payload.id);
+    if (!resolvedId) {
+      return null;
+    }
+
+    return {
+      pageId: "",
+      pageName: "Cuenta Instagram configurada manualmente",
+      instagramAccountId: resolvedId,
+      instagramUsername: readString(payload.username) || null,
+      pageAccessToken: null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function clampCaption(input: string): string {
   return input.trim().slice(0, 2100);
 }
@@ -167,16 +202,17 @@ export async function publishNewsToInstagram(params: {
   if (!normalizedImage) {
     throw new Error("La noticia no tiene una portada publica valida para Instagram.");
   }
-  if (!params.preferences.accountId) {
+  const effectiveAccountId = readString(params.preferences.accountId) || INSTAGRAM_IG_USER_ID;
+  if (!effectiveAccountId) {
     throw new Error("Falta Instagram account id en la configuracion del backoffice.");
   }
 
   const accounts = await discoverInstagramManagedAccounts();
-  const token = resolvePublishToken(accounts, params.preferences.accountId);
+  const token = resolvePublishToken(accounts, effectiveAccountId);
   const articleUrl = `${params.frontendBaseUrl.replace(/\/+$/, "")}/noticias/${params.news.slug}`;
   const caption = buildInstagramCaption(params.news, params.preferences, articleUrl);
 
-  const containerResponse = await fetch(toUrl(`/${params.preferences.accountId}/media`), {
+  const containerResponse = await fetch(toUrl(`/${effectiveAccountId}/media`), {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -190,7 +226,7 @@ export async function publishNewsToInstagram(params: {
     throw new Error(containerPayload.error?.message ?? "No se pudo crear el contenedor de Instagram.");
   }
 
-  const publishResponse = await fetch(toUrl(`/${params.preferences.accountId}/media_publish`), {
+  const publishResponse = await fetch(toUrl(`/${effectiveAccountId}/media_publish`), {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -220,7 +256,7 @@ export async function publishNewsToInstagram(params: {
   }
 
   return {
-    accountId: params.preferences.accountId,
+    accountId: effectiveAccountId,
     containerId: readString(containerPayload.id),
     mediaId: readString(publishPayload.id),
     permalink,
@@ -243,9 +279,15 @@ export async function getInstagramConnectionSummary(preferences: InstagramPublis
   }
 
   const accounts = await discoverInstagramManagedAccounts();
+  const effectiveAccountId = readString(preferences.accountId) || INSTAGRAM_IG_USER_ID;
+  const matched = accounts.find((item) => item.instagramAccountId === effectiveAccountId) ?? null;
+  const manualAccount = !matched && effectiveAccountId ? await fetchInstagramAccountById(effectiveAccountId) : null;
+  const nextAccounts = manualAccount
+    ? [...accounts.filter((item) => item.instagramAccountId !== manualAccount.instagramAccountId), manualAccount]
+    : accounts;
   return {
     configured: true,
-    accounts,
-    selectedAccount: accounts.find((item) => item.instagramAccountId === preferences.accountId) ?? null,
+    accounts: nextAccounts,
+    selectedAccount: matched ?? manualAccount,
   };
 }
