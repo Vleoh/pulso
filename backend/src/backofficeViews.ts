@@ -37,6 +37,33 @@ function backofficeNavLink(params: {
   </a>`;
 }
 
+function backofficeIcon(name: string): string {
+  switch (name) {
+    case "panel":
+      return `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="8" height="8" rx="2"></rect><rect x="13" y="3" width="8" height="5" rx="2"></rect><rect x="13" y="10" width="8" height="11" rx="2"></rect><rect x="3" y="13" width="8" height="8" rx="2"></rect></svg>`;
+    case "editorial":
+      return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6.5A2.5 2.5 0 0 1 7.5 4H19v14H7.5A2.5 2.5 0 0 0 5 20.5v-14Z"></path><path d="M5 6.5A2.5 2.5 0 0 1 7.5 4H19v14H7.5A2.5 2.5 0 0 0 5 20.5"></path><path d="M9 8h6"></path><path d="M9 12h6"></path><path d="M9 16h4"></path></svg>`;
+    case "polls":
+      return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19h16"></path><rect x="5" y="11" width="3" height="6" rx="1"></rect><rect x="10.5" y="7" width="3" height="10" rx="1"></rect><rect x="16" y="4" width="3" height="13" rx="1"></rect></svg>`;
+    case "users":
+      return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-1.5A3.5 3.5 0 0 0 12.5 16H8a4 4 0 0 0-4 4V21"></path><circle cx="9.5" cy="8" r="3.5"></circle><path d="M20 21v-1a3 3 0 0 0-2.4-2.94"></path><path d="M15.5 4.2a3.5 3.5 0 0 1 0 6.6"></path></svg>`;
+    case "layout":
+      return `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M3 9h18"></path><path d="M9 9v11"></path></svg>`;
+    case "lab":
+      return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 3v4l-4.5 8.2A3 3 0 0 0 8.1 20h7.8a3 3 0 0 0 2.6-4.8L14 7V3"></path><path d="M8.5 13h7"></path></svg>`;
+    case "logout":
+      return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 17l5-5-5-5"></path><path d="M15 12H4"></path><path d="M20 20V4"></path></svg>`;
+    case "search":
+      return `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"></circle><path d="m20 20-3.5-3.5"></path></svg>`;
+    case "user":
+      return `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5"></circle><path d="M5 20a7 7 0 0 1 14 0"></path></svg>`;
+    case "pulse":
+      return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h4l2-5 4 10 2-5h4"></path><circle cx="4" cy="12" r="1.5" fill="currentColor" stroke="none"></circle><circle cx="20" cy="12" r="1.5" fill="currentColor" stroke="none"></circle></svg>`;
+    default:
+      return `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"></circle></svg>`;
+  }
+}
+
 export function backofficeShell(title: string, body: string, flashMessage?: string): string {
   const flash = flashMessage ? `<div class="flash">${escapeHtml(flashMessage)}</div>` : "";
   const activeNav = resolveBackofficeNav(title);
@@ -96,17 +123,17 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
       box-shadow:var(--shadow);
     }
     .side-brand-mark {
-      display:inline-grid;
-      place-items:center;
-      width:34px;
-      height:34px;
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      width:38px;
+      height:38px;
       border-radius:10px;
       background:#171717;
       color:#f2b705;
-      font-size:13px;
-      font-weight:700;
-      letter-spacing:.16em;
+      border:1px solid rgba(242,183,5,.18);
     }
+    .side-brand-mark svg { width:20px; height:20px; stroke:currentColor; fill:none; stroke-width:1.85; stroke-linecap:round; stroke-linejoin:round; }
     .side-brand strong { font-family:Newsreader, Georgia, serif; font-size:20px; line-height:1; font-weight:700; }
     .side-brand span { color:var(--muted); font-size:11px; letter-spacing:.24em; text-transform:uppercase; }
     .side-section-label { color:#8b857b; font-size:11px; letter-spacing:.18em; text-transform:uppercase; font-weight:700; padding:0 8px; }
@@ -127,7 +154,17 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
     }
     .bo-nav-link:hover { background:#ffffff; border-color:#d9d2c6; color:#1c1b18; transform:translateX(1px); }
     .bo-nav-link.is-active { background:#ffffff; border-color:#e1c981; color:#8a6200; box-shadow:var(--shadow); }
-    .bo-nav-icon { width:18px; text-align:center; font-size:15px; color:inherit; opacity:.88; }
+    .bo-nav-icon {
+      width:18px;
+      height:18px;
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      color:inherit;
+      opacity:.9;
+      flex:0 0 18px;
+    }
+    .bo-nav-icon svg { width:18px; height:18px; stroke:currentColor; fill:none; stroke-width:1.85; stroke-linecap:round; stroke-linejoin:round; }
     .side-footer { display:grid; gap:10px; align-content:end; }
     .side-footer a {
       display:flex;
@@ -190,16 +227,17 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
       box-shadow:var(--shadow);
     }
     .bo-user-avatar {
-      display:inline-grid;
-      place-items:center;
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
       width:36px;
       height:36px;
       border-radius:12px;
       background:#191714;
       color:#f2b705;
-      font-weight:700;
-      font-size:12px;
+      border:1px solid rgba(242,183,5,.18);
     }
+    .bo-user-avatar svg { width:18px; height:18px; stroke:currentColor; fill:none; stroke-width:1.85; stroke-linecap:round; stroke-linejoin:round; }
     .bo-user-copy { display:grid; gap:2px; }
     .bo-user-copy strong { font-size:13px; line-height:1.1; }
     .bo-user-copy span { color:#7a746c; font-size:11px; letter-spacing:.08em; text-transform:uppercase; }
@@ -316,6 +354,15 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
     .bo-stat-card span { color:#7b766e; font-size:11px; letter-spacing:.14em; text-transform:uppercase; font-weight:700; }
     .bo-stat-card.emphasis { border-color:#dfc06b; box-shadow:0 12px 26px rgba(242,183,5,.14); }
     .bo-module-grid { display:grid; gap:20px; grid-template-columns:minmax(0,1.6fr) 340px; align-items:start; }
+    .bo-editorial-grid { display:grid; gap:16px; grid-template-columns:minmax(0,1.45fr) minmax(280px,.9fr); align-items:start; }
+    .bo-support-stack { display:grid; gap:12px; }
+    .bo-soft-card { padding:16px; border-radius:18px; border:1px solid #e3dccf; background:linear-gradient(180deg,#fff,#fbf9f4); display:grid; gap:10px; }
+    .bo-soft-card h4 { margin:0; font-size:13px; text-transform:uppercase; letter-spacing:.1em; color:#2d2924; }
+    .bo-soft-card p { margin:0; color:#625d55; font-size:13px; line-height:1.5; }
+    .bo-kpi-row { display:grid; gap:10px; grid-template-columns:repeat(2,minmax(0,1fr)); }
+    .bo-kpi { padding:12px; border-radius:14px; background:#faf7ef; border:1px solid #e4ddd2; display:grid; gap:4px; }
+    .bo-kpi strong { font-family:Newsreader, Georgia, serif; font-size:24px; line-height:1; }
+    .bo-kpi span { color:#7b766e; font-size:11px; letter-spacing:.12em; text-transform:uppercase; font-weight:700; }
     .bo-side-panel { padding:22px; border-radius:24px; background:#191714; color:#fff; border:1px solid #2a2723; display:grid; gap:16px; position:sticky; top:24px; box-shadow:0 24px 54px rgba(17,17,17,.16); }
     .bo-side-panel h3 { margin:0; font-size:15px; letter-spacing:.12em; text-transform:uppercase; color:#f2b705; }
     .bo-side-panel p { margin:0; color:#d0cbc2; font-size:13px; line-height:1.55; }
@@ -380,7 +427,7 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
       .bo-side-panel { position:static; }
     }
     @media (max-width:900px) {
-      .cols-2, .checks, .table-tools, .cms-layout, .bo-compact-grid, .bo-subgrid-3 { grid-template-columns:1fr; }
+      .cols-2, .checks, .table-tools, .cms-layout, .bo-compact-grid, .bo-subgrid-3, .bo-editorial-grid, .bo-kpi-row { grid-template-columns:1fr; }
       .table-count { text-align:left; }
       table, thead, tbody, th, td, tr { display:block; }
       thead { display:none; }
@@ -397,21 +444,21 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
   <div class="layout">
     <aside class="sidebar">
       <div class="side-brand">
-        <span class="side-brand-mark">PP</span>
+        <span class="side-brand-mark">${backofficeIcon("pulse")}</span>
         <strong>Pulso Pais</strong>
         <span>Situation Room</span>
       </div>
       <div class="side-section-label">Navegacion</div>
       <nav class="side-nav">
-        ${backofficeNavLink({ href: "/backoffice", label: "Panel", icon: "PN", isActive: activeNav === "panel" })}
-        ${backofficeNavLink({ href: "/backoffice/news/new", label: "Centro IA", icon: "IA", isActive: activeNav === "editorial" })}
-        ${backofficeNavLink({ href: "/backoffice/polls", label: "Encuestas", icon: "EN", isActive: activeNav === "polls" })}
-        ${backofficeNavLink({ href: "/backoffice/users", label: "Usuarios", icon: "US", isActive: activeNav === "users" })}
-        ${backofficeNavLink({ href: "/backoffice#theme-control", label: "Control portada", icon: "FD", isActive: activeNav === "panel" })}
+        ${backofficeNavLink({ href: "/backoffice", label: "Panel", icon: backofficeIcon("panel"), isActive: activeNav === "panel" })}
+        ${backofficeNavLink({ href: "/backoffice/news/new", label: "Centro IA", icon: backofficeIcon("editorial"), isActive: activeNav === "editorial" })}
+        ${backofficeNavLink({ href: "/backoffice/polls", label: "Encuestas", icon: backofficeIcon("polls"), isActive: activeNav === "polls" })}
+        ${backofficeNavLink({ href: "/backoffice/users", label: "Usuarios", icon: backofficeIcon("users"), isActive: activeNav === "users" })}
+        ${backofficeNavLink({ href: "/backoffice#theme-control", label: "Control portada", icon: backofficeIcon("layout"), isActive: activeNav === "panel" })}
       </nav>
       <div class="side-footer">
-        <a href="/backoffice/ia-lab"><span class="bo-nav-icon">AI</span><span>Diagnostico IA</span></a>
-        <a href="/backoffice/logout"><span class="bo-nav-icon">XL</span><span>Cerrar sesion</span></a>
+        <a href="/backoffice/ia-lab"><span class="bo-nav-icon">${backofficeIcon("lab")}</span><span>Diagnostico IA</span></a>
+        <a href="/backoffice/logout"><span class="bo-nav-icon">${backofficeIcon("logout")}</span><span>Cerrar sesion</span></a>
       </div>
     </aside>
     <main class="main">
@@ -424,11 +471,11 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
           </div>
           <div class="actions">
             <label class="bo-search" aria-label="Buscar contenido">
-              <span class="bo-nav-icon">SR</span>
+              <span class="bo-nav-icon">${backofficeIcon("search")}</span>
               <input type="text" placeholder="Buscar contenido..." />
             </label>
             <div class="bo-user-chip">
-              <span class="bo-user-avatar">EP</span>
+              <span class="bo-user-avatar">${backofficeIcon("user")}</span>
               <div class="bo-user-copy">
                 <strong>Editor Principal</strong>
                 <span>Turno manana</span>

@@ -4251,6 +4251,130 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
           <article class="card">
             <div class="split-title">
               <div>
+                <div class="bo-kicker">IA editorial</div>
+                <h3 style="margin-top:10px;">Centro de mando autonomo</h3>
+              </div>
+              <div class="bo-inline-stat">
+                <span><strong>Modo:</strong> ${escapeHtml(autopilotSettings.enabled ? autopilotModeLabel : "OFF")}</span>
+                <span><strong>Diario:</strong> ${autopilotSettings.minDailyStories}-${autopilotSettings.maxDailyStories}</span>
+                <span><strong>Ventana:</strong> ${autopilotSettings.windowStartHour}:00-${autopilotSettings.windowEndHour}:59</span>
+              </div>
+            </div>
+            <p class="muted">Define la consigna persistente del medio, la coyuntura temporal y el ritmo operativo. Desde aca decides cuando la IA investiga, internaliza externas, publica en web y empuja a social.</p>
+            <div class="bo-editorial-grid">
+              <form method="post" action="/backoffice/settings/autopilot" style="display:grid; gap:12px;">
+                <div class="bo-toggle-row">
+                  <div><strong>Activo</strong><span>Permite ejecutar ciclos autonomos desde panel o cron</span></div>
+                  <label><input type="checkbox" name="enabled" ${autopilotSettings.enabled ? "checked" : ""} /></label>
+                </div>
+                <div class="field">
+                  <label for="autopilotMode">Modo</label>
+                  <select id="autopilotMode" name="mode">${EDITORIAL_AUTOPILOT_MODE_OPTIONS.map((option) => `<option value="${option.value}" ${autopilotSettings.mode === option.value ? "selected" : ""}>${option.label}</option>`).join("")}</select>
+                </div>
+                <div class="bo-compact-grid">
+                  <div class="field">
+                    <label for="autopilotMaxStories">Notas por corrida</label>
+                    <input id="autopilotMaxStories" name="maxStoriesPerRun" type="number" min="1" max="20" value="${autopilotSettings.maxStoriesPerRun}" />
+                  </div>
+                  <div class="field">
+                    <label for="autopilotInternalizeLimit">Internalizar externas</label>
+                    <input id="autopilotInternalizeLimit" name="internalizeLimit" type="number" min="0" max="20" value="${autopilotSettings.internalizeLimit}" />
+                  </div>
+                </div>
+                <div class="bo-compact-grid">
+                  <div class="field">
+                    <label for="autopilotMinDailyStories">Minimo diario</label>
+                    <input id="autopilotMinDailyStories" name="minDailyStories" type="number" min="1" max="30" value="${autopilotSettings.minDailyStories}" />
+                  </div>
+                  <div class="field">
+                    <label for="autopilotMaxDailyStories">Maximo diario</label>
+                    <input id="autopilotMaxDailyStories" name="maxDailyStories" type="number" min="1" max="30" value="${autopilotSettings.maxDailyStories}" />
+                  </div>
+                </div>
+                <div class="bo-compact-grid">
+                  <div class="field">
+                    <label for="autopilotWindowStart">Desde</label>
+                    <input id="autopilotWindowStart" name="windowStartHour" type="number" min="0" max="23" value="${autopilotSettings.windowStartHour}" />
+                  </div>
+                  <div class="field">
+                    <label for="autopilotWindowEnd">Hasta</label>
+                    <input id="autopilotWindowEnd" name="windowEndHour" type="number" min="1" max="23" value="${autopilotSettings.windowEndHour}" />
+                  </div>
+                </div>
+                <div class="field">
+                  <label for="autopilotInstruction">Prompt base persistente</label>
+                  <textarea id="autopilotInstruction" name="instruction" rows="5">${currentErrorSafe(autopilotSettings.instruction)}</textarea>
+                </div>
+                <div class="field">
+                  <label for="autopilotTemporalPrompt">Prompt temporal</label>
+                  <textarea id="autopilotTemporalPrompt" name="temporalPrompt" rows="3">${currentErrorSafe(autopilotSettings.temporalPrompt)}</textarea>
+                </div>
+                <div class="bo-compact-grid">
+                  <div class="bo-toggle-row">
+                    <div><strong>Auto publicar web</strong><span>Promueve el ciclo a PUBLISHED cuando el plan cierre bien</span></div>
+                    <label><input type="checkbox" name="autoPublishSite" ${autopilotSettings.autoPublishSite ? "checked" : ""} /></label>
+                  </div>
+                  <div class="bo-toggle-row">
+                    <div><strong>Empujar a social</strong><span>Intenta publicar la mejor nota del ciclo en Instagram</span></div>
+                    <label><input type="checkbox" name="socialEnabled" ${autopilotSettings.socialEnabled ? "checked" : ""} /></label>
+                  </div>
+                </div>
+                <div class="bo-toggle-row">
+                  <div><strong>Permitir borrados</strong><span>Solo habilitalo si aceptas acciones destructivas durante el experimento</span></div>
+                  <label><input type="checkbox" name="allowDelete" ${autopilotSettings.allowDelete ? "checked" : ""} /></label>
+                </div>
+                <div class="bo-form-actions">
+                  <button class="primary" type="submit">Guardar IA editorial</button>
+                  <a class="button" href="/backoffice/news/new?studio=command">Abrir comando editorial</a>
+                </div>
+              </form>
+
+              <div class="bo-support-stack">
+                <div class="bo-soft-card">
+                  <h4>Estado operativo</h4>
+                  <p>Ultimo ciclo: <strong>${escapeHtml(autopilotLastRunLabel)}</strong></p>
+                  <p>${escapeHtml(autopilotSettings.lastRunSummary || "Sin corridas registradas todavia.")}</p>
+                  <div class="bo-kpi-row">
+                    <div class="bo-kpi">
+                      <span>Externas</span>
+                      <strong>${externalLinked}</strong>
+                    </div>
+                    <div class="bo-kpi">
+                      <span>Thin external</span>
+                      <strong>${thinExternal}</strong>
+                    </div>
+                    <div class="bo-kpi">
+                      <span>IG detectadas</span>
+                      <strong>${instagramConfiguredCount}</strong>
+                    </div>
+                    <div class="bo-kpi">
+                      <span>Encuestas live</span>
+                      <strong>${pollPublished}</strong>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="bo-soft-card">
+                  <h4>Guardrails activos</h4>
+                  <p>La IA usa el agente periodista si esta encendido, respeta la ventana horaria y no borra contenido salvo que lo habilites de forma explicita.</p>
+                  <div class="bo-note-box">
+                    <strong>Social actual</strong>
+                    <p>${escapeHtml(instagramAccountSummary)}</p>
+                  </div>
+                </div>
+
+                <form class="bo-soft-card" method="post" action="/backoffice/autopilot/run">
+                  <h4>Ejecutar ahora</h4>
+                  <p>Lanza una corrida inmediata con la configuracion actual para verificar prompts, cupo y publicacion social.</p>
+                  <button class="primary" type="submit">Correr ciclo IA ahora</button>
+                </form>
+              </div>
+            </div>
+          </article>
+
+          <article class="card">
+            <div class="split-title">
+              <div>
                 <div class="bo-kicker">Modulo de encuestas</div>
                 <h3 style="margin-top:10px;">Monitor Electoral y Conversion</h3>
               </div>
@@ -4343,79 +4467,6 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
           <div>
             <h3>Control de portada</h3>
             <p>Gestiona layout editorial, interacciones del front y comportamiento del agente periodista sin salir del dashboard.</p>
-          </div>
-
-          <div class="bo-side-card">
-            <div class="split-title">
-              <h3>Autopiloto editorial</h3>
-              <span class="pill ${autopilotSettings.enabled ? "gold" : "draft"}">${autopilotSettings.enabled ? autopilotModeLabel : "OFF"}</span>
-            </div>
-            <p>Ultimo ciclo: <strong>${escapeHtml(autopilotLastRunLabel)}</strong></p>
-            <p>${escapeHtml(autopilotSettings.lastRunSummary || "Sin corridas registradas todavia.")}</p>
-            <form method="post" action="/backoffice/settings/autopilot" style="display:grid; gap:12px; margin-top:12px;">
-              <div class="bo-toggle-row">
-                <div><strong>Activo</strong><span>Permite ejecutar ciclos autonomos desde panel o cron</span></div>
-                <label><input type="checkbox" name="enabled" ${autopilotSettings.enabled ? "checked" : ""} /></label>
-              </div>
-              <div class="field">
-                <label for="autopilotMode">Modo</label>
-                <select id="autopilotMode" name="mode">${EDITORIAL_AUTOPILOT_MODE_OPTIONS.map((option) => `<option value="${option.value}" ${autopilotSettings.mode === option.value ? "selected" : ""}>${option.label}</option>`).join("")}</select>
-              </div>
-              <div class="bo-compact-grid">
-                <div class="field">
-                  <label for="autopilotMaxStories">Notas max.</label>
-                  <input id="autopilotMaxStories" name="maxStoriesPerRun" type="number" min="1" max="20" value="${autopilotSettings.maxStoriesPerRun}" />
-                </div>
-                <div class="field">
-                  <label for="autopilotInternalizeLimit">Internalizar</label>
-                  <input id="autopilotInternalizeLimit" name="internalizeLimit" type="number" min="0" max="20" value="${autopilotSettings.internalizeLimit}" />
-                </div>
-              </div>
-              <div class="bo-compact-grid">
-                <div class="field">
-                  <label for="autopilotMinDailyStories">Min. por dia</label>
-                  <input id="autopilotMinDailyStories" name="minDailyStories" type="number" min="1" max="30" value="${autopilotSettings.minDailyStories}" />
-                </div>
-                <div class="field">
-                  <label for="autopilotMaxDailyStories">Max. por dia</label>
-                  <input id="autopilotMaxDailyStories" name="maxDailyStories" type="number" min="1" max="30" value="${autopilotSettings.maxDailyStories}" />
-                </div>
-              </div>
-              <div class="bo-compact-grid">
-                <div class="field">
-                  <label for="autopilotWindowStart">Desde</label>
-                  <input id="autopilotWindowStart" name="windowStartHour" type="number" min="0" max="23" value="${autopilotSettings.windowStartHour}" />
-                </div>
-                <div class="field">
-                  <label for="autopilotWindowEnd">Hasta</label>
-                  <input id="autopilotWindowEnd" name="windowEndHour" type="number" min="1" max="23" value="${autopilotSettings.windowEndHour}" />
-                </div>
-              </div>
-              <div class="field">
-                <label for="autopilotInstruction">Prompt base persistente</label>
-                <textarea id="autopilotInstruction" name="instruction" rows="5">${currentErrorSafe(autopilotSettings.instruction)}</textarea>
-              </div>
-              <div class="field">
-                <label for="autopilotTemporalPrompt">Prompt temporal (dia, semana, coyuntura)</label>
-                <textarea id="autopilotTemporalPrompt" name="temporalPrompt" rows="3">${currentErrorSafe(autopilotSettings.temporalPrompt)}</textarea>
-              </div>
-              <div class="bo-toggle-row">
-                <div><strong>Auto publicar web</strong><span>Pasa las notas del ciclo a PUBLISHED cuando el plan lo permita</span></div>
-                <label><input type="checkbox" name="autoPublishSite" ${autopilotSettings.autoPublishSite ? "checked" : ""} /></label>
-              </div>
-              <div class="bo-toggle-row">
-                <div><strong>Permitir borrados</strong><span>Habilita DELETE_NEWS solo si el plan lo pide de forma explicita</span></div>
-                <label><input type="checkbox" name="allowDelete" ${autopilotSettings.allowDelete ? "checked" : ""} /></label>
-              </div>
-              <div class="bo-toggle-row">
-                <div><strong>Empujar a social</strong><span>Tras el ciclo intenta publicar la mejor nota publicada en Instagram</span></div>
-                <label><input type="checkbox" name="socialEnabled" ${autopilotSettings.socialEnabled ? "checked" : ""} /></label>
-              </div>
-              <button class="primary" type="submit">Guardar autopiloto</button>
-            </form>
-            <form method="post" action="/backoffice/autopilot/run" style="margin-top:10px;">
-              <button class="button" type="submit">Ejecutar ciclo ahora</button>
-            </form>
           </div>
 
           <form id="theme-control" method="post" action="/backoffice/settings/theme" style="display:grid; gap:12px;">
