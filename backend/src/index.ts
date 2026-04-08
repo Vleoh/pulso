@@ -58,15 +58,25 @@ import {
 import { buildAiNewsContext } from "./newsContextWrapper";
 import {
   getAiResearchSettings,
+  getEditorialAutopilotSettings,
   getHomeEngagementSettings,
   getHomeTheme,
+  getInstagramPublishingSettings,
   HOME_THEME_OPTIONS,
   normalizeHomeTheme,
+  setEditorialAutopilotSettings,
   setAiResearchSettings,
   setHomeEngagementSettings,
   setHomeTheme,
+  setInstagramPublishingSettings,
+  EDITORIAL_AUTOPILOT_MODE_OPTIONS,
 } from "./siteSettings";
 import { buildCroppedImageUrl, buildNewsResearchContext, sourceFeedToText } from "./newsResearchAgent";
+import {
+  getInstagramConnectionSummary,
+  publishNewsToInstagram,
+  type InstagramManagedAccount,
+} from "./instagram";
 import {
   FIXED_CANDIDATE_OPTIONS,
   fixedCandidateTemplateForLabel,
@@ -146,18 +156,12 @@ function resolveFrontendPublicUrl(): string {
 
 const FALLBACK_FRONTEND_PUBLIC_URL = IS_PRODUCTION ? "https://pulso-pais.vercel.app" : "http://localhost:3000";
 const FRONTEND_PUBLIC_URL = resolveFrontendPublicUrl() || FALLBACK_FRONTEND_PUBLIC_URL;
+const AUTOPILOT_RUN_SECRET = readString(process.env.AUTOPILOT_RUN_SECRET);
 const CORS_ORIGINS = (process.env.CORS_ORIGINS ?? "*,http://localhost:3000,http://127.0.0.1:3000,https://*.vercel.app")
   .split(",")
   .map((origin) => origin.trim())
   .filter(Boolean);
-const BATCH_NEWS_FALLBACK_IMAGES = [
-  "https://images.unsplash.com/photo-1494526585095-c41746248156?auto=format&fit=crop&w=1600&q=80",
-  "https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?auto=format&fit=crop&w=1600&q=80",
-  "https://images.unsplash.com/photo-1454165804606-c3d57bc86b40?auto=format&fit=crop&w=1600&q=80",
-  "https://images.unsplash.com/photo-1444653389962-8149286c578a?auto=format&fit=crop&w=1600&q=80",
-  "https://images.unsplash.com/photo-1504711331083-9c895941bf81?auto=format&fit=crop&w=1600&q=80",
-  "https://images.unsplash.com/photo-1464207687429-7505649dae38?auto=format&fit=crop&w=1600&q=80",
-];
+const BATCH_NEWS_FALLBACK_IMAGES: string[] = [];
 const GALLERY_BLOCK_START = "[[GALERIA_FOTOS]]";
 const GALLERY_BLOCK_END = "[[/GALERIA_FOTOS]]";
 const GALLERY_BLOCK_REGEX = /\[\[GALERIA_FOTOS\]\][\s\S]*?\[\[\/GALERIA_FOTOS\]\]/gi;
@@ -272,12 +276,8 @@ function applyResearchImageTransform(
 }
 
 function fallbackResearchImage(seedText: string): string {
-  const source = seedText.trim().toLowerCase() || "pulso-pais";
-  let hash = 0;
-  for (const char of source) {
-    hash = (hash * 31 + char.charCodeAt(0)) % 2147483647;
-  }
-  return BATCH_NEWS_FALLBACK_IMAGES[Math.abs(hash) % BATCH_NEWS_FALLBACK_IMAGES.length] ?? BATCH_NEWS_FALLBACK_IMAGES[0] ?? "";
+  void seedText;
+  return "";
 }
 
 function appendGalleryBlockToBody(body: string | null | undefined, imageUrls: string[]): string | null {
@@ -1453,6 +1453,162 @@ async function executeEditorialCommandPlan(plan: EditorialCommandPlan, commandSt
   return resultLines.join(" | ");
 }
 
+async function maybePublishLatestNewsToInstagram(params: {
+  instagramSettings: Awaited<ReturnType<typeof getInstagramPublishingSettings>>;
+  cycleStartedAt: Date;
+}): Promise<string | null> {
+  const settings = params.instagramSettings;
+  if (!settings.enabled || !settings.accountId) {
+    return null;
+  }
+
+  const candidateNews = await prisma.news.findMany({
+    where: {
+      status: NewsStatus.PUBLISHED,
+      imageUrl: { not: null },
+      updatedAt: { gte: params.cycleStartedAt },
+    },
+    orderBy: [{ updatedAt: "desc" }],
+    take: Math.max(1, settings.maxPostsPerRun),
+  });
+
+  const target = candidateNews.find((item) => normalizeHttpUrl(item.imageUrl));
+  if (!target) {
+    return "No hubo una nota publicada con portada valida para Instagram en esta corrida.";
+  }
+
+  const result = await publishNewsToInstagram({
+    news: target,
+    preferences: settings,
+    frontendBaseUrl: normalizedFrontendBaseUrl(),
+  });
+
+  return result.permalink
+    ? `Instagram publicado en ${result.permalink}`
+    : `Instagram publicado. Media id ${result.mediaId}.`;
+}
+
+async function runEditorialAutopilotCycle(triggerLabel: string): Promise<AutopilotRunSummary> {
+  const [autopilotSettings, aiResearchSettings, instagramSettings] = await Promise.all([
+    getEditorialAutopilotSettings(prisma),
+    getAiResearchSettings(prisma),
+    getInstagramPublishingSettings(prisma),
+  ]);
+
+  if (!autopilotSettings.enabled) {
+    throw new Error("El autopiloto editorial esta desactivado en el dashboard.");
+  }
+  if (!aiResearchSettings.enabled) {
+    throw new Error("El agente periodista esta apagado. Activalo antes de correr el autopiloto.");
+  }
+
+  const nowParts = getBuenosAiresNowParts();
+  const windowStart = Math.max(0, Math.min(23, autopilotSettings.windowStartHour));
+  const windowEnd = Math.max(windowStart, Math.min(23, autopilotSettings.windowEndHour));
+  if (nowParts.hour < windowStart || nowParts.hour > windowEnd) {
+    throw new Error(`Fuera de ventana operativa. El autopiloto corre entre ${windowStart}:00 y ${windowEnd}:59.`);
+  }
+
+  let effectiveSettings = autopilotSettings;
+  if (autopilotSettings.todayDate !== nowParts.dateKey || autopilotSettings.todayTarget <= 0) {
+    effectiveSettings = await setEditorialAutopilotSettings(prisma, {
+      todayDate: nowParts.dateKey,
+      todayTarget: randomIntInRange(autopilotSettings.minDailyStories, autopilotSettings.maxDailyStories),
+    });
+  }
+
+  const alreadyProducedToday = await prisma.news.count({
+    where: {
+      aiReason: { contains: "IA" },
+      createdAt: {
+        gte: new Date(`${nowParts.dateKey}T00:00:00-03:00`),
+        lt: new Date(`${nowParts.dateKey}T23:59:59-03:00`),
+      },
+    },
+  });
+  const remainingToday = Math.max(0, effectiveSettings.todayTarget - alreadyProducedToday);
+  if (remainingToday <= 0) {
+    const summary = `Objetivo diario cubierto (${alreadyProducedToday}/${effectiveSettings.todayTarget})`;
+    await setEditorialAutopilotSettings(prisma, {
+      lastRunAt: new Date().toISOString(),
+      lastRunSummary: summary,
+    });
+    return {
+      executedAt: new Date().toISOString(),
+      planSummary: summary,
+      executionSummary: "Sin acciones nuevas.",
+      socialSummary: null,
+    };
+  }
+
+  const cycleStartedAt = new Date();
+  const context = await buildAiNewsContext(prisma);
+  const basePlan = applyAutopilotPolicyToPlan(
+    await planEditorialCommandWithAi(
+      {
+        instruction: buildAutopilotInstruction(effectiveSettings),
+        campaignLine: aiResearchSettings.campaignLine || null,
+        allowDestructive: effectiveSettings.allowDelete,
+      },
+      context.contextText,
+    ),
+    effectiveSettings,
+  );
+  const plan: EditorialCommandPlan = {
+    ...basePlan,
+    operations: basePlan.operations.map((operation) => {
+      if (operation.kind === "CREATE_STORIES") {
+        return {
+          ...operation,
+          count: Math.max(1, Math.min(operation.count, effectiveSettings.maxStoriesPerRun, remainingToday)),
+        };
+      }
+      if (operation.kind === "REWRITE_EXISTING") {
+        return {
+          ...operation,
+          limit: Math.max(1, Math.min(operation.limit, effectiveSettings.maxStoriesPerRun, remainingToday)),
+        };
+      }
+      if (operation.kind === "INTERNALIZE_EXTERNALS") {
+        return {
+          ...operation,
+          limit: Math.max(1, Math.min(operation.limit, effectiveSettings.internalizeLimit || remainingToday, remainingToday)),
+        };
+      }
+      return operation;
+    }),
+  };
+
+  const executionSummary = await executeEditorialCommandPlan(plan, {
+    instruction: `${triggerLabel}: ${buildAutopilotInstruction(effectiveSettings)}`,
+    campaignLine: aiResearchSettings.campaignLine,
+    allowDestructive: effectiveSettings.allowDelete,
+    autoExecuteSafe: true,
+  });
+
+  let socialSummary: string | null = null;
+  if (effectiveSettings.socialEnabled) {
+    socialSummary = await maybePublishLatestNewsToInstagram({
+      instagramSettings,
+      cycleStartedAt,
+    });
+  }
+
+  const result: AutopilotRunSummary = {
+    executedAt: cycleStartedAt.toISOString(),
+    planSummary: plan.summary,
+    executionSummary,
+    socialSummary,
+  };
+
+  await setEditorialAutopilotSettings(prisma, {
+    lastRunAt: result.executedAt,
+    lastRunSummary: [result.planSummary, result.executionSummary, result.socialSummary].filter(Boolean).join(" | "),
+  });
+
+  return result;
+}
+
 function buildPollAssistInput(raw: Record<string, unknown>) {
   const brief = readString(raw.brief);
   if (brief.length < 12) {
@@ -1578,10 +1734,8 @@ function clampInteger(rawValue: unknown, min: number, max: number, fallback: num
 }
 
 function fallbackBatchImageByIndex(index: number): string {
-  if (BATCH_NEWS_FALLBACK_IMAGES.length === 0) {
-    return "";
-  }
-  return BATCH_NEWS_FALLBACK_IMAGES[Math.abs(index) % BATCH_NEWS_FALLBACK_IMAGES.length] || BATCH_NEWS_FALLBACK_IMAGES[0] || "";
+  void index;
+  return "";
 }
 
 async function issueUserSession(userId: string, response: Response): Promise<{ expiresAt: Date }> {
@@ -1955,6 +2109,13 @@ type EditorialCommandFormState = {
   preview?: EditorialCommandPreviewState | null;
 };
 
+type AutopilotRunSummary = {
+  executedAt: string;
+  planSummary: string;
+  executionSummary: string;
+  socialSummary: string | null;
+};
+
 function defaultBatchNewsFormState(): BatchNewsFormState {
   return {
     totalItems: 1,
@@ -2105,6 +2266,116 @@ function previewEditorialCommandPlan(plan: EditorialCommandPlan): EditorialComma
     })),
     model: plan.model,
   };
+}
+
+function buildAutopilotInstruction(settings: Awaited<ReturnType<typeof getEditorialAutopilotSettings>>): string {
+  const guidance = [
+    settings.instruction,
+    settings.temporalPrompt,
+    `Limite operativo por corrida: hasta ${settings.maxStoriesPerRun} piezas nuevas o reformuladas.`,
+    settings.internalizeLimit > 0
+      ? `Si detectas thin external o enlaces a portales, internaliza hasta ${settings.internalizeLimit} primero.`
+      : "No internalices notas externas en esta corrida salvo que la instruccion lo exija.",
+    settings.autoPublishSite
+      ? "Si la evidencia y la portada son suficientes, deja las notas listas para PUBLISHED."
+      : "Trabaja conservadoramente y deja las notas nuevas en DRAFT.",
+    settings.allowDelete
+      ? "Puedes proponer depuracion o borrado si esta claramente justificado."
+      : "No borres contenidos; si ves ruido, reescribe o actualiza en lugar de eliminar.",
+    "Prioriza novedad, impacto nacional, continuidad federal y claridad editorial.",
+    "No dejes enlaces externos como destino principal si puedes internalizar la historia.",
+  ];
+
+  return guidance.filter(Boolean).join(" ");
+}
+
+function getBuenosAiresNowParts(baseDate = new Date()): { dateKey: string; hour: number } {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Buenos_Aires",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    hourCycle: "h23",
+  });
+  const parts = formatter.formatToParts(baseDate);
+  const byType = new Map(parts.map((item) => [item.type, item.value]));
+  const year = byType.get("year") ?? "0000";
+  const month = byType.get("month") ?? "01";
+  const day = byType.get("day") ?? "01";
+  const hour = Number(byType.get("hour") ?? "0");
+  return {
+    dateKey: `${year}-${month}-${day}`,
+    hour,
+  };
+}
+
+function randomIntInRange(minValue: number, maxValue: number): number {
+  const min = Math.min(minValue, maxValue);
+  const max = Math.max(minValue, maxValue);
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function applyAutopilotPolicyToPlan(
+  plan: EditorialCommandPlan,
+  settings: Awaited<ReturnType<typeof getEditorialAutopilotSettings>>,
+): EditorialCommandPlan {
+  const maxStories = Math.max(1, settings.maxStoriesPerRun);
+  const internalizeLimit = Math.max(0, settings.internalizeLimit);
+  const publishStatus = settings.autoPublishSite ? NewsStatus.PUBLISHED : NewsStatus.DRAFT;
+
+  return {
+    ...plan,
+    destructive: settings.allowDelete ? plan.destructive : false,
+    requiresConfirmation: settings.allowDelete ? plan.requiresConfirmation : false,
+    operations: plan.operations
+      .filter((operation) => settings.allowDelete || operation.kind !== "DELETE_NEWS")
+      .map((operation) => {
+        if (operation.kind === "CREATE_STORIES") {
+          return {
+            ...operation,
+            count: Math.max(1, Math.min(operation.count, maxStories)),
+            publishStatus,
+            requireImageUrl: true,
+            useResearchAgent: true,
+            includeCampaignLine: true,
+          } satisfies EditorialCommandOperation;
+        }
+        if (operation.kind === "INTERNALIZE_EXTERNALS") {
+          return {
+            ...operation,
+            limit: Math.max(1, Math.min(operation.limit, internalizeLimit || maxStories)),
+            publishStatus,
+            includeCampaignLine: true,
+            deleteDuplicates: settings.allowDelete ? operation.deleteDuplicates : false,
+          } satisfies EditorialCommandOperation;
+        }
+        if (operation.kind === "REWRITE_EXISTING") {
+          return {
+            ...operation,
+            limit: Math.max(1, Math.min(operation.limit, maxStories)),
+            publishStatus,
+            requireImageUrl: true,
+            useResearchAgent: true,
+            includeCampaignLine: true,
+          } satisfies EditorialCommandOperation;
+        }
+        return operation;
+      }),
+  };
+}
+
+function summarizeInstagramAccounts(accounts: InstagramManagedAccount[]): string {
+  if (accounts.length === 0) {
+    return "Sin cuentas de Instagram detectadas por el token actual.";
+  }
+  return accounts
+    .slice(0, 4)
+    .map((item) => {
+      const username = item.instagramUsername ? `@${item.instagramUsername}` : item.instagramAccountId;
+      return `${username} (${item.pageName})`;
+    })
+    .join(" | ");
 }
 
 function renderBatchNewsForm(params: {
@@ -2378,6 +2649,42 @@ app.get("/api/version", (_request, response) => {
 app.get("/api/deploy/status", async (_request, response, next) => {
   try {
     response.json(await buildDeployStatusPayload());
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/autopilot/status", async (_request, response, next) => {
+  try {
+    const [autopilot, instagram] = await Promise.all([
+      getEditorialAutopilotSettings(prisma),
+      getInstagramPublishingSettings(prisma),
+    ]);
+    response.json({
+      autopilot,
+      instagram: {
+        ...instagram,
+        captionTemplate: undefined,
+      },
+      configured: {
+        autopilotSecret: Boolean(AUTOPILOT_RUN_SECRET),
+        instagramToken: Boolean(readString(process.env.INSTAGRAM_GRAPH_ACCESS_TOKEN)),
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/autopilot/run", async (request, response, next) => {
+  try {
+    const secret = readString(request.query.secret);
+    if (!AUTOPILOT_RUN_SECRET || secret !== AUTOPILOT_RUN_SECRET) {
+      response.status(403).json({ error: "Secret invalido para autopiloto." });
+      return;
+    }
+    const result = await runEditorialAutopilotCycle("cron");
+    response.json({ ok: true, result });
   } catch (error) {
     next(error);
   }
@@ -3821,7 +4128,16 @@ app.get("/backoffice/ai/health", boGuard, async (_request, response, next) => {
 
 app.get("/backoffice", boGuard, async (request, response, next) => {
   try {
-    const [news, homeTheme, engagementSettings, aiResearchSettings, pollRows, deployStatus] = await Promise.all([
+    const [
+      news,
+      homeTheme,
+      engagementSettings,
+      aiResearchSettings,
+      pollRows,
+      deployStatus,
+      autopilotSettings,
+      instagramSettings,
+    ] = await Promise.all([
       prisma.news.findMany({
         orderBy: [{ updatedAt: "desc" }],
         take: 300,
@@ -3831,7 +4147,20 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
       getAiResearchSettings(prisma),
       buildBackofficePollRows(),
       buildDeployStatusPayload(),
+      getEditorialAutopilotSettings(prisma),
+      getInstagramPublishingSettings(prisma),
     ]);
+    let instagramConnectionError: string | null = null;
+    let instagramConnection: Awaited<ReturnType<typeof getInstagramConnectionSummary>> = {
+      configured: false,
+      accounts: [],
+      selectedAccount: null,
+    };
+    try {
+      instagramConnection = await getInstagramConnectionSummary(instagramSettings);
+    } catch (error) {
+      instagramConnectionError = (error as Error).message;
+    }
 
     const themeOptions = HOME_THEME_OPTIONS.map(
       (option) =>
@@ -3850,6 +4179,16 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
     const deployStatusClass =
       deployStatus.sync === "synced" ? "is-synced" : deployStatus.sync === "drift" ? "is-drift" : "is-unknown";
     const frontendVersionLabel = deployStatus.frontend?.versionLabel ?? "Sin respuesta publica";
+    const autopilotModeLabel =
+      EDITORIAL_AUTOPILOT_MODE_OPTIONS.find((option) => option.value === autopilotSettings.mode)?.label ??
+      autopilotSettings.mode;
+    const autopilotLastRunLabel = autopilotSettings.lastRunAt
+      ? new Date(autopilotSettings.lastRunAt).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" })
+      : "Nunca";
+    const instagramAccountSummary = instagramConnectionError
+      ? `Error Meta: ${instagramConnectionError}`
+      : summarizeInstagramAccounts(instagramConnection.accounts);
+    const instagramConfiguredCount = instagramConnection.accounts.length;
     const recentNewsRows = news
       .slice(0, 4)
       .map((item) => {
@@ -3903,6 +4242,8 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
         <article class="bo-stat-card"><span>Thin external</span><strong>${thinExternal}</strong></article>
         <article class="bo-stat-card"><span>Encuestas live</span><strong>${pollPublished}</strong></article>
         <article class="bo-stat-card"><span>Votos totales</span><strong>${pollVotes}</strong></article>
+        <article class="bo-stat-card ${autopilotSettings.enabled ? "emphasis" : ""}"><span>Autopiloto</span><strong>${autopilotSettings.enabled ? autopilotModeLabel : "OFF"}</strong></article>
+        <article class="bo-stat-card"><span>IG detectadas</span><strong>${instagramConfiguredCount}</strong></article>
       </section>
 
       <section class="bo-module-grid">
@@ -3958,6 +4299,13 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
                 <strong>Comando editorial</strong>
                 <small>Planifica y ejecuta crear, editar, borrar o internalizar con mitigaciones.</small>
               </a>
+              <form class="bo-action-tile" method="post" action="/backoffice/autopilot/run" style="padding:0; border:0; background:none;">
+                <button type="submit" class="bo-action-tile" style="width:100%; text-align:left;">
+                  <span class="bo-action-icon">AP</span>
+                  <strong>Ejecutar ciclo IA</strong>
+                  <small>Corre investigacion, internalizacion, publicacion web y social segun tu configuracion.</small>
+                </button>
+              </form>
               <a class="bo-action-tile" href="/backoffice/users">
                 <span class="bo-action-icon">US</span>
                 <strong>Ver usuarios</strong>
@@ -3995,6 +4343,79 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
           <div>
             <h3>Control de portada</h3>
             <p>Gestiona layout editorial, interacciones del front y comportamiento del agente periodista sin salir del dashboard.</p>
+          </div>
+
+          <div class="bo-side-card">
+            <div class="split-title">
+              <h3>Autopiloto editorial</h3>
+              <span class="pill ${autopilotSettings.enabled ? "gold" : "draft"}">${autopilotSettings.enabled ? autopilotModeLabel : "OFF"}</span>
+            </div>
+            <p>Ultimo ciclo: <strong>${escapeHtml(autopilotLastRunLabel)}</strong></p>
+            <p>${escapeHtml(autopilotSettings.lastRunSummary || "Sin corridas registradas todavia.")}</p>
+            <form method="post" action="/backoffice/settings/autopilot" style="display:grid; gap:12px; margin-top:12px;">
+              <div class="bo-toggle-row">
+                <div><strong>Activo</strong><span>Permite ejecutar ciclos autonomos desde panel o cron</span></div>
+                <label><input type="checkbox" name="enabled" ${autopilotSettings.enabled ? "checked" : ""} /></label>
+              </div>
+              <div class="field">
+                <label for="autopilotMode">Modo</label>
+                <select id="autopilotMode" name="mode">${EDITORIAL_AUTOPILOT_MODE_OPTIONS.map((option) => `<option value="${option.value}" ${autopilotSettings.mode === option.value ? "selected" : ""}>${option.label}</option>`).join("")}</select>
+              </div>
+              <div class="bo-compact-grid">
+                <div class="field">
+                  <label for="autopilotMaxStories">Notas max.</label>
+                  <input id="autopilotMaxStories" name="maxStoriesPerRun" type="number" min="1" max="20" value="${autopilotSettings.maxStoriesPerRun}" />
+                </div>
+                <div class="field">
+                  <label for="autopilotInternalizeLimit">Internalizar</label>
+                  <input id="autopilotInternalizeLimit" name="internalizeLimit" type="number" min="0" max="20" value="${autopilotSettings.internalizeLimit}" />
+                </div>
+              </div>
+              <div class="bo-compact-grid">
+                <div class="field">
+                  <label for="autopilotMinDailyStories">Min. por dia</label>
+                  <input id="autopilotMinDailyStories" name="minDailyStories" type="number" min="1" max="30" value="${autopilotSettings.minDailyStories}" />
+                </div>
+                <div class="field">
+                  <label for="autopilotMaxDailyStories">Max. por dia</label>
+                  <input id="autopilotMaxDailyStories" name="maxDailyStories" type="number" min="1" max="30" value="${autopilotSettings.maxDailyStories}" />
+                </div>
+              </div>
+              <div class="bo-compact-grid">
+                <div class="field">
+                  <label for="autopilotWindowStart">Desde</label>
+                  <input id="autopilotWindowStart" name="windowStartHour" type="number" min="0" max="23" value="${autopilotSettings.windowStartHour}" />
+                </div>
+                <div class="field">
+                  <label for="autopilotWindowEnd">Hasta</label>
+                  <input id="autopilotWindowEnd" name="windowEndHour" type="number" min="1" max="23" value="${autopilotSettings.windowEndHour}" />
+                </div>
+              </div>
+              <div class="field">
+                <label for="autopilotInstruction">Prompt base persistente</label>
+                <textarea id="autopilotInstruction" name="instruction" rows="5">${currentErrorSafe(autopilotSettings.instruction)}</textarea>
+              </div>
+              <div class="field">
+                <label for="autopilotTemporalPrompt">Prompt temporal (dia, semana, coyuntura)</label>
+                <textarea id="autopilotTemporalPrompt" name="temporalPrompt" rows="3">${currentErrorSafe(autopilotSettings.temporalPrompt)}</textarea>
+              </div>
+              <div class="bo-toggle-row">
+                <div><strong>Auto publicar web</strong><span>Pasa las notas del ciclo a PUBLISHED cuando el plan lo permita</span></div>
+                <label><input type="checkbox" name="autoPublishSite" ${autopilotSettings.autoPublishSite ? "checked" : ""} /></label>
+              </div>
+              <div class="bo-toggle-row">
+                <div><strong>Permitir borrados</strong><span>Habilita DELETE_NEWS solo si el plan lo pide de forma explicita</span></div>
+                <label><input type="checkbox" name="allowDelete" ${autopilotSettings.allowDelete ? "checked" : ""} /></label>
+              </div>
+              <div class="bo-toggle-row">
+                <div><strong>Empujar a social</strong><span>Tras el ciclo intenta publicar la mejor nota publicada en Instagram</span></div>
+                <label><input type="checkbox" name="socialEnabled" ${autopilotSettings.socialEnabled ? "checked" : ""} /></label>
+              </div>
+              <button class="primary" type="submit">Guardar autopiloto</button>
+            </form>
+            <form method="post" action="/backoffice/autopilot/run" style="margin-top:10px;">
+              <button class="button" type="submit">Ejecutar ciclo ahora</button>
+            </form>
           </div>
 
           <form id="theme-control" method="post" action="/backoffice/settings/theme" style="display:grid; gap:12px;">
@@ -4061,6 +4482,44 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
             </div>
             <button class="primary" type="submit">Guardar agente periodista</button>
             <p>Notas con fuente externa detectadas: <strong>${externalLinked}</strong>. Candidatas a internalizacion inmediata: <strong>${thinExternal}</strong>.</p>
+          </form>
+
+          <form method="post" action="/backoffice/settings/instagram" style="display:grid; gap:12px;">
+            <div>
+              <h3 style="margin-bottom:8px;">Instagram Graph</h3>
+              <p>${escapeHtml(instagramAccountSummary)}</p>
+            </div>
+            <div class="bo-toggle-row">
+              <div><strong>Activo</strong><span>Publica desde el backend con el token de Meta configurado</span></div>
+              <label><input type="checkbox" name="enabled" ${instagramSettings.enabled ? "checked" : ""} /></label>
+            </div>
+            <div class="field">
+              <label for="instagramAccountId">Instagram account id</label>
+              <input id="instagramAccountId" name="accountId" value="${currentErrorSafe(instagramSettings.accountId)}" />
+            </div>
+            <div class="field">
+              <label for="instagramUsername">Usuario esperado</label>
+              <input id="instagramUsername" name="username" value="${currentErrorSafe(instagramSettings.username)}" />
+            </div>
+            <div class="field">
+              <label for="instagramCaptionTemplate">Plantilla caption</label>
+              <textarea id="instagramCaptionTemplate" name="captionTemplate" rows="5">${currentErrorSafe(instagramSettings.captionTemplate)}</textarea>
+            </div>
+            <div class="bo-compact-grid">
+              <div class="bo-toggle-row">
+                <div><strong>Link sitio</strong><span>Inserta URL de la nota</span></div>
+                <label><input type="checkbox" name="includeSiteUrl" ${instagramSettings.includeSiteUrl ? "checked" : ""} /></label>
+              </div>
+              <div class="bo-toggle-row">
+                <div><strong>Credito fuente</strong><span>Menciona fuente base si existe</span></div>
+                <label><input type="checkbox" name="includeSourceCredit" ${instagramSettings.includeSourceCredit ? "checked" : ""} /></label>
+              </div>
+            </div>
+            <div class="field">
+              <label for="instagramMaxPostsPerRun">Posts max. por corrida</label>
+              <input id="instagramMaxPostsPerRun" name="maxPostsPerRun" type="number" min="1" max="5" value="${instagramSettings.maxPostsPerRun}" />
+            </div>
+            <button class="primary" type="submit">Guardar Instagram</button>
           </form>
         </aside>
       </section>
@@ -4156,6 +4615,73 @@ app.post("/backoffice/settings/ai-research", boGuard, async (request, response, 
       )}`,
     );
   } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/backoffice/settings/autopilot", boGuard, async (request, response, next) => {
+  try {
+    const minDailyStories = Number(readString(request.body.minDailyStories) || "4");
+    const maxDailyStories = Number(readString(request.body.maxDailyStories) || "10");
+    const settings = await setEditorialAutopilotSettings(prisma, {
+      enabled: readBoolean(request.body.enabled),
+      mode: readString(request.body.mode) as Awaited<ReturnType<typeof getEditorialAutopilotSettings>>["mode"],
+      instruction: readString(request.body.instruction),
+      temporalPrompt: readString(request.body.temporalPrompt),
+      maxStoriesPerRun: Number(readString(request.body.maxStoriesPerRun) || "4"),
+      internalizeLimit: Number(readString(request.body.internalizeLimit) || "4"),
+      minDailyStories: Math.min(minDailyStories, maxDailyStories),
+      maxDailyStories: Math.max(minDailyStories, maxDailyStories),
+      windowStartHour: Number(readString(request.body.windowStartHour) || "8"),
+      windowEndHour: Number(readString(request.body.windowEndHour) || "23"),
+      autoPublishSite: readBoolean(request.body.autoPublishSite),
+      allowDelete: readBoolean(request.body.allowDelete),
+      socialEnabled: readBoolean(request.body.socialEnabled),
+    });
+    response.redirect(
+      `/backoffice?ok=${encodeURIComponent(
+        `Autopiloto actualizado - estado:${settings.enabled ? "ON" : "OFF"} modo:${settings.mode} diario:${settings.minDailyStories}-${settings.maxDailyStories} ventana:${settings.windowStartHour}-${settings.windowEndHour}h social:${settings.socialEnabled ? "ON" : "OFF"}`,
+      )}`,
+    );
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/backoffice/settings/instagram", boGuard, async (request, response, next) => {
+  try {
+    const settings = await setInstagramPublishingSettings(prisma, {
+      enabled: readBoolean(request.body.enabled),
+      accountId: readString(request.body.accountId),
+      username: readString(request.body.username),
+      captionTemplate: readString(request.body.captionTemplate),
+      includeSiteUrl: readBoolean(request.body.includeSiteUrl),
+      includeSourceCredit: readBoolean(request.body.includeSourceCredit),
+      maxPostsPerRun: Number(readString(request.body.maxPostsPerRun) || "1"),
+    });
+    response.redirect(
+      `/backoffice?ok=${encodeURIComponent(
+        `Instagram actualizado - estado:${settings.enabled ? "ON" : "OFF"} cuenta:${settings.accountId || "sin seleccionar"} max:${settings.maxPostsPerRun}`,
+      )}`,
+    );
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/backoffice/autopilot/run", boGuard, async (_request, response, next) => {
+  try {
+    const result = await runEditorialAutopilotCycle("panel");
+    response.redirect(
+      `/backoffice?ok=${encodeURIComponent(
+        `Ciclo IA ejecutado - ${[result.planSummary, result.executionSummary, result.socialSummary].filter(Boolean).join(" | ")}`,
+      )}`,
+    );
+  } catch (error) {
+    if (error instanceof Error) {
+      response.redirect(`/backoffice?ok=${encodeURIComponent(`Error autopiloto - ${error.message}`)}`);
+      return;
+    }
     next(error);
   }
 });

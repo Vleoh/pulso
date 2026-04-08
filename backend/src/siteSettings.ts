@@ -10,6 +10,30 @@ export const AI_RESEARCH_CROP_WIDTH_KEY = "ai_research_crop_width";
 export const AI_RESEARCH_CROP_HEIGHT_KEY = "ai_research_crop_height";
 export const AI_RESEARCH_INTERNALIZE_KEY = "ai_research_internalize";
 export const AI_RESEARCH_CAMPAIGN_LINE_KEY = "ai_research_campaign_line";
+export const EDITORIAL_AUTOPILOT_ENABLED_KEY = "editorial_autopilot_enabled";
+export const EDITORIAL_AUTOPILOT_MODE_KEY = "editorial_autopilot_mode";
+export const EDITORIAL_AUTOPILOT_INSTRUCTION_KEY = "editorial_autopilot_instruction";
+export const EDITORIAL_AUTOPILOT_MAX_STORIES_KEY = "editorial_autopilot_max_stories";
+export const EDITORIAL_AUTOPILOT_INTERNALIZE_LIMIT_KEY = "editorial_autopilot_internalize_limit";
+export const EDITORIAL_AUTOPILOT_AUTO_PUBLISH_KEY = "editorial_autopilot_auto_publish";
+export const EDITORIAL_AUTOPILOT_ALLOW_DELETE_KEY = "editorial_autopilot_allow_delete";
+export const EDITORIAL_AUTOPILOT_SOCIAL_ENABLED_KEY = "editorial_autopilot_social_enabled";
+export const EDITORIAL_AUTOPILOT_MIN_DAILY_KEY = "editorial_autopilot_min_daily";
+export const EDITORIAL_AUTOPILOT_MAX_DAILY_KEY = "editorial_autopilot_max_daily";
+export const EDITORIAL_AUTOPILOT_WINDOW_START_KEY = "editorial_autopilot_window_start";
+export const EDITORIAL_AUTOPILOT_WINDOW_END_KEY = "editorial_autopilot_window_end";
+export const EDITORIAL_AUTOPILOT_TEMPORAL_PROMPT_KEY = "editorial_autopilot_temporal_prompt";
+export const EDITORIAL_AUTOPILOT_TODAY_DATE_KEY = "editorial_autopilot_today_date";
+export const EDITORIAL_AUTOPILOT_TODAY_TARGET_KEY = "editorial_autopilot_today_target";
+export const EDITORIAL_AUTOPILOT_LAST_RUN_AT_KEY = "editorial_autopilot_last_run_at";
+export const EDITORIAL_AUTOPILOT_LAST_RUN_SUMMARY_KEY = "editorial_autopilot_last_run_summary";
+export const INSTAGRAM_PUBLISHING_ENABLED_KEY = "instagram_publishing_enabled";
+export const INSTAGRAM_ACCOUNT_ID_KEY = "instagram_account_id";
+export const INSTAGRAM_USERNAME_KEY = "instagram_username";
+export const INSTAGRAM_CAPTION_TEMPLATE_KEY = "instagram_caption_template";
+export const INSTAGRAM_INCLUDE_SITE_URL_KEY = "instagram_include_site_url";
+export const INSTAGRAM_INCLUDE_SOURCE_CREDIT_KEY = "instagram_include_source_credit";
+export const INSTAGRAM_MAX_POSTS_PER_RUN_KEY = "instagram_max_posts_per_run";
 
 export const HOME_THEME_OPTIONS = [
   { value: "editorial", label: "Cronista Dorado (default)" },
@@ -48,6 +72,44 @@ export type AiResearchSettings = {
   campaignLine: string;
 };
 
+export const EDITORIAL_AUTOPILOT_MODE_OPTIONS = [
+  { value: "MANUAL", label: "Manual" },
+  { value: "HYBRID", label: "Hibrido" },
+  { value: "AUTO", label: "Autonomo" },
+] as const;
+
+export type EditorialAutopilotMode = (typeof EDITORIAL_AUTOPILOT_MODE_OPTIONS)[number]["value"];
+
+export type EditorialAutopilotSettings = {
+  enabled: boolean;
+  mode: EditorialAutopilotMode;
+  instruction: string;
+  temporalPrompt: string;
+  maxStoriesPerRun: number;
+  internalizeLimit: number;
+  minDailyStories: number;
+  maxDailyStories: number;
+  windowStartHour: number;
+  windowEndHour: number;
+  autoPublishSite: boolean;
+  allowDelete: boolean;
+  socialEnabled: boolean;
+  todayDate: string;
+  todayTarget: number;
+  lastRunAt: string | null;
+  lastRunSummary: string;
+};
+
+export type InstagramPublishingSettings = {
+  enabled: boolean;
+  accountId: string;
+  username: string;
+  captionTemplate: string;
+  includeSiteUrl: boolean;
+  includeSourceCredit: boolean;
+  maxPostsPerRun: number;
+};
+
 const DEFAULT_HOME_ENGAGEMENT_SETTINGS: HomeEngagementSettings = {
   commentsEnabled: true,
   reactionsEnabled: true,
@@ -63,6 +125,38 @@ const DEFAULT_AI_RESEARCH_SETTINGS: AiResearchSettings = {
   cropHeight: 675,
   internalizeSourceLinks: true,
   campaignLine: "",
+};
+
+const DEFAULT_EDITORIAL_AUTOPILOT_SETTINGS: EditorialAutopilotSettings = {
+  enabled: false,
+  mode: "HYBRID",
+  instruction:
+    "Investiga la agenda politica argentina mas novedosa, internaliza notas externas relevantes como noticias propias de Pulso Pais y crea nuevas piezas con portada valida, criterio federal y foco en impacto real.",
+  temporalPrompt: "",
+  maxStoriesPerRun: 4,
+  internalizeLimit: 4,
+  minDailyStories: 4,
+  maxDailyStories: 10,
+  windowStartHour: 8,
+  windowEndHour: 23,
+  autoPublishSite: false,
+  allowDelete: false,
+  socialEnabled: false,
+  todayDate: "",
+  todayTarget: 0,
+  lastRunAt: null,
+  lastRunSummary: "",
+};
+
+const DEFAULT_INSTAGRAM_PUBLISHING_SETTINGS: InstagramPublishingSettings = {
+  enabled: false,
+  accountId: "",
+  username: "",
+  captionTemplate:
+    "Pulso Pais | {title}\n\n{excerpt}\n\n{cta}\n{url}\n\n{hashtags}",
+  includeSiteUrl: true,
+  includeSourceCredit: true,
+  maxPostsPerRun: 1,
 };
 
 export function normalizeHomeTheme(value: string): HomeTheme {
@@ -120,6 +214,21 @@ function normalizeCampaignLine(value: string | null | undefined): string {
     return "";
   }
   return value.replace(/\s+/g, " ").trim().slice(0, 260);
+}
+
+function normalizeShortText(value: string | null | undefined, fallback = "", maxLength = 2000): string {
+  if (!value) {
+    return fallback;
+  }
+  return value.replace(/\s+/g, " ").trim().slice(0, maxLength);
+}
+
+function normalizeAutopilotMode(value: string | null | undefined, fallback: EditorialAutopilotMode): EditorialAutopilotMode {
+  const normalized = (value ?? "").trim().toUpperCase();
+  if (normalized === "MANUAL" || normalized === "HYBRID" || normalized === "AUTO") {
+    return normalized;
+  }
+  return fallback;
 }
 
 export async function getHomeTheme(prisma: PrismaLike): Promise<HomeTheme> {
@@ -299,6 +408,342 @@ export async function setAiResearchSettings(
       where: { key: AI_RESEARCH_CAMPAIGN_LINE_KEY },
       update: { value: next.campaignLine },
       create: { key: AI_RESEARCH_CAMPAIGN_LINE_KEY, value: next.campaignLine },
+    }),
+  ]);
+
+  return next;
+}
+
+export async function getEditorialAutopilotSettings(prisma: PrismaLike): Promise<EditorialAutopilotSettings> {
+  const delegate = siteSettingDelegate(prisma);
+  const [
+    enabled,
+    mode,
+    instruction,
+    temporalPrompt,
+    maxStories,
+    internalizeLimit,
+    minDailyStories,
+    maxDailyStories,
+    windowStartHour,
+    windowEndHour,
+    autoPublish,
+    allowDelete,
+    socialEnabled,
+    todayDate,
+    todayTarget,
+    lastRunAt,
+    lastRunSummary,
+  ] = await Promise.all([
+    delegate.findUnique({ where: { key: EDITORIAL_AUTOPILOT_ENABLED_KEY }, select: { value: true } }),
+    delegate.findUnique({ where: { key: EDITORIAL_AUTOPILOT_MODE_KEY }, select: { value: true } }),
+    delegate.findUnique({ where: { key: EDITORIAL_AUTOPILOT_INSTRUCTION_KEY }, select: { value: true } }),
+    delegate.findUnique({ where: { key: EDITORIAL_AUTOPILOT_TEMPORAL_PROMPT_KEY }, select: { value: true } }),
+    delegate.findUnique({ where: { key: EDITORIAL_AUTOPILOT_MAX_STORIES_KEY }, select: { value: true } }),
+    delegate.findUnique({ where: { key: EDITORIAL_AUTOPILOT_INTERNALIZE_LIMIT_KEY }, select: { value: true } }),
+    delegate.findUnique({ where: { key: EDITORIAL_AUTOPILOT_MIN_DAILY_KEY }, select: { value: true } }),
+    delegate.findUnique({ where: { key: EDITORIAL_AUTOPILOT_MAX_DAILY_KEY }, select: { value: true } }),
+    delegate.findUnique({ where: { key: EDITORIAL_AUTOPILOT_WINDOW_START_KEY }, select: { value: true } }),
+    delegate.findUnique({ where: { key: EDITORIAL_AUTOPILOT_WINDOW_END_KEY }, select: { value: true } }),
+    delegate.findUnique({ where: { key: EDITORIAL_AUTOPILOT_AUTO_PUBLISH_KEY }, select: { value: true } }),
+    delegate.findUnique({ where: { key: EDITORIAL_AUTOPILOT_ALLOW_DELETE_KEY }, select: { value: true } }),
+    delegate.findUnique({ where: { key: EDITORIAL_AUTOPILOT_SOCIAL_ENABLED_KEY }, select: { value: true } }),
+    delegate.findUnique({ where: { key: EDITORIAL_AUTOPILOT_TODAY_DATE_KEY }, select: { value: true } }),
+    delegate.findUnique({ where: { key: EDITORIAL_AUTOPILOT_TODAY_TARGET_KEY }, select: { value: true } }),
+    delegate.findUnique({ where: { key: EDITORIAL_AUTOPILOT_LAST_RUN_AT_KEY }, select: { value: true } }),
+    delegate.findUnique({ where: { key: EDITORIAL_AUTOPILOT_LAST_RUN_SUMMARY_KEY }, select: { value: true } }),
+  ]);
+
+  return {
+    enabled: normalizeBooleanSetting(enabled?.value, DEFAULT_EDITORIAL_AUTOPILOT_SETTINGS.enabled),
+    mode: normalizeAutopilotMode(mode?.value, DEFAULT_EDITORIAL_AUTOPILOT_SETTINGS.mode),
+    instruction: normalizeShortText(
+      instruction?.value,
+      DEFAULT_EDITORIAL_AUTOPILOT_SETTINGS.instruction,
+      2400,
+    ),
+    temporalPrompt: normalizeShortText(temporalPrompt?.value, "", 1000),
+    maxStoriesPerRun: normalizeNumberSetting(
+      maxStories?.value,
+      DEFAULT_EDITORIAL_AUTOPILOT_SETTINGS.maxStoriesPerRun,
+      1,
+      20,
+    ),
+    internalizeLimit: normalizeNumberSetting(
+      internalizeLimit?.value,
+      DEFAULT_EDITORIAL_AUTOPILOT_SETTINGS.internalizeLimit,
+      0,
+      20,
+    ),
+    minDailyStories: normalizeNumberSetting(
+      minDailyStories?.value,
+      DEFAULT_EDITORIAL_AUTOPILOT_SETTINGS.minDailyStories,
+      1,
+      30,
+    ),
+    maxDailyStories: normalizeNumberSetting(
+      maxDailyStories?.value,
+      DEFAULT_EDITORIAL_AUTOPILOT_SETTINGS.maxDailyStories,
+      1,
+      30,
+    ),
+    windowStartHour: normalizeNumberSetting(
+      windowStartHour?.value,
+      DEFAULT_EDITORIAL_AUTOPILOT_SETTINGS.windowStartHour,
+      0,
+      23,
+    ),
+    windowEndHour: normalizeNumberSetting(
+      windowEndHour?.value,
+      DEFAULT_EDITORIAL_AUTOPILOT_SETTINGS.windowEndHour,
+      1,
+      23,
+    ),
+    autoPublishSite: normalizeBooleanSetting(autoPublish?.value, DEFAULT_EDITORIAL_AUTOPILOT_SETTINGS.autoPublishSite),
+    allowDelete: normalizeBooleanSetting(allowDelete?.value, DEFAULT_EDITORIAL_AUTOPILOT_SETTINGS.allowDelete),
+    socialEnabled: normalizeBooleanSetting(socialEnabled?.value, DEFAULT_EDITORIAL_AUTOPILOT_SETTINGS.socialEnabled),
+    todayDate: normalizeShortText(todayDate?.value, "", 40),
+    todayTarget: normalizeNumberSetting(todayTarget?.value, DEFAULT_EDITORIAL_AUTOPILOT_SETTINGS.todayTarget, 0, 30),
+    lastRunAt: normalizeShortText(lastRunAt?.value, "", 120) || null,
+    lastRunSummary: normalizeShortText(lastRunSummary?.value, "", 1000),
+  };
+}
+
+export async function setEditorialAutopilotSettings(
+  prisma: PrismaLike,
+  value: Partial<EditorialAutopilotSettings>,
+): Promise<EditorialAutopilotSettings> {
+  const current = await getEditorialAutopilotSettings(prisma);
+  const next: EditorialAutopilotSettings = {
+    enabled: value.enabled ?? current.enabled,
+    mode: value.mode ? normalizeAutopilotMode(value.mode, current.mode) : current.mode,
+    instruction:
+      value.instruction === undefined
+        ? current.instruction
+        : normalizeShortText(value.instruction, current.instruction, 2400),
+    temporalPrompt:
+      value.temporalPrompt === undefined ? current.temporalPrompt : normalizeShortText(value.temporalPrompt, "", 1000),
+    maxStoriesPerRun:
+      value.maxStoriesPerRun === undefined
+        ? current.maxStoriesPerRun
+        : Math.max(1, Math.min(20, Math.round(value.maxStoriesPerRun))),
+    internalizeLimit:
+      value.internalizeLimit === undefined
+        ? current.internalizeLimit
+        : Math.max(0, Math.min(20, Math.round(value.internalizeLimit))),
+    minDailyStories:
+      value.minDailyStories === undefined ? current.minDailyStories : Math.max(1, Math.min(30, Math.round(value.minDailyStories))),
+    maxDailyStories:
+      value.maxDailyStories === undefined ? current.maxDailyStories : Math.max(1, Math.min(30, Math.round(value.maxDailyStories))),
+    windowStartHour:
+      value.windowStartHour === undefined ? current.windowStartHour : Math.max(0, Math.min(23, Math.round(value.windowStartHour))),
+    windowEndHour:
+      value.windowEndHour === undefined ? current.windowEndHour : Math.max(1, Math.min(23, Math.round(value.windowEndHour))),
+    autoPublishSite: value.autoPublishSite ?? current.autoPublishSite,
+    allowDelete: value.allowDelete ?? current.allowDelete,
+    socialEnabled: value.socialEnabled ?? current.socialEnabled,
+    todayDate: value.todayDate === undefined ? current.todayDate : normalizeShortText(value.todayDate, "", 40),
+    todayTarget:
+      value.todayTarget === undefined ? current.todayTarget : Math.max(0, Math.min(30, Math.round(value.todayTarget))),
+    lastRunAt: value.lastRunAt === undefined ? current.lastRunAt : normalizeShortText(value.lastRunAt, "", 120) || null,
+    lastRunSummary:
+      value.lastRunSummary === undefined
+        ? current.lastRunSummary
+        : normalizeShortText(value.lastRunSummary, "", 1000),
+  };
+
+  const delegate = siteSettingDelegate(prisma);
+  await Promise.all([
+    delegate.upsert({
+      where: { key: EDITORIAL_AUTOPILOT_ENABLED_KEY },
+      update: { value: next.enabled ? "true" : "false" },
+      create: { key: EDITORIAL_AUTOPILOT_ENABLED_KEY, value: next.enabled ? "true" : "false" },
+    }),
+    delegate.upsert({
+      where: { key: EDITORIAL_AUTOPILOT_MODE_KEY },
+      update: { value: next.mode },
+      create: { key: EDITORIAL_AUTOPILOT_MODE_KEY, value: next.mode },
+    }),
+    delegate.upsert({
+      where: { key: EDITORIAL_AUTOPILOT_INSTRUCTION_KEY },
+      update: { value: next.instruction },
+      create: { key: EDITORIAL_AUTOPILOT_INSTRUCTION_KEY, value: next.instruction },
+    }),
+    delegate.upsert({
+      where: { key: EDITORIAL_AUTOPILOT_TEMPORAL_PROMPT_KEY },
+      update: { value: next.temporalPrompt },
+      create: { key: EDITORIAL_AUTOPILOT_TEMPORAL_PROMPT_KEY, value: next.temporalPrompt },
+    }),
+    delegate.upsert({
+      where: { key: EDITORIAL_AUTOPILOT_MAX_STORIES_KEY },
+      update: { value: String(next.maxStoriesPerRun) },
+      create: { key: EDITORIAL_AUTOPILOT_MAX_STORIES_KEY, value: String(next.maxStoriesPerRun) },
+    }),
+    delegate.upsert({
+      where: { key: EDITORIAL_AUTOPILOT_INTERNALIZE_LIMIT_KEY },
+      update: { value: String(next.internalizeLimit) },
+      create: { key: EDITORIAL_AUTOPILOT_INTERNALIZE_LIMIT_KEY, value: String(next.internalizeLimit) },
+    }),
+    delegate.upsert({
+      where: { key: EDITORIAL_AUTOPILOT_MIN_DAILY_KEY },
+      update: { value: String(next.minDailyStories) },
+      create: { key: EDITORIAL_AUTOPILOT_MIN_DAILY_KEY, value: String(next.minDailyStories) },
+    }),
+    delegate.upsert({
+      where: { key: EDITORIAL_AUTOPILOT_MAX_DAILY_KEY },
+      update: { value: String(next.maxDailyStories) },
+      create: { key: EDITORIAL_AUTOPILOT_MAX_DAILY_KEY, value: String(next.maxDailyStories) },
+    }),
+    delegate.upsert({
+      where: { key: EDITORIAL_AUTOPILOT_WINDOW_START_KEY },
+      update: { value: String(next.windowStartHour) },
+      create: { key: EDITORIAL_AUTOPILOT_WINDOW_START_KEY, value: String(next.windowStartHour) },
+    }),
+    delegate.upsert({
+      where: { key: EDITORIAL_AUTOPILOT_WINDOW_END_KEY },
+      update: { value: String(next.windowEndHour) },
+      create: { key: EDITORIAL_AUTOPILOT_WINDOW_END_KEY, value: String(next.windowEndHour) },
+    }),
+    delegate.upsert({
+      where: { key: EDITORIAL_AUTOPILOT_AUTO_PUBLISH_KEY },
+      update: { value: next.autoPublishSite ? "true" : "false" },
+      create: { key: EDITORIAL_AUTOPILOT_AUTO_PUBLISH_KEY, value: next.autoPublishSite ? "true" : "false" },
+    }),
+    delegate.upsert({
+      where: { key: EDITORIAL_AUTOPILOT_ALLOW_DELETE_KEY },
+      update: { value: next.allowDelete ? "true" : "false" },
+      create: { key: EDITORIAL_AUTOPILOT_ALLOW_DELETE_KEY, value: next.allowDelete ? "true" : "false" },
+    }),
+    delegate.upsert({
+      where: { key: EDITORIAL_AUTOPILOT_SOCIAL_ENABLED_KEY },
+      update: { value: next.socialEnabled ? "true" : "false" },
+      create: { key: EDITORIAL_AUTOPILOT_SOCIAL_ENABLED_KEY, value: next.socialEnabled ? "true" : "false" },
+    }),
+    delegate.upsert({
+      where: { key: EDITORIAL_AUTOPILOT_TODAY_DATE_KEY },
+      update: { value: next.todayDate },
+      create: { key: EDITORIAL_AUTOPILOT_TODAY_DATE_KEY, value: next.todayDate },
+    }),
+    delegate.upsert({
+      where: { key: EDITORIAL_AUTOPILOT_TODAY_TARGET_KEY },
+      update: { value: String(next.todayTarget) },
+      create: { key: EDITORIAL_AUTOPILOT_TODAY_TARGET_KEY, value: String(next.todayTarget) },
+    }),
+    delegate.upsert({
+      where: { key: EDITORIAL_AUTOPILOT_LAST_RUN_AT_KEY },
+      update: { value: next.lastRunAt ?? "" },
+      create: { key: EDITORIAL_AUTOPILOT_LAST_RUN_AT_KEY, value: next.lastRunAt ?? "" },
+    }),
+    delegate.upsert({
+      where: { key: EDITORIAL_AUTOPILOT_LAST_RUN_SUMMARY_KEY },
+      update: { value: next.lastRunSummary },
+      create: { key: EDITORIAL_AUTOPILOT_LAST_RUN_SUMMARY_KEY, value: next.lastRunSummary },
+    }),
+  ]);
+
+  return next;
+}
+
+export async function getInstagramPublishingSettings(prisma: PrismaLike): Promise<InstagramPublishingSettings> {
+  const delegate = siteSettingDelegate(prisma);
+  const [
+    enabled,
+    accountId,
+    username,
+    captionTemplate,
+    includeSiteUrl,
+    includeSourceCredit,
+    maxPostsPerRun,
+  ] = await Promise.all([
+    delegate.findUnique({ where: { key: INSTAGRAM_PUBLISHING_ENABLED_KEY }, select: { value: true } }),
+    delegate.findUnique({ where: { key: INSTAGRAM_ACCOUNT_ID_KEY }, select: { value: true } }),
+    delegate.findUnique({ where: { key: INSTAGRAM_USERNAME_KEY }, select: { value: true } }),
+    delegate.findUnique({ where: { key: INSTAGRAM_CAPTION_TEMPLATE_KEY }, select: { value: true } }),
+    delegate.findUnique({ where: { key: INSTAGRAM_INCLUDE_SITE_URL_KEY }, select: { value: true } }),
+    delegate.findUnique({ where: { key: INSTAGRAM_INCLUDE_SOURCE_CREDIT_KEY }, select: { value: true } }),
+    delegate.findUnique({ where: { key: INSTAGRAM_MAX_POSTS_PER_RUN_KEY }, select: { value: true } }),
+  ]);
+
+  return {
+    enabled: normalizeBooleanSetting(enabled?.value, DEFAULT_INSTAGRAM_PUBLISHING_SETTINGS.enabled),
+    accountId: normalizeShortText(accountId?.value, "", 120),
+    username: normalizeShortText(username?.value, "", 120),
+    captionTemplate: normalizeShortText(
+      captionTemplate?.value,
+      DEFAULT_INSTAGRAM_PUBLISHING_SETTINGS.captionTemplate,
+      1200,
+    ),
+    includeSiteUrl: normalizeBooleanSetting(includeSiteUrl?.value, DEFAULT_INSTAGRAM_PUBLISHING_SETTINGS.includeSiteUrl),
+    includeSourceCredit: normalizeBooleanSetting(
+      includeSourceCredit?.value,
+      DEFAULT_INSTAGRAM_PUBLISHING_SETTINGS.includeSourceCredit,
+    ),
+    maxPostsPerRun: normalizeNumberSetting(
+      maxPostsPerRun?.value,
+      DEFAULT_INSTAGRAM_PUBLISHING_SETTINGS.maxPostsPerRun,
+      1,
+      5,
+    ),
+  };
+}
+
+export async function setInstagramPublishingSettings(
+  prisma: PrismaLike,
+  value: Partial<InstagramPublishingSettings>,
+): Promise<InstagramPublishingSettings> {
+  const current = await getInstagramPublishingSettings(prisma);
+  const next: InstagramPublishingSettings = {
+    enabled: value.enabled ?? current.enabled,
+    accountId: value.accountId === undefined ? current.accountId : normalizeShortText(value.accountId, "", 120),
+    username: value.username === undefined ? current.username : normalizeShortText(value.username, "", 120),
+    captionTemplate:
+      value.captionTemplate === undefined
+        ? current.captionTemplate
+        : normalizeShortText(value.captionTemplate, current.captionTemplate, 1200),
+    includeSiteUrl: value.includeSiteUrl ?? current.includeSiteUrl,
+    includeSourceCredit: value.includeSourceCredit ?? current.includeSourceCredit,
+    maxPostsPerRun:
+      value.maxPostsPerRun === undefined
+        ? current.maxPostsPerRun
+        : Math.max(1, Math.min(5, Math.round(value.maxPostsPerRun))),
+  };
+
+  const delegate = siteSettingDelegate(prisma);
+  await Promise.all([
+    delegate.upsert({
+      where: { key: INSTAGRAM_PUBLISHING_ENABLED_KEY },
+      update: { value: next.enabled ? "true" : "false" },
+      create: { key: INSTAGRAM_PUBLISHING_ENABLED_KEY, value: next.enabled ? "true" : "false" },
+    }),
+    delegate.upsert({
+      where: { key: INSTAGRAM_ACCOUNT_ID_KEY },
+      update: { value: next.accountId },
+      create: { key: INSTAGRAM_ACCOUNT_ID_KEY, value: next.accountId },
+    }),
+    delegate.upsert({
+      where: { key: INSTAGRAM_USERNAME_KEY },
+      update: { value: next.username },
+      create: { key: INSTAGRAM_USERNAME_KEY, value: next.username },
+    }),
+    delegate.upsert({
+      where: { key: INSTAGRAM_CAPTION_TEMPLATE_KEY },
+      update: { value: next.captionTemplate },
+      create: { key: INSTAGRAM_CAPTION_TEMPLATE_KEY, value: next.captionTemplate },
+    }),
+    delegate.upsert({
+      where: { key: INSTAGRAM_INCLUDE_SITE_URL_KEY },
+      update: { value: next.includeSiteUrl ? "true" : "false" },
+      create: { key: INSTAGRAM_INCLUDE_SITE_URL_KEY, value: next.includeSiteUrl ? "true" : "false" },
+    }),
+    delegate.upsert({
+      where: { key: INSTAGRAM_INCLUDE_SOURCE_CREDIT_KEY },
+      update: { value: next.includeSourceCredit ? "true" : "false" },
+      create: { key: INSTAGRAM_INCLUDE_SOURCE_CREDIT_KEY, value: next.includeSourceCredit ? "true" : "false" },
+    }),
+    delegate.upsert({
+      where: { key: INSTAGRAM_MAX_POSTS_PER_RUN_KEY },
+      update: { value: String(next.maxPostsPerRun) },
+      create: { key: INSTAGRAM_MAX_POSTS_PER_RUN_KEY, value: String(next.maxPostsPerRun) },
     }),
   ]);
 
