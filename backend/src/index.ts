@@ -26,7 +26,7 @@ import { ensureUniqueSlug, normalizeNewsInput } from "./newsInput";
 import { dedupeByKey, resolveManagedFeedImage, toFeedItem } from "./feed";
 import { getExternalNews } from "./externalNews";
 import { getMarketData, getWeatherData } from "./signalData";
-import { buildManagedImageUrl, buildManagedVideoUrl, proxyManagedMediaRequest } from "./mediaProxy";
+import { buildManagedImageUrl, buildManagedVideoUrl, ensureManagedImageCaptured, proxyManagedMediaRequest } from "./mediaProxy";
 import { PROVINCE_OPTIONS, SECTION_OPTIONS } from "./catalog";
 import {
   asNullable,
@@ -491,6 +491,20 @@ async function pickReachableImages(
   return selected;
 }
 
+async function captureManagedImageList(imageUrls: string[], maxItems = 4): Promise<string[]> {
+  const managed: string[] = [];
+  for (const url of Array.from(new Set(imageUrls.map((item) => item.trim()).filter(Boolean)))) {
+    if (managed.length >= maxItems) {
+      break;
+    }
+    const captured = await ensureManagedImageCaptured(url);
+    if (captured) {
+      managed.push(captured);
+    }
+  }
+  return managed;
+}
+
 function wildcardToRegExp(pattern: string): RegExp {
   const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
   return new RegExp(`^${escaped}$`);
@@ -643,10 +657,10 @@ async function postProcessResearchedSuggestion(
   const galleryCandidates = gallerySourceRaw
     .map((url) => applyResearchImageTransform(url, settings))
     .filter((url): url is string => Boolean(url));
-  const galleryImages = (await pickReachableImages(galleryCandidates, 4, 10))
-    .filter((url) => url !== finalImage)
-    .map((url) => buildManagedImageUrl(url))
-    .filter((url): url is string => Boolean(url));
+  const galleryImages = await captureManagedImageList(
+    (await pickReachableImages(galleryCandidates, 4, 10)).filter((url) => url !== finalImage),
+    4,
+  );
 
   const rawVideoCandidates = uniqueNormalizedVideoUrls(
     [leadSource?.videoUrl, ...sources.map((item) => item.videoUrl), normalizeHttpUrl((suggestion as { videoUrl?: string | null }).videoUrl)],
@@ -662,11 +676,16 @@ async function postProcessResearchedSuggestion(
     3,
   )[0] ?? null;
 
-  const proxiedCover = buildManagedImageUrl(finalImage);
+  const proxiedCover = await ensureManagedImageCaptured(finalImage);
+  if (!proxiedCover) {
+    throw new Error("El agente fotografo no pudo capturar la portada editorial seleccionada.");
+  }
+  const proxiedPoster =
+    finalVideoPoster ? (await ensureManagedImageCaptured(finalVideoPoster)) ?? buildManagedImageUrl(finalVideoPoster) : null;
   let finalBody = appendPrimaryVideoBlockToBody(
     suggestion.body ?? suggestion.excerpt ?? null,
     buildManagedVideoUrl(finalVideo),
-    buildManagedImageUrl(finalVideoPoster),
+    proxiedPoster,
   );
   finalBody = appendGalleryBlockToBody(finalBody, galleryImages);
   notes.push("Portada visual confirmada por agente fotografo.");
@@ -864,17 +883,22 @@ async function createStoriesFromBatchState(formState: BatchNewsFormState): Promi
         .filter((url) => !baseImageCandidatesRaw.includes(url))
         .map((url) => applyResearchImageTransform(url, aiResearchSettings))
         .filter((url): url is string => Boolean(url));
-      const reachableGallery = (await pickReachableImages(galleryImages, 3, 8))
-        .filter((url) => url !== finalImage)
-        .map((url) => buildManagedImageUrl(url))
-        .filter((url): url is string => Boolean(url));
+      const reachableGallery = await captureManagedImageList(
+        (await pickReachableImages(galleryImages, 3, 8)).filter((url) => url !== finalImage),
+        3,
+      );
       const reachableVideo = await pickReachableVideo(
         uniqueNormalizedVideoUrls(sourceVideoCandidates.map((entry) => entry?.videoUrl ?? null), 3),
         3,
       );
-      const videoPoster = buildManagedImageUrl(
-        uniqueNormalizedImageUrls([sourceItem?.videoPosterUrl ?? null, researchLead?.videoPosterUrl ?? null, finalImage], 3)[0] ?? null,
-      );
+      const videoPosterSource =
+        uniqueNormalizedImageUrls([sourceItem?.videoPosterUrl ?? null, researchLead?.videoPosterUrl ?? null, finalImage], 3)[0] ?? null;
+      const videoPoster =
+        videoPosterSource ? (await ensureManagedImageCaptured(videoPosterSource)) ?? buildManagedImageUrl(videoPosterSource) : null;
+      const managedCover = await ensureManagedImageCaptured(finalImage);
+      if (!managedCover) {
+        throw new Error("El agente fotografo no pudo capturar la portada editorial del item.");
+      }
 
       const finalSourceName = draft.sourceName ?? sourceItem?.sourceName ?? researchLead?.sourceName ?? formState.defaultSourceName;
       const finalSourceUrl =
@@ -900,7 +924,7 @@ async function createStoriesFromBatchState(formState: BatchNewsFormState): Promi
         kicker: draft.kicker ?? fallbackKicker,
         excerpt: draft.excerpt ?? fallbackExcerpt,
         body: finalBody ?? fallbackExcerpt,
-        imageUrl: finalImage,
+        imageUrl: managedCover,
         sourceName: finalSourceName,
         sourceUrl: finalSourceUrl,
         authorName: draft.authorName ?? formState.defaultAuthorName,
@@ -1251,6 +1275,8 @@ async function rewriteExistingNewsByCommand(operation: Extract<EditorialCommandO
       if (operation.requireImageUrl && !reachableCover) {
         throw new Error("No se pudo asegurar una portada valida para la reescritura.");
       }
+      const managedCover =
+        reachableCover ? (await ensureManagedImageCaptured(reachableCover)) ?? buildManagedImageUrl(reachableCover) : null;
 
       const normalized = normalizeNewsInput({
         title: processed.title ?? row.title,
@@ -1258,7 +1284,7 @@ async function rewriteExistingNewsByCommand(operation: Extract<EditorialCommandO
         kicker: processed.kicker ?? row.kicker ?? "Mesa de situacion",
         excerpt: processed.excerpt ?? row.excerpt ?? operation.instruction,
         body: processed.body ?? row.body ?? operation.instruction,
-        imageUrl: reachableCover ?? processed.imageUrl ?? row.imageUrl ?? "",
+        imageUrl: managedCover ?? processed.imageUrl ?? row.imageUrl ?? "",
         sourceName: processed.sourceName ?? row.sourceName ?? "Pulso Pais",
         sourceUrl: normalizeHttpUrl(processed.sourceUrl) ?? normalizeHttpUrl(row.sourceUrl) ?? "",
         authorName: processed.authorName ?? row.authorName ?? "Redaccion Pulso Pais",
@@ -1489,23 +1515,39 @@ async function maybePublishLatestNewsToInstagram(params: {
       updatedAt: { gte: params.cycleStartedAt },
     },
     orderBy: [{ updatedAt: "desc" }],
-    take: Math.max(1, settings.maxPostsPerRun),
+    take: Math.max(1, settings.maxPostsPerRun) * 4,
   });
 
-  const target = candidateNews.find((item) => normalizeHttpUrl(item.imageUrl));
-  if (!target) {
+  const ranked = candidateNews
+    .filter((item) => normalizeHttpUrl(item.imageUrl))
+    .sort((left, right) => {
+      const score = (item: (typeof candidateNews)[number]) =>
+        Number(item.isHero) * 40 +
+        Number(item.isFeatured) * 20 +
+        Number(item.isRadar) * 12 +
+        Number(item.isInterview) * 10 +
+        Number(item.isOpinion) * 8 +
+        (item.excerpt ? 4 : 0) +
+        Math.min((item.tags?.length ?? 0), 4);
+      return score(right) - score(left) || +new Date(right.updatedAt) - +new Date(left.updatedAt);
+    })
+    .slice(0, Math.max(1, settings.maxPostsPerRun));
+
+  if (ranked.length === 0) {
     return "No hubo una nota publicada con portada valida para Instagram en esta corrida.";
   }
 
-  const result = await publishNewsToInstagram({
-    news: target,
-    preferences: settings,
-    frontendBaseUrl: normalizedFrontendBaseUrl(),
-  });
+  const published: string[] = [];
+  for (const target of ranked) {
+    const result = await publishNewsToInstagram({
+      news: target,
+      preferences: settings,
+      frontendBaseUrl: normalizedFrontendBaseUrl(),
+    });
+    published.push(result.permalink ? `${target.slug}: ${result.permalink}` : `${target.slug}: ${result.mediaId}`);
+  }
 
-  return result.permalink
-    ? `Instagram publicado en ${result.permalink}`
-    : `Instagram publicado. Media id ${result.mediaId}.`;
+  return `Instagram publico ${published.length} pieza(s): ${published.join(" | ")}`;
 }
 
 async function runEditorialAutopilotCycle(triggerLabel: string): Promise<AutopilotRunSummary> {
@@ -4154,10 +4196,11 @@ app.post("/backoffice/ai/assist", boGuard, async (request, response, next) => {
     const assistInput = buildEditorialAssistInput(request.body as Record<string, unknown>);
     const context = await buildAiNewsContext(prisma);
     const suggestion = await generateDraftWithAi(assistInput, context.contextText);
+    const capturedImage = await ensureManagedImageCaptured(suggestion.imageUrl);
     response.json({
       suggestion: {
         ...suggestion,
-        imageUrl: buildManagedImageUrl(suggestion.imageUrl),
+        imageUrl: capturedImage ?? buildManagedImageUrl(suggestion.imageUrl),
       },
       context: context.meta,
     });
@@ -4220,13 +4263,14 @@ app.post("/backoffice/ai/ask", boGuard, async (request, response, next) => {
     const assistInput = buildEditorialAssistInput(request.body as Record<string, unknown>);
     const context = await buildAiNewsContext(prisma);
     const answer = await askEditorialWithAi(assistInput, context.contextText);
+    const capturedDraftImage = answer?.draft ? await ensureManagedImageCaptured(answer.draft.imageUrl) : null;
     response.json({
       answer: answer?.draft
         ? {
             ...answer,
             draft: {
               ...answer.draft,
-              imageUrl: buildManagedImageUrl(answer.draft.imageUrl),
+              imageUrl: capturedDraftImage ?? buildManagedImageUrl(answer.draft.imageUrl),
             },
           }
         : answer,
@@ -5078,20 +5122,25 @@ app.post("/backoffice/news/batch", boGuard, async (request, response, next) => {
           .filter((url) => !baseImageCandidatesRaw.includes(url))
           .map((url) => applyResearchImageTransform(url, aiResearchSettings))
           .filter((url): url is string => Boolean(url));
-        const reachableGallery = (await pickReachableImages(galleryImages, 3, 8))
-          .filter((url) => url !== finalImage)
-          .map((url) => buildManagedImageUrl(url))
-          .filter((url): url is string => Boolean(url));
+        const reachableGallery = await captureManagedImageList(
+          (await pickReachableImages(galleryImages, 3, 8)).filter((url) => url !== finalImage),
+          3,
+        );
         const reachableVideo = await pickReachableVideo(
           uniqueNormalizedVideoUrls(sourceVideoCandidates.map((entry) => entry?.videoUrl ?? null), 3),
           3,
         );
-        const videoPoster = buildManagedImageUrl(
+        const videoPosterSource =
           uniqueNormalizedImageUrls(
             [sourceItem?.videoPosterUrl ?? null, researchLead?.videoPosterUrl ?? null, finalImage],
             3,
-          )[0] ?? null,
-        );
+          )[0] ?? null;
+        const videoPoster =
+          videoPosterSource ? (await ensureManagedImageCaptured(videoPosterSource)) ?? buildManagedImageUrl(videoPosterSource) : null;
+        const managedCover = await ensureManagedImageCaptured(finalImage);
+        if (!managedCover) {
+          throw new Error("El agente fotografo no pudo capturar la portada editorial del item.");
+        }
 
         const finalSourceName = draft.sourceName ?? sourceItem?.sourceName ?? researchLead?.sourceName ?? defaultSourceName;
         const finalSourceUrl =
@@ -5117,7 +5166,7 @@ app.post("/backoffice/news/batch", boGuard, async (request, response, next) => {
           kicker: draft.kicker ?? fallbackKicker,
           excerpt: draft.excerpt ?? fallbackExcerpt,
           body: finalBody ?? fallbackExcerpt,
-          imageUrl: finalImage,
+          imageUrl: managedCover,
           sourceName: finalSourceName,
           sourceUrl: finalSourceUrl,
           authorName: draft.authorName ?? defaultAuthorName,

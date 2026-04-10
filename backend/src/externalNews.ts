@@ -1,9 +1,11 @@
 import Parser from "rss-parser";
+import { fetchArticleSnapshot, pickBestEditorialImageUrl } from "./articleMedia";
 import { asNullable, normalizeHttpUrl, normalizeImageUrl, parseGdeltDate, readString } from "./utils";
 import { dedupeByKey, guessSectionFromText, resolveManagedFeedImage } from "./feed";
 import type { FeedItem } from "./types";
 
 const rssParser = new Parser();
+const EXTERNAL_IMAGE_ENRICH_LIMIT = 10;
 
 function extractRssImage(content: string): string | null {
   const match = content.match(/<img[^>]+src=["']([^"']+)["']/i);
@@ -94,6 +96,45 @@ async function fetchExternalFromGoogleRss(): Promise<FeedItem[]> {
   return mapped;
 }
 
+async function enrichExternalImages(items: FeedItem[]): Promise<FeedItem[]> {
+  const targets = items.slice(0, Math.min(EXTERNAL_IMAGE_ENRICH_LIMIT, items.length));
+  const snapshots = await Promise.allSettled(
+    targets.map(async (item) => {
+      if (!item.sourceUrl) {
+        return null;
+      }
+      const snapshot = await fetchArticleSnapshot(item.sourceUrl);
+      return { itemId: item.id, snapshot };
+    }),
+  );
+
+  const snapshotById = new Map<string, Awaited<ReturnType<typeof fetchArticleSnapshot>>>();
+  for (const entry of snapshots) {
+    if (entry.status !== "fulfilled" || !entry.value) {
+      continue;
+    }
+    snapshotById.set(entry.value.itemId, entry.value.snapshot);
+  }
+
+  return items.map((item) => {
+    const snapshot = snapshotById.get(item.id);
+    if (!snapshot) {
+      return item;
+    }
+    const imageUrl = resolveManagedFeedImage(
+      pickBestEditorialImageUrl([snapshot.imageUrl, ...snapshot.imageCandidates, snapshot.videoPosterUrl, item.imageUrl]),
+      {
+        sourceUrl: item.sourceUrl,
+        seed: `${item.title} ${item.sourceName ?? ""}`,
+      },
+    );
+    return {
+      ...item,
+      imageUrl: imageUrl ?? item.imageUrl,
+    };
+  });
+}
+
 let externalCache: { expiresAt: number; items: FeedItem[] } = {
   expiresAt: 0,
   items: [],
@@ -107,9 +148,10 @@ export async function getExternalNews(): Promise<FeedItem[]> {
   const results = await Promise.allSettled([fetchExternalFromGdelt(), fetchExternalFromGoogleRss()]);
   const fromGdelt = results[0].status === "fulfilled" ? results[0].value : [];
   const fromGoogle = results[1].status === "fulfilled" ? results[1].value : [];
-  const merged = dedupeByKey([...fromGdelt, ...fromGoogle])
+  const mergedBase = dedupeByKey([...fromGdelt, ...fromGoogle])
     .sort((left, right) => +new Date(right.publishedAt) - +new Date(left.publishedAt))
     .slice(0, 40);
+  const merged = await enrichExternalImages(mergedBase);
 
   externalCache = {
     expiresAt: Date.now() + 8 * 60 * 1000,

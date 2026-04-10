@@ -183,10 +183,10 @@ const DEFAULT_INSTAGRAM_PUBLISHING_SETTINGS: InstagramPublishingSettings = {
   accountId: "",
   username: "",
   captionTemplate:
-    "Pulso Pais | {title}\n\n{excerpt}\n\n{cta}\n{url}\n\n{hashtags}",
-  includeSiteUrl: true,
+    "{leadEmoji} {title}\n\n{kicker}\n{excerpt}\n\n{cta}\n{url}\n\n{hashtags}",
+  includeSiteUrl: false,
   includeSourceCredit: true,
-  maxPostsPerRun: 1,
+  maxPostsPerRun: 4,
 };
 
 const DEFAULT_EDITORIAL_COMMAND_CHAT_STATE: EditorialCommandChatState = {

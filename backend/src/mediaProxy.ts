@@ -1,6 +1,10 @@
 import crypto from "node:crypto";
+import { createReadStream } from "node:fs";
 import { lookup } from "node:dns/promises";
+import fs from "node:fs/promises";
 import { isIP } from "node:net";
+import os from "node:os";
+import path from "node:path";
 import { Readable } from "node:stream";
 import type { Request, Response } from "express";
 import { normalizeHttpUrl, normalizeImageUrl, readString } from "./utils";
@@ -9,7 +13,18 @@ export type ManagedMediaKind = "image" | "video";
 
 const MEDIA_PROXY_SECRET = process.env.MEDIA_PROXY_SECRET ?? process.env.ADMIN_JWT_SECRET ?? "pulso-pais-media-proxy";
 const HOST_CACHE_TTL_MS = 60 * 60 * 1000;
+const IMAGE_CAPTURE_TIMEOUT_MS = 12_000;
+const MEDIA_CACHE_DIR = path.join(os.tmpdir(), "pulso-pais-media-cache");
 const hostSafetyCache = new Map<string, { allowed: boolean; expiresAt: number }>();
+const mediaCaptureCache = new Map<string, Promise<CachedMediaRecord | null>>();
+let mediaCacheReady: Promise<void> | null = null;
+
+type CachedMediaRecord = {
+  filePath: string;
+  metaPath: string;
+  contentType: string;
+  size: number | null;
+};
 
 function resolveBackendPublicUrl(): string {
   const fallback =
@@ -38,6 +53,63 @@ function signPayload(payload: string): string {
   return crypto.createHmac("sha256", MEDIA_PROXY_SECRET).update(payload).digest("hex");
 }
 
+function mediaCacheKey(kind: ManagedMediaKind, url: string): string {
+  return crypto.createHash("sha256").update(`${kind}:${url}`).digest("hex");
+}
+
+async function ensureMediaCacheDir(): Promise<void> {
+  if (!mediaCacheReady) {
+    mediaCacheReady = fs.mkdir(MEDIA_CACHE_DIR, { recursive: true }).then(() => undefined);
+  }
+  await mediaCacheReady;
+}
+
+function cachePaths(kind: ManagedMediaKind, url: string): { filePath: string; metaPath: string } {
+  const cacheKey = mediaCacheKey(kind, url);
+  return {
+    filePath: path.join(MEDIA_CACHE_DIR, `${cacheKey}.${kind === "image" ? "img" : "bin"}`),
+    metaPath: path.join(MEDIA_CACHE_DIR, `${cacheKey}.json`),
+  };
+}
+
+async function readCachedMediaRecord(kind: ManagedMediaKind, url: string): Promise<CachedMediaRecord | null> {
+  await ensureMediaCacheDir();
+  const { filePath, metaPath } = cachePaths(kind, url);
+  try {
+    const [metaRaw, stat] = await Promise.all([fs.readFile(metaPath, "utf8"), fs.stat(filePath)]);
+    const parsed = JSON.parse(metaRaw) as { contentType?: string; size?: number | null };
+    const contentType = readString(parsed.contentType) || `${kind}/*`;
+    return {
+      filePath,
+      metaPath,
+      contentType,
+      size: typeof parsed.size === "number" && Number.isFinite(parsed.size) ? parsed.size : stat.size,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function persistCapturedMedia(
+  kind: ManagedMediaKind,
+  url: string,
+  buffer: Buffer,
+  contentType: string,
+): Promise<CachedMediaRecord> {
+  await ensureMediaCacheDir();
+  const { filePath, metaPath } = cachePaths(kind, url);
+  await Promise.all([
+    fs.writeFile(filePath, buffer),
+    fs.writeFile(metaPath, JSON.stringify({ contentType, size: buffer.length, cachedAt: new Date().toISOString() }), "utf8"),
+  ]);
+  return {
+    filePath,
+    metaPath,
+    contentType,
+    size: buffer.length,
+  };
+}
+
 function safeTimingEqual(left: string, right: string): boolean {
   const leftBuffer = Buffer.from(left);
   const rightBuffer = Buffer.from(right);
@@ -54,6 +126,14 @@ function isManagedProxyUrl(input: string): boolean {
   } catch {
     return false;
   }
+}
+
+function isValidMediaContentType(contentType: string, expectedKind: ManagedMediaKind): boolean {
+  return (
+    contentType.length === 0 ||
+    contentType.startsWith(`${expectedKind}/`) ||
+    contentType === "application/octet-stream"
+  );
 }
 
 function isPrivateIpv4(ip: string): boolean {
@@ -172,6 +252,111 @@ export function buildManagedVideoUrl(rawValue: string | null | undefined): strin
   return buildManagedMediaUrl(rawValue, "video");
 }
 
+async function fetchAndCaptureImage(url: string): Promise<CachedMediaRecord | null> {
+  const normalized = normalizeImageUrl(url);
+  if (!normalized) {
+    return null;
+  }
+
+  const existing = await readCachedMediaRecord("image", normalized);
+  if (existing) {
+    return existing;
+  }
+
+  const inFlight = mediaCaptureCache.get(normalized);
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const capturePromise = (async () => {
+    await ensurePublicRemoteUrl(normalized);
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), IMAGE_CAPTURE_TIMEOUT_MS);
+    try {
+      const upstream = await fetch(normalized, {
+        method: "GET",
+        signal: controller.signal,
+        headers: {
+          accept: "image/*,*/*;q=0.8",
+          "user-agent": "PulsoPaisMediaCapture/1.0",
+        },
+      });
+
+      if (!upstream.ok || !upstream.body) {
+        return null;
+      }
+
+      const contentType = upstream.headers.get("content-type") ?? "";
+      if (!isValidMediaContentType(contentType, "image")) {
+        return null;
+      }
+
+      const arrayBuffer = await upstream.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+      if (buffer.byteLength === 0) {
+        return null;
+      }
+      if (buffer.byteLength > 20 * 1024 * 1024) {
+        return null;
+      }
+
+      return persistCapturedMedia("image", normalized, buffer, contentType || "image/jpeg");
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timeout);
+      mediaCaptureCache.delete(normalized);
+    }
+  })();
+
+  mediaCaptureCache.set(normalized, capturePromise);
+  return capturePromise;
+}
+
+export async function ensureManagedImageCaptured(rawValue: string | null | undefined): Promise<string | null> {
+  const normalized = normalizeImageUrl(rawValue);
+  if (!normalized) {
+    return null;
+  }
+  if (isManagedProxyUrl(normalized)) {
+    return normalized;
+  }
+
+  const captured = await fetchAndCaptureImage(normalized);
+  if (!captured) {
+    return null;
+  }
+
+  return buildManagedImageUrl(normalized);
+}
+
+async function sendCachedMedia(response: Response, record: CachedMediaRecord, method: string): Promise<void> {
+  response.status(200);
+  response.setHeader("Cache-Control", "public, max-age=3600, s-maxage=86400, stale-while-revalidate=604800");
+  response.setHeader("Access-Control-Allow-Origin", "*");
+  response.setHeader("content-type", record.contentType);
+  if (record.size && Number.isFinite(record.size)) {
+    response.setHeader("content-length", String(record.size));
+  }
+  response.setHeader("Content-Disposition", "inline");
+
+  if (method === "HEAD") {
+    response.end();
+    return;
+  }
+
+  const stream = createReadStream(record.filePath);
+  stream.on("error", () => {
+    if (!response.headersSent) {
+      response.status(502).end();
+    } else {
+      response.destroy();
+    }
+  });
+  stream.pipe(response);
+}
+
 export async function proxyManagedMediaRequest(
   request: Request,
   response: Response,
@@ -196,6 +381,20 @@ export async function proxyManagedMediaRequest(
     return;
   }
 
+  if (expectedKind === "image") {
+    const cached = await readCachedMediaRecord(expectedKind, payload.url);
+    if (cached) {
+      await sendCachedMedia(response, cached, request.method);
+      return;
+    }
+
+    const captured = await fetchAndCaptureImage(payload.url);
+    if (captured) {
+      await sendCachedMedia(response, captured, request.method);
+      return;
+    }
+  }
+
   await ensurePublicRemoteUrl(payload.url);
 
   const controller = new AbortController();
@@ -218,12 +417,7 @@ export async function proxyManagedMediaRequest(
     }
 
     const contentType = upstream.headers.get("content-type") ?? "";
-    const looksValid =
-      contentType.length === 0 ||
-      contentType.startsWith(`${expectedKind}/`) ||
-      contentType === "application/octet-stream";
-
-    if (!looksValid) {
+    if (!isValidMediaContentType(contentType, expectedKind)) {
       response.status(415).json({ error: "El origen no devolvio un media valido." });
       return;
     }

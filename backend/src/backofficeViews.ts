@@ -92,6 +92,7 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
       --radius:18px;
     }
     * { box-sizing:border-box; }
+    [hidden] { display:none !important; }
     html { background:var(--bg); }
     body {
       margin:0;

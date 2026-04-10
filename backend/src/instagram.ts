@@ -161,26 +161,43 @@ function clampCaption(input: string): string {
 }
 
 export function buildInstagramCaption(
-  news: Pick<News, "title" | "excerpt" | "sourceName" | "tags" | "slug">,
+  news: Pick<News, "title" | "excerpt" | "sourceName" | "tags" | "slug" | "section" | "kicker">,
   preferences: InstagramPublishingPreferences,
   publicUrl: string,
 ): string {
+  const sectionEmojiMap: Record<string, string> = {
+    NACION: "politica",
+    PROVINCIAS: "federal",
+    MUNICIPIOS: "territorio",
+    OPINION: "analisis",
+    ENTREVISTAS: "entrevista",
+    PUBLINOTAS: "contenido",
+    RADAR_ELECTORAL: "radar",
+    ECONOMIA: "economia",
+    INTERNACIONALES: "mundo",
+    DISTRITOS: "distritos",
+  };
+  const leadLabel = sectionEmojiMap[readString(news.section).toUpperCase()] ?? "agenda";
   const tags = (news.tags ?? [])
     .map((item) => item.replace(/[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ_-]+/g, " ").trim())
     .filter(Boolean)
     .slice(0, 5)
     .map((item) => `#${item.replace(/\s+/g, "")}`);
+  const shortExcerpt = readString(news.excerpt).slice(0, 180);
+  const kicker = readString(news.kicker);
 
   const replacements: Record<string, string> = {
     "{title}": readString(news.title),
-    "{excerpt}": readString(news.excerpt),
-    "{cta}": "Lee la nota completa en Pulso Pais.",
+    "{excerpt}": shortExcerpt,
+    "{cta}": preferences.includeSiteUrl ? "Link a la nota completa abajo." : "Nota completa en el link de la bio.",
     "{url}": preferences.includeSiteUrl ? publicUrl : "",
     "{source}": preferences.includeSourceCredit ? `Fuente base: ${readString(news.sourceName) || "Pulso Pais"}` : "",
     "{hashtags}": tags.join(" "),
+    "{leadEmoji}": leadLabel,
+    "{kicker}": kicker,
   };
 
-  let caption = preferences.captionTemplate;
+  let caption = preferences.captionTemplate || "{leadEmoji} | {title}\n\n{kicker}\n{excerpt}\n\n{cta}\n\n{hashtags}";
   for (const [needle, value] of Object.entries(replacements)) {
     caption = caption.replaceAll(needle, value);
   }
@@ -194,7 +211,7 @@ export function buildInstagramCaption(
 }
 
 export async function publishNewsToInstagram(params: {
-  news: Pick<News, "id" | "title" | "excerpt" | "imageUrl" | "sourceName" | "tags" | "slug">;
+  news: Pick<News, "id" | "title" | "excerpt" | "imageUrl" | "sourceName" | "tags" | "slug" | "section" | "kicker">;
   preferences: InstagramPublishingPreferences;
   frontendBaseUrl: string;
 }): Promise<InstagramPublishResult> {

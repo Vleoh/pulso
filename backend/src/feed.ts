@@ -1,16 +1,8 @@
 import { type News, NewsSection } from "@prisma/client";
 import { buildManagedImageUrl } from "./mediaProxy";
+import { isLikelyEditorialImage } from "./articleMedia";
 import type { FeedItem } from "./types";
 import { normalizeHttpUrl, normalizeImageUrl } from "./utils";
-
-const FEED_FALLBACK_IMAGES = [
-  "https://images.unsplash.com/photo-1494526585095-c41746248156?auto=format&fit=crop&w=1600&q=80",
-  "https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?auto=format&fit=crop&w=1600&q=80",
-  "https://images.unsplash.com/photo-1454165804606-c3d57bc86b40?auto=format&fit=crop&w=1600&q=80",
-  "https://images.unsplash.com/photo-1444653389962-8149286c578a?auto=format&fit=crop&w=1600&q=80",
-  "https://images.unsplash.com/photo-1504711331083-9c895941bf81?auto=format&fit=crop&w=1600&q=80",
-  "https://images.unsplash.com/photo-1464207687429-7505649dae38?auto=format&fit=crop&w=1600&q=80",
-];
 
 export function guessSectionFromText(text: string): NewsSection {
   const normalized = text.toLowerCase();
@@ -30,26 +22,6 @@ export function guessSectionFromText(text: string): NewsSection {
     return NewsSection.PROVINCIAS;
   }
   return NewsSection.NACION;
-}
-
-function fallbackFeedImage(seedText: string): string {
-  const source = seedText.trim().toLowerCase() || "pulso-pais";
-  let hash = 0;
-  for (const char of source) {
-    hash = (hash * 31 + char.charCodeAt(0)) % 2147483647;
-  }
-  return FEED_FALLBACK_IMAGES[Math.abs(hash) % FEED_FALLBACK_IMAGES.length] ?? FEED_FALLBACK_IMAGES[0] ?? "";
-}
-
-function articleScreenshotCandidates(sourceUrl: string | null): string[] {
-  if (!sourceUrl) {
-    return [];
-  }
-  const encoded = encodeURIComponent(sourceUrl);
-  return [
-    `https://s.wordpress.com/mshots/v1/${encoded}?w=1600`,
-    `https://image.thum.io/get/width/1600/noanimate/${sourceUrl}`,
-  ];
 }
 
 function looksInvalidInternalMedia(url: string | null): boolean {
@@ -73,23 +45,13 @@ export function resolveManagedFeedImage(
   },
 ): string | null {
   const normalizedImage = normalizeImageUrl(rawImageUrl);
-  const normalizedSource = normalizeHttpUrl(options?.sourceUrl);
-  const seed = options?.seed?.trim() || normalizedSource || normalizedImage || "pulso-pais";
+  void options;
 
-  const candidates = [
-    ...(normalizedImage && !looksInvalidInternalMedia(normalizedImage) ? [normalizedImage] : []),
-    ...articleScreenshotCandidates(normalizedSource),
-    fallbackFeedImage(seed),
-  ];
-
-  for (const candidate of candidates) {
-    const managed = buildManagedImageUrl(candidate);
-    if (managed) {
-      return managed;
-    }
+  if (!normalizedImage || looksInvalidInternalMedia(normalizedImage) || !isLikelyEditorialImage(normalizedImage)) {
+    return null;
   }
 
-  return null;
+  return buildManagedImageUrl(normalizedImage);
 }
 
 export function toFeedItem(news: News): FeedItem {
