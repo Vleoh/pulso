@@ -26,6 +26,10 @@ type CachedMediaRecord = {
   size: number | null;
 };
 
+type CaptureImageOptions = {
+  referer?: string | null;
+};
+
 function resolveBackendPublicUrl(): string {
   const fallback =
     process.env.NODE_ENV === "production" || process.env.RENDER
@@ -252,7 +256,32 @@ export function buildManagedVideoUrl(rawValue: string | null | undefined): strin
   return buildManagedMediaUrl(rawValue, "video");
 }
 
-async function fetchAndCaptureImage(url: string): Promise<CachedMediaRecord | null> {
+function buildMediaFetchHeaders(
+  purpose: "capture" | "proxy",
+  expectedKind: ManagedMediaKind,
+  options?: CaptureImageOptions,
+  rangeHeader?: string,
+): Record<string, string> {
+  const referer = normalizeHttpUrl(options?.referer);
+  let origin = "";
+  if (referer) {
+    try {
+      origin = new URL(referer).origin;
+    } catch {
+      origin = "";
+    }
+  }
+
+  return {
+    accept: expectedKind === "image" ? "image/*,*/*;q=0.8" : "video/*,*/*;q=0.8",
+    "user-agent": purpose === "capture" ? "PulsoPaisMediaCapture/2.0" : "PulsoPaisMediaProxy/2.0",
+    ...(referer ? { referer } : {}),
+    ...(origin ? { origin } : {}),
+    ...(rangeHeader ? { range: rangeHeader } : {}),
+  };
+}
+
+async function fetchAndCaptureImage(url: string, options?: CaptureImageOptions): Promise<CachedMediaRecord | null> {
   const normalized = normalizeImageUrl(url);
   if (!normalized) {
     return null;
@@ -277,10 +306,7 @@ async function fetchAndCaptureImage(url: string): Promise<CachedMediaRecord | nu
       const upstream = await fetch(normalized, {
         method: "GET",
         signal: controller.signal,
-        headers: {
-          accept: "image/*,*/*;q=0.8",
-          "user-agent": "PulsoPaisMediaCapture/1.0",
-        },
+        headers: buildMediaFetchHeaders("capture", "image", options),
       });
 
       if (!upstream.ok || !upstream.body) {
@@ -314,7 +340,10 @@ async function fetchAndCaptureImage(url: string): Promise<CachedMediaRecord | nu
   return capturePromise;
 }
 
-export async function ensureManagedImageCaptured(rawValue: string | null | undefined): Promise<string | null> {
+export async function ensureManagedImageCaptured(
+  rawValue: string | null | undefined,
+  options?: CaptureImageOptions,
+): Promise<string | null> {
   const normalized = normalizeImageUrl(rawValue);
   if (!normalized) {
     return null;
@@ -323,7 +352,7 @@ export async function ensureManagedImageCaptured(rawValue: string | null | undef
     return normalized;
   }
 
-  const captured = await fetchAndCaptureImage(normalized);
+  const captured = await fetchAndCaptureImage(normalized, options);
   if (!captured) {
     return null;
   }
@@ -404,11 +433,12 @@ export async function proxyManagedMediaRequest(
     const upstream = await fetch(payload.url, {
       method: request.method === "HEAD" ? "HEAD" : "GET",
       signal: controller.signal,
-      headers: {
-        accept: expectedKind === "image" ? "image/*,*/*;q=0.8" : "video/*,*/*;q=0.8",
-        "user-agent": "PulsoPaisMediaProxy/1.0",
-        ...(typeof request.headers.range === "string" ? { range: request.headers.range } : {}),
-      },
+      headers: buildMediaFetchHeaders(
+        "proxy",
+        expectedKind,
+        { referer: typeof request.headers.referer === "string" ? request.headers.referer : null },
+        typeof request.headers.range === "string" ? request.headers.range : undefined,
+      ),
     });
 
     if (!upstream.ok && upstream.status !== 206) {

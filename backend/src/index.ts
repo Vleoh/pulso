@@ -444,6 +444,11 @@ async function probeEmbeddableVideoUrl(url: string): Promise<boolean> {
   }
 }
 
+type ManagedImageCandidate = {
+  url: string | null | undefined;
+  referer?: string | null;
+};
+
 async function pickReachableImage(imageUrls: string[], maxChecks = 4): Promise<string | null> {
   const unique = Array.from(new Set(imageUrls.map((item) => item.trim()).filter(Boolean)));
   const capped = unique.slice(0, Math.max(1, maxChecks));
@@ -491,18 +496,134 @@ async function pickReachableImages(
   return selected;
 }
 
-async function captureManagedImageList(imageUrls: string[], maxItems = 4): Promise<string[]> {
+async function pickManagedImageCandidate(
+  candidates: ManagedImageCandidate[],
+  maxChecks = 6,
+): Promise<{ rawUrl: string; managedUrl: string } | null> {
+  const seen = new Set<string>();
+  let inspected = 0;
+
+  for (const candidate of candidates) {
+    const normalizedUrl = normalizeImageUrl(candidate.url);
+    if (!normalizedUrl || seen.has(normalizedUrl)) {
+      continue;
+    }
+    seen.add(normalizedUrl);
+    inspected += 1;
+    if (inspected > Math.max(1, maxChecks)) {
+      break;
+    }
+
+    const managedUrl = await ensureManagedImageCaptured(normalizedUrl, { referer: candidate.referer ?? null });
+    if (managedUrl) {
+      return { rawUrl: normalizedUrl, managedUrl };
+    }
+  }
+
+  return null;
+}
+
+async function captureManagedImageList(candidates: Array<string | ManagedImageCandidate>, maxItems = 4): Promise<string[]> {
   const managed: string[] = [];
-  for (const url of Array.from(new Set(imageUrls.map((item) => item.trim()).filter(Boolean)))) {
+  const seen = new Set<string>();
+  for (const entry of candidates) {
     if (managed.length >= maxItems) {
       break;
     }
-    const captured = await ensureManagedImageCaptured(url);
+    const candidate = typeof entry === "string" ? { url: entry, referer: null } : entry;
+    const normalizedUrl = normalizeImageUrl(candidate.url);
+    if (!normalizedUrl || seen.has(normalizedUrl)) {
+      continue;
+    }
+    seen.add(normalizedUrl);
+    const captured = await ensureManagedImageCaptured(normalizedUrl, { referer: candidate.referer ?? null });
     if (captured) {
       managed.push(captured);
     }
   }
   return managed;
+}
+
+async function createReviewNewsDraft(params: {
+  title: string;
+  excerpt?: string | null;
+  kicker?: string | null;
+  body?: string | null;
+  section?: Prisma.NewsUncheckedCreateInput["section"] | null;
+  province?: Prisma.NewsUncheckedCreateInput["province"] | null;
+  tags?: string[];
+  sourceName?: string | null;
+  sourceUrl?: string | null;
+  authorName?: string | null;
+  aiReason: string;
+  aiWarnings?: string[];
+  aiModel?: string | null;
+}): Promise<void> {
+  const normalized = normalizeNewsInput({
+    title: params.title,
+    slug: "",
+    kicker: params.kicker ?? "Revision editorial",
+    excerpt: params.excerpt ?? params.aiReason,
+    body:
+      params.body ??
+      `${params.excerpt ?? params.title}\n\nEstado: pendiente de revision editorial.\nMotivo: ${params.aiReason}`,
+    imageUrl: "",
+    sourceName: params.sourceName ?? "Pulso Pais IA",
+    sourceUrl: normalizeHttpUrl(params.sourceUrl) ?? "",
+    authorName: params.authorName ?? "Agente periodista",
+    section: params.section ?? "NACION",
+    province: params.province ?? "",
+    tags: (params.tags ?? []).filter(Boolean),
+    status: NewsStatus.DRAFT,
+    publishedAt: "",
+    isSponsored: false,
+    isFeatured: false,
+    isHero: false,
+    isInterview: false,
+    isOpinion: false,
+    isRadar: params.section === "RADAR_ELECTORAL",
+  });
+
+  const existingReview =
+    params.sourceUrl && normalizeHttpUrl(params.sourceUrl)
+      ? await prisma.news.findFirst({
+          where: {
+            sourceUrl: normalizeHttpUrl(params.sourceUrl),
+            aiDecision: "REVIEW",
+          },
+          orderBy: [{ updatedAt: "desc" }],
+        })
+      : null;
+
+  if (existingReview) {
+    const uniqueSlug = await ensureUniqueSlug(prisma, normalized.slug, existingReview.id);
+    await prisma.news.update({
+      where: { id: existingReview.id },
+      data: {
+        ...normalized,
+        slug: uniqueSlug,
+        aiDecision: "REVIEW",
+        aiReason: params.aiReason,
+        aiWarnings: params.aiWarnings ?? [],
+        aiModel: params.aiModel ?? null,
+        aiEvaluatedAt: new Date(),
+      },
+    });
+    return;
+  }
+
+  const uniqueSlug = await ensureUniqueSlug(prisma, normalized.slug);
+  await prisma.news.create({
+    data: {
+      ...normalized,
+      slug: uniqueSlug,
+      aiDecision: "REVIEW",
+      aiReason: params.aiReason,
+      aiWarnings: params.aiWarnings ?? [],
+      aiModel: params.aiModel ?? null,
+      aiEvaluatedAt: new Date(),
+    },
+  });
 }
 
 function wildcardToRegExp(pattern: string): RegExp {
@@ -642,14 +763,16 @@ async function postProcessResearchedSuggestion(
   const coverImageCandidates = coverImageCandidatesRaw
     .map((url) => applyResearchImageTransform(url, settings))
     .filter((url): url is string => Boolean(url));
-  let finalImage = await pickReachableImage(coverImageCandidates, 6);
-  if (!finalImage) {
-    const fallbackImage = applyResearchImageTransform(fallbackResearchImage(fallbackSeed), settings);
-    finalImage = fallbackImage && (await probeImageUrl(fallbackImage)) ? fallbackImage : null;
-  }
-  if (!finalImage) {
+  const leadReferer = leadSource?.sourceUrl ?? sources[0]?.sourceUrl ?? null;
+  const managedCoverCandidate = await pickManagedImageCandidate(
+    coverImageCandidates.map((url) => ({ url, referer: leadReferer })),
+    8,
+  );
+  if (!managedCoverCandidate) {
     throw new Error("El agente fotografo no encontro una portada editorial valida en la fuente. La pieza queda en revision.");
   }
+  const finalImage = managedCoverCandidate.rawUrl;
+  const proxiedCover = managedCoverCandidate.managedUrl;
 
   const gallerySourceRaw = sourceImageCandidates
     .filter((url) => !coverImageCandidatesRaw.includes(url))
@@ -658,7 +781,9 @@ async function postProcessResearchedSuggestion(
     .map((url) => applyResearchImageTransform(url, settings))
     .filter((url): url is string => Boolean(url));
   const galleryImages = await captureManagedImageList(
-    (await pickReachableImages(galleryCandidates, 4, 10)).filter((url) => url !== finalImage),
+    galleryCandidates
+      .filter((url) => url !== finalImage)
+      .map((url, index) => ({ url, referer: sources[index % Math.max(1, sources.length)]?.sourceUrl ?? leadReferer })),
     4,
   );
 
@@ -675,13 +800,10 @@ async function postProcessResearchedSuggestion(
     [finalImage, ...rawPosterCandidates],
     3,
   )[0] ?? null;
-
-  const proxiedCover = await ensureManagedImageCaptured(finalImage);
-  if (!proxiedCover) {
-    throw new Error("El agente fotografo no pudo capturar la portada editorial seleccionada.");
-  }
   const proxiedPoster =
-    finalVideoPoster ? (await ensureManagedImageCaptured(finalVideoPoster)) ?? buildManagedImageUrl(finalVideoPoster) : null;
+    finalVideoPoster
+      ? (await ensureManagedImageCaptured(finalVideoPoster, { referer: leadReferer })) ?? buildManagedImageUrl(finalVideoPoster)
+      : null;
   let finalBody = appendPrimaryVideoBlockToBody(
     suggestion.body ?? suggestion.excerpt ?? null,
     buildManagedVideoUrl(finalVideo),
@@ -845,17 +967,17 @@ async function createStoriesFromBatchState(formState: BatchNewsFormState): Promi
 
   for (const [index, item] of batch.items.entries()) {
     const draft = item.draft;
+    const fallbackTitle = item.focus === "CAMPAIGN" ? `Radar de campana ${index + 1}` : `Agenda politica ${index + 1}`;
+    const fallbackKicker = item.focus === "CAMPAIGN" ? "Escenario Electoral" : "Mesa de situacion";
+    const fallbackExcerpt = item.focus === "CAMPAIGN" ? safeCampaignTopic : safeGeneralBrief;
+    const sourceItem = researchSources.length > 0 ? researchSources[index % researchSources.length] : null;
+    const sourceGalleryCandidates =
+      researchSources.length > 0
+        ? [researchSources[(index + 1) % researchSources.length], researchSources[(index + 2) % researchSources.length]]
+        : [];
     try {
       const finalSection = draft.section && isNewsSection(draft.section) ? draft.section : formState.sectionHint || "NACION";
       const finalProvince = draft.province && isProvince(draft.province) ? draft.province : formState.provinceHint || "";
-      const fallbackTitle = item.focus === "CAMPAIGN" ? `Radar de campana ${index + 1}` : `Agenda politica ${index + 1}`;
-      const fallbackKicker = item.focus === "CAMPAIGN" ? "Escenario Electoral" : "Mesa de situacion";
-      const fallbackExcerpt = item.focus === "CAMPAIGN" ? safeCampaignTopic : safeGeneralBrief;
-      const sourceItem = researchSources.length > 0 ? researchSources[index % researchSources.length] : null;
-      const sourceGalleryCandidates =
-        researchSources.length > 0
-          ? [researchSources[(index + 1) % researchSources.length], researchSources[(index + 2) % researchSources.length]]
-          : [];
       const sourceVideoCandidates = researchSources.length > 0 ? [sourceItem, researchLead, ...sourceGalleryCandidates] : [];
       const baseImageCandidatesRaw = uniqueNormalizedImageUrls(
         [
@@ -870,12 +992,15 @@ async function createStoriesFromBatchState(formState: BatchNewsFormState): Promi
       const baseImageCandidates = baseImageCandidatesRaw
         .map((url) => applyResearchImageTransform(url, aiResearchSettings))
         .filter((url): url is string => Boolean(url));
-      const reachableCover = await pickReachableImage(baseImageCandidates, 3);
-      const fallbackCover = applyResearchImageTransform(fallbackBatchImageByIndex(index), aiResearchSettings);
-      const finalImage = reachableCover ?? (fallbackCover && (await probeImageUrl(fallbackCover)) ? fallbackCover : "");
-      if (!finalImage) {
+      const imageReferer = sourceItem?.sourceUrl ?? researchLead?.sourceUrl ?? null;
+      const managedCoverCandidate = await pickManagedImageCandidate(
+        baseImageCandidates.map((url) => ({ url, referer: imageReferer })),
+        5,
+      );
+      if (!managedCoverCandidate) {
         throw new Error("El agente fotografo no encontro una portada editorial valida para este item.");
       }
+      const finalImage = managedCoverCandidate.rawUrl;
       const galleryImages = uniqueNormalizedImageUrls(
         sourceGalleryCandidates.map((entry) => entry?.imageUrl ?? null),
         3,
@@ -884,7 +1009,12 @@ async function createStoriesFromBatchState(formState: BatchNewsFormState): Promi
         .map((url) => applyResearchImageTransform(url, aiResearchSettings))
         .filter((url): url is string => Boolean(url));
       const reachableGallery = await captureManagedImageList(
-        (await pickReachableImages(galleryImages, 3, 8)).filter((url) => url !== finalImage),
+        galleryImages
+          .filter((url) => url !== finalImage)
+          .map((url, galleryIndex) => ({
+            url,
+            referer: sourceGalleryCandidates[galleryIndex]?.sourceUrl ?? imageReferer,
+          })),
         3,
       );
       const reachableVideo = await pickReachableVideo(
@@ -894,11 +1024,10 @@ async function createStoriesFromBatchState(formState: BatchNewsFormState): Promi
       const videoPosterSource =
         uniqueNormalizedImageUrls([sourceItem?.videoPosterUrl ?? null, researchLead?.videoPosterUrl ?? null, finalImage], 3)[0] ?? null;
       const videoPoster =
-        videoPosterSource ? (await ensureManagedImageCaptured(videoPosterSource)) ?? buildManagedImageUrl(videoPosterSource) : null;
-      const managedCover = await ensureManagedImageCaptured(finalImage);
-      if (!managedCover) {
-        throw new Error("El agente fotografo no pudo capturar la portada editorial del item.");
-      }
+        videoPosterSource
+          ? (await ensureManagedImageCaptured(videoPosterSource, { referer: imageReferer })) ?? buildManagedImageUrl(videoPosterSource)
+          : null;
+      const managedCover = managedCoverCandidate.managedUrl;
 
       const finalSourceName = draft.sourceName ?? sourceItem?.sourceName ?? researchLead?.sourceName ?? formState.defaultSourceName;
       const finalSourceUrl =
@@ -955,7 +1084,35 @@ async function createStoriesFromBatchState(formState: BatchNewsFormState): Promi
       });
       createdCount += 1;
     } catch (error) {
-      errors.push(`Item ${index + 1}: ${(error as Error).message}`);
+      const errorMessage = (error as Error).message;
+      const reviewSection =
+        draft.section && isNewsSection(draft.section)
+          ? draft.section
+          : isNewsSection(formState.sectionHint)
+            ? formState.sectionHint
+            : "NACION";
+      const reviewProvince =
+        draft.province && isProvince(draft.province)
+          ? draft.province
+          : isProvince(formState.provinceHint)
+            ? formState.provinceHint
+            : null;
+      await createReviewNewsDraft({
+        title: draft.title ?? fallbackTitle,
+        excerpt: draft.excerpt ?? fallbackExcerpt,
+        kicker: draft.kicker ?? fallbackKicker,
+        body: draft.body ?? fallbackExcerpt,
+        section: reviewSection,
+        province: reviewProvince,
+        tags: draft.tags.length > 0 ? draft.tags : [item.focus === "CAMPAIGN" ? "campana" : "agenda", "revision-fotografo"],
+        sourceName: draft.sourceName ?? sourceItem?.sourceName ?? researchLead?.sourceName ?? formState.defaultSourceName,
+        sourceUrl: draft.sourceUrl ?? sourceItem?.sourceUrl ?? researchLead?.sourceUrl ?? formState.defaultSourceUrl,
+        authorName: draft.authorName ?? formState.defaultAuthorName,
+        aiReason: errorMessage,
+        aiWarnings: draft.notes,
+        aiModel: batch.model,
+      });
+      errors.push(`Item ${index + 1}: ${errorMessage}`);
     }
   }
 
@@ -1053,12 +1210,11 @@ async function internalizeExternalNewsFromState(rewriteState: ExternalRewriteFor
   const errors: string[] = [];
 
   for (const [index, candidate] of candidates.entries()) {
+    const source = candidate.source;
+    const externalKey = normalizeExternalKey(source.sourceUrl);
+    const duplicateRows = existingBySource.get(externalKey) ?? [];
+    const existing = candidate.existing;
     try {
-      const source = candidate.source;
-      const externalKey = normalizeExternalKey(source.sourceUrl);
-      const duplicateRows = existingBySource.get(externalKey) ?? [];
-      const existing = candidate.existing;
-
       const assistInput = {
         brief: `${rewriteState.instruction}\nFuente objetivo: ${source.title}`,
         sectionHint: rewriteState.sectionHint || (isNewsSection(source.section) ? source.section : null),
@@ -1179,7 +1335,40 @@ async function internalizeExternalNewsFromState(rewriteState: ExternalRewriteFor
         createdCount += 1;
       }
     } catch (error) {
-      errors.push(`Fuente ${index + 1}: ${(error as Error).message}`);
+      const errorMessage = (error as Error).message;
+      const reviewSection =
+        isNewsSection(rewriteState.sectionHint)
+          ? rewriteState.sectionHint
+          : isNewsSection(source.section)
+            ? source.section
+            : "NACION";
+      const reviewProvince = isProvince(rewriteState.provinceHint) ? rewriteState.provinceHint : null;
+      if (!existing) {
+        await createReviewNewsDraft({
+          title: source.title,
+          excerpt: source.excerpt ?? rewriteState.instruction,
+          kicker: isNewsSection(source.section) && source.section === "RADAR_ELECTORAL" ? "Escenario Electoral" : "Revision editorial",
+          body: source.excerpt ?? rewriteState.instruction,
+          section: reviewSection,
+          province: reviewProvince,
+          tags: ["revision-fotografo", "fuente-externa"],
+          sourceName: source.sourceName ?? "Fuente abierta",
+          sourceUrl: source.sourceUrl,
+          authorName: "Agente periodista",
+          aiReason: errorMessage,
+          aiModel: "journalist-agent",
+        });
+      } else {
+        await prisma.news.update({
+          where: { id: existing.id },
+          data: {
+            aiDecision: "REVIEW",
+            aiReason: errorMessage,
+            aiEvaluatedAt: new Date(),
+          },
+        });
+      }
+      errors.push(`Fuente ${index + 1}: ${errorMessage}`);
     }
   }
 
@@ -1271,12 +1460,15 @@ async function rewriteExistingNewsByCommand(operation: Extract<EditorialCommandO
         [processed.imageUrl, row.imageUrl, fallbackResearchImage(row.title)],
         4,
       );
-      const reachableCover = await pickReachableImage(baseCoverCandidates, 4);
-      if (operation.requireImageUrl && !reachableCover) {
+      const coverReferer = researchLead?.sourceUrl ?? row.sourceUrl ?? null;
+      const managedCoverCandidate = await pickManagedImageCandidate(
+        baseCoverCandidates.map((url) => ({ url, referer: coverReferer })),
+        5,
+      );
+      if (operation.requireImageUrl && !managedCoverCandidate) {
         throw new Error("No se pudo asegurar una portada valida para la reescritura.");
       }
-      const managedCover =
-        reachableCover ? (await ensureManagedImageCaptured(reachableCover)) ?? buildManagedImageUrl(reachableCover) : null;
+      const managedCover = managedCoverCandidate?.managedUrl ?? null;
 
       const normalized = normalizeNewsInput({
         title: processed.title ?? row.title,
@@ -1319,7 +1511,16 @@ async function rewriteExistingNewsByCommand(operation: Extract<EditorialCommandO
       });
       updatedCount += 1;
     } catch (error) {
-      errors.push(`Nota ${index + 1}: ${(error as Error).message}`);
+      const errorMessage = (error as Error).message;
+      await prisma.news.update({
+        where: { id: row.id },
+        data: {
+          aiDecision: "REVIEW",
+          aiReason: errorMessage,
+          aiEvaluatedAt: new Date(),
+        },
+      });
+      errors.push(`Nota ${index + 1}: ${errorMessage}`);
     }
   }
 
@@ -4443,6 +4644,17 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
         </div>`;
       })
       .join("");
+    const reviewRows = news
+      .filter((item) => item.aiDecision === "REVIEW")
+      .slice(0, 6)
+      .map((item) => {
+        const when = new Date(item.updatedAt).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" });
+        return `<div class="bo-soft-line">
+          <strong>${currentErrorSafe(item.title)}</strong>
+          <span>${currentErrorSafe(item.aiReason ?? "Pendiente de revision editorial")} &middot; ${when}</span>
+        </div>`;
+      })
+      .join("");
     const body = `<div class="grid">
       <section class="bo-hero">
         <div class="bo-hero-copy">
@@ -4589,6 +4801,20 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
                   <button class="primary" type="submit">Correr ciclo IA ahora</button>
                 </form>
               </div>
+            </div>
+          </article>
+
+          <article class="card">
+            <div class="split-title">
+              <div>
+                <div class="bo-kicker">Cola de revision</div>
+                <h3 style="margin-top:10px;">Piezas bloqueadas o pendientes</h3>
+              </div>
+              <a class="button" href="/backoffice/news/review">Abrir revision</a>
+            </div>
+            <p class="muted" style="margin-bottom:12px;">Si el agente fotografo o compliance no dejan publicar, la pieza queda aca con motivo visible para editarla o corregirla.</p>
+            <div class="bo-log-list ${reviewRows ? "" : "is-empty"}">
+              ${reviewRows || `<p class="muted">No hay piezas pendientes de revision en este momento.</p>`}
             </div>
           </article>
 
@@ -5825,6 +6051,32 @@ app.get("/backoffice/news/new", boGuard, async (request, response, next) => {
     response.send(
       await renderUnifiedEditorialPage(pageParams),
     );
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/backoffice/news/review", boGuard, async (request, response, next) => {
+  try {
+    const rows = await prisma.news.findMany({
+      where: { aiDecision: "REVIEW" },
+      orderBy: [{ updatedAt: "desc" }],
+      take: 300,
+    });
+    const body = `<div class="grid">
+      <div class="card">
+        <div class="split-title">
+          <div>
+            <div class="bo-kicker">Revision editorial</div>
+            <h3 style="margin-top:10px;">Piezas en review</h3>
+          </div>
+          <a class="button" href="/backoffice/news/new?template=internalize">Volver a consola IA</a>
+        </div>
+        <p class="muted">Esta cola concentra notas que el agente fotografo, compliance o la validacion editorial dejaron pendientes. Editalas, completales portada y luego publicalas.</p>
+      </div>
+      ${renderNewsTable(rows, { frontendBaseUrl: normalizedFrontendBaseUrl() })}
+    </div>`;
+    response.send(backofficeShell("Revision editorial", body, readString(request.query.ok)));
   } catch (error) {
     next(error);
   }

@@ -1015,56 +1015,6 @@ export function renderNewsForm(params: {
             : ""
         }
         ${studioBlock}
-        <div id="ia" class="ai-box" hidden>
-          <div class="ai-head">
-            <div>
-              <h3 class="ai-title">Herramientas rapidas del editor</h3>
-              <p class="ai-sub">Este bloque queda como apoyo puntual para autocompletar el formulario manual. La operacion principal ahora vive en la consola conversacional de arriba.</p>
-            </div>
-            <span class="ai-badge" id="aiConnBadge">Chequeando IA...</span>
-          </div>
-          <div class="field">
-            <label for="aiBrief">Brief para IA</label>
-            <textarea id="aiBrief" rows="3" placeholder="Ej: cierre de alianzas en PBA, impacto en intendentes del conurbano y lectura nacional para 2026."></textarea>
-          </div>
-          <div class="field">
-            <label for="aiCampaignLine">Bajada editorial / campana activa</label>
-            <textarea id="aiCampaignLine" rows="2" placeholder="Ej: instalar liderazgo territorial en conurbano y mostrar gestion con foco empleo.">${getValue(
-              aiResearch.campaignLine,
-            )}</textarea>
-            <p class="hint">Esta linea guia el enfoque final de la nota cuando uses el agente periodista.</p>
-          </div>
-          <div class="ai-actions">
-            <button type="button" id="aiGenerateBtn" class="primary ai-main-action">&#9889; Genera con IA</button>
-            <button
-              type="button"
-              id="aiResearchBtn"
-              class="ai-main-action"
-              ${aiResearch.enabled ? "" : "disabled"}
-              title="${aiResearch.enabled ? "Investigar agenda caliente y generar nota propia" : "Agente periodista desactivado en panel"}"
-            >&#128269; Investigar y generar nota propia</button>
-          </div>
-          <label class="ai-inline" style="font-size:12px; color:#bfbfbf;">
-            <input type="checkbox" id="aiResearchIncludeCampaign" ${aiResearch.campaignLine ? "checked" : ""} />
-            Incluir bajada/campana activa en esta corrida.
-          </label>
-          <details class="ai-advanced">
-            <summary>Herramientas IA avanzadas</summary>
-            <div class="ai-actions">
-              <button type="button" id="aiAskBtn">&#128172; Preguntar IA</button>
-              <button type="button" id="aiReviewBtn">&#128737; Validar borrador</button>
-              <button type="button" id="aiApplyBtn">&#9989; Aplicar sugerencias</button>
-            </div>
-            <label class="ai-inline" style="font-size:12px; color:#bfbfbf;">
-              <input type="checkbox" id="aiAskAutoApply" />
-              Si la respuesta incluye draft, autocompletar formulario.
-            </label>
-          </details>
-          <div id="aiStatus" class="ai-status">Completa un brief y usa "Genera con IA".</div>
-          <div id="aiAnswer" class="ai-chat-answer" style="display:none;"></div>
-          <div id="aiReview" class="ai-review" style="display:none;"></div>
-          <p class="muted">La validacion final sigue siendo obligatoria al guardar. Si la IA marca REJECT, el guardado se bloquea.</p>
-        </div>
         <form id="news-form" method="post" action="${action}">
           <div class="cms-layout">
             <section class="editor-stack">
