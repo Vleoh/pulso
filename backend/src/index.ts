@@ -1152,6 +1152,7 @@ async function internalizeExternalNewsFromState(rewriteState: ExternalRewriteFor
   createdCount: number;
   updatedCount: number;
   deletedCount: number;
+  reviewCount: number;
   errors: string[];
 }> {
   const settings = await getAiResearchSettings(prisma);
@@ -1226,6 +1227,7 @@ async function internalizeExternalNewsFromState(rewriteState: ExternalRewriteFor
   let createdCount = 0;
   let updatedCount = 0;
   let deletedCount = 0;
+  let reviewCount = 0;
   const errors: string[] = [];
 
   for (const [index, candidate] of candidates.entries()) {
@@ -1377,6 +1379,7 @@ async function internalizeExternalNewsFromState(rewriteState: ExternalRewriteFor
           aiReason: errorMessage,
           aiModel: "journalist-agent",
         });
+        reviewCount += 1;
       } else {
         await prisma.news.update({
           where: { id: existing.id },
@@ -1386,12 +1389,13 @@ async function internalizeExternalNewsFromState(rewriteState: ExternalRewriteFor
             aiEvaluatedAt: new Date(),
           },
         });
+        reviewCount += 1;
       }
       errors.push(`Fuente ${index + 1}: ${errorMessage}`);
     }
   }
 
-  if (createdCount === 0 && updatedCount === 0) {
+  if (createdCount === 0 && updatedCount === 0 && reviewCount === 0) {
     throw new Error(errors[0] ?? "No se pudo internalizar ninguna fuente externa.");
   }
 
@@ -1399,6 +1403,7 @@ async function internalizeExternalNewsFromState(rewriteState: ExternalRewriteFor
     createdCount,
     updatedCount,
     deletedCount,
+    reviewCount,
     errors,
   };
 }
@@ -1694,7 +1699,8 @@ async function executeEditorialCommandPlan(plan: EditorialCommandPlan, commandSt
       try {
         const result = await internalizeExternalNewsFromState(state);
         const errorHint = result.errors.length > 0 ? ` &middot; alertas: ${result.errors.slice(0, 2).join(" | ")}` : "";
-        resultLines.push(`Internalizar: ${result.createdCount} creadas, ${result.updatedCount} actualizadas, ${result.deletedCount} eliminadas${errorHint}`);
+        const reviewHint = result.reviewCount > 0 ? `, ${result.reviewCount} en revision` : "";
+        resultLines.push(`Internalizar: ${result.createdCount} creadas, ${result.updatedCount} actualizadas, ${result.deletedCount} eliminadas${reviewHint}${errorHint}`);
       } catch (error) {
         const message = error instanceof Error ? error.message : "No se pudo internalizar la agenda externa.";
         const canFallback = message.includes("No se encontraron fuentes externas candidatas") || message.includes("No se pudo internalizar ninguna fuente externa");
@@ -1933,6 +1939,17 @@ async function runEditorialAutopilotCycle(triggerLabel: string): Promise<Autopil
     socialSummary,
   };
 
+  const producedTodayAfterCycle = await prisma.news.count({
+    where: {
+      aiReason: { contains: "IA" },
+      createdAt: {
+        gte: new Date(`${nowParts.dateKey}T00:00:00-03:00`),
+        lt: new Date(`${nowParts.dateKey}T23:59:59-03:00`),
+      },
+    },
+  });
+  const remainingAfterCycle = Math.max(0, effectiveSettings.todayTarget - producedTodayAfterCycle);
+
   await setEditorialAutopilotSettings(prisma, {
     lastRunAt: result.executedAt,
     lastRunSummary: [result.planSummary, result.executionSummary, result.socialSummary].filter(Boolean).join(" | "),
@@ -1940,7 +1957,7 @@ async function runEditorialAutopilotCycle(triggerLabel: string): Promise<Autopil
       settings: effectiveSettings,
       now: new Date(),
       nowParts: getBuenosAiresNowParts(new Date()),
-      remainingToday: Math.max(0, remainingToday - Math.max(1, effectiveSettings.maxStoriesPerRun)),
+      remainingToday: remainingAfterCycle,
     }),
   });
 
