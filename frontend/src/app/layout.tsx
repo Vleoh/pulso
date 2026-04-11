@@ -24,6 +24,11 @@ export const metadata: Metadata = {
   title: "Pulso Pais | Politica, Poder y Territorio",
   description:
     "Medio digital politico federal de Argentina. Agenda nacional, distrital y radar electoral con enfoque editorial premium.",
+  icons: {
+    icon: "/favicon.jpg",
+    shortcut: "/favicon.jpg",
+    apple: "/favicon.jpg",
+  },
 };
 
 export default function RootLayout({
