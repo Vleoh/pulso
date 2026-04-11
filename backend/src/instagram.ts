@@ -170,6 +170,29 @@ function normalizeHashtagToken(input: string): string {
     .replace(/\s+/g, "");
 }
 
+function buildCommunityManagerLead(
+  news: Pick<News, "section" | "kicker">,
+): { leadEmoji: string; leadLabel: string } {
+  const sectionLeadMap: Record<string, { leadEmoji: string; leadLabel: string }> = {
+    NACION: { leadEmoji: "\u{1F5F3}\u{FE0F}", leadLabel: "Pulso nacional" },
+    PROVINCIAS: { leadEmoji: "\u{1F9F5}", leadLabel: "Pulso federal" },
+    MUNICIPIOS: { leadEmoji: "\u{1F3D9}\u{FE0F}", leadLabel: "Pulso territorial" },
+    OPINION: { leadEmoji: "\u{1F4CC}", leadLabel: "Claves del dia" },
+    ENTREVISTAS: { leadEmoji: "\u{1F399}\u{FE0F}", leadLabel: "Voz directa" },
+    PUBLINOTAS: { leadEmoji: "\u{1F4E3}", leadLabel: "Contenido de marca" },
+    RADAR_ELECTORAL: { leadEmoji: "\u{1F4E1}", leadLabel: "Radar electoral" },
+    ECONOMIA: { leadEmoji: "\u{1F4C8}", leadLabel: "Bolsillo y poder" },
+    INTERNACIONALES: { leadEmoji: "\u{1F30E}", leadLabel: "Pulso global" },
+    DISTRITOS: { leadEmoji: "\u{1F5FA}\u{FE0F}", leadLabel: "Distrito por distrito" },
+  };
+  const fallback = sectionLeadMap[readString(news.section).toUpperCase()] ?? {
+    leadEmoji: "\u{1F4F0}",
+    leadLabel: "Pulso Pais",
+  };
+  const kicker = readString(news.kicker);
+  return kicker ? { leadEmoji: fallback.leadEmoji, leadLabel: kicker } : fallback;
+}
+
 function buildCommunityManagerHashtags(
   news: Pick<News, "tags" | "section">,
   maxTags = 6,
@@ -203,48 +226,29 @@ export function buildInstagramCaption(
   preferences: InstagramPublishingPreferences,
   publicUrl: string,
 ): string {
-  const sectionEmojiMap: Record<string, string> = {
-    NACION: "politica",
-    PROVINCIAS: "federal",
-    MUNICIPIOS: "territorio",
-    OPINION: "analisis",
-    ENTREVISTAS: "entrevista",
-    PUBLINOTAS: "contenido",
-    RADAR_ELECTORAL: "radar",
-    ECONOMIA: "economia",
-    INTERNACIONALES: "mundo",
-    DISTRITOS: "distritos",
-  };
-  const leadLabel = sectionEmojiMap[readString(news.section).toUpperCase()] ?? "agenda";
-  const leadEmojiMap: Record<string, string> = {
-    politica: "🗳️",
-    federal: "🧭",
-    territorio: "🏙️",
-    analisis: "📌",
-    entrevista: "🎙️",
-    contenido: "📣",
-    radar: "📡",
-    economia: "📈",
-    mundo: "🌎",
-    distritos: "🗺️",
-    agenda: "📰",
-  };
+  const { leadEmoji, leadLabel } = buildCommunityManagerLead(news);
   const tags = buildCommunityManagerHashtags(news);
-  const shortExcerpt = readString(news.excerpt).slice(0, 180);
+  const shortExcerpt = readString(news.excerpt).slice(0, 220);
   const kicker = readString(news.kicker);
+  const cta = preferences.includeSiteUrl
+    ? "Segui la nota completa desde la publicacion."
+    : "Nota completa en el link de la bio.";
 
   const replacements: Record<string, string> = {
     "{title}": readString(news.title),
     "{excerpt}": shortExcerpt,
-    "{cta}": preferences.includeSiteUrl ? "Amplia en la nota completa." : "Lee la nota completa desde el link en bio.",
+    "{cta}": cta,
     "{url}": preferences.includeSiteUrl ? publicUrl : "",
     "{source}": preferences.includeSourceCredit ? `Fuente base: ${readString(news.sourceName) || "Pulso Pais"}` : "",
     "{hashtags}": tags.join(" "),
-    "{leadEmoji}": leadEmojiMap[leadLabel] ?? "📰",
-    "{kicker}": kicker,
+    "{leadEmoji}": leadEmoji,
+    "{leadLabel}": leadLabel,
+    "{kicker}": kicker || leadLabel,
   };
 
-  let caption = preferences.captionTemplate || "{leadEmoji} {title}\n\n{kicker}\n{excerpt}\n\n{cta}\n\n{hashtags}";
+  let caption =
+    preferences.captionTemplate ||
+    "{leadEmoji} {leadLabel}\n\n{title}\n\n{excerpt}\n\n{cta}\n\n{hashtags}";
   for (const [needle, value] of Object.entries(replacements)) {
     caption = caption.replaceAll(needle, value);
   }

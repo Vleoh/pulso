@@ -755,8 +755,7 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
       <div class="side-section-label">Principal</div>
       <nav class="side-nav">
         ${backofficeNavLink({ href: "/backoffice", label: "Dashboard", icon: backofficeIcon("panel"), isActive: activeNav === "panel" })}
-        ${backofficeNavLink({ href: "/backoffice/news/new", label: "Centro IA", icon: backofficeIcon("editorial"), isActive: activeNav === "editorial" })}
-        ${backofficeNavLink({ href: "/backoffice/news/new?template=coverage", label: "Sala de Redaccion", icon: backofficeIcon("journalist"), isActive: false })}
+        ${backofficeNavLink({ href: "/backoffice/news/new", label: "Sala IA", icon: backofficeIcon("editorial"), isActive: activeNav === "editorial" })}
       </nav>
       <div class="side-section-label">Contenido</div>
       <nav class="side-nav">
@@ -805,6 +804,57 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
   <div id="boToastStack" class="toast-stack" aria-live="polite" aria-atomic="true"></div>
   <script>
     (function () {
+      function syncSidebarActiveState() {
+        const links = Array.from(document.querySelectorAll(".bo-nav-link"));
+        if (!links.length) {
+          return;
+        }
+        const path = window.location.pathname || "";
+        const hash = window.location.hash || "";
+        links.forEach((link) => link.classList.remove("is-active"));
+        const match = (href) => links.find((link) => link.getAttribute("href") === href) || null;
+
+        if (path.startsWith("/backoffice/news/new")) {
+          const target = match("/backoffice/news/new");
+          if (target) {
+            target.classList.add("is-active");
+          }
+          return;
+        }
+        if (path.startsWith("/backoffice/polls")) {
+          const target = match("/backoffice/polls");
+          if (target) {
+            target.classList.add("is-active");
+          }
+          return;
+        }
+        if (path.startsWith("/backoffice/news/review")) {
+          const target = match("/backoffice/news/review");
+          if (target) {
+            target.classList.add("is-active");
+          }
+          return;
+        }
+        if (path.startsWith("/backoffice/users")) {
+          const target = match("/backoffice/users");
+          if (target) {
+            target.classList.add("is-active");
+          }
+          return;
+        }
+        if (path === "/backoffice" && hash) {
+          const target = match("/backoffice" + hash);
+          if (target) {
+            target.classList.add("is-active");
+            return;
+          }
+        }
+        const dashboard = match("/backoffice");
+        if (dashboard) {
+          dashboard.classList.add("is-active");
+        }
+      }
+
       const toastStack = document.getElementById("boToastStack");
       function toast(message, level) {
         if (!toastStack || !message) {
@@ -823,6 +873,8 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
         }, 2600);
       }
       window.pulsoToast = toast;
+      syncSidebarActiveState();
+      window.addEventListener("hashchange", syncSidebarActiveState);
     })();
   </script>
 </body>

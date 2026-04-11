@@ -1781,7 +1781,8 @@ async function maybePublishLatestNewsToInstagram(params: {
         Number(item.isFeatured) * 20 +
         Number(item.isRadar) * 12 +
         Number(item.isInterview) * 10 +
-        Number(item.isOpinion) * 8 +
+        Number(item.isOpinion) * 3 +
+        Number(item.isSponsored) * -20 +
         (item.excerpt ? 4 : 0) +
         Math.min((item.tags?.length ?? 0), 4);
       return score(right) - score(left) || +new Date(right.updatedAt) - +new Date(left.updatedAt);

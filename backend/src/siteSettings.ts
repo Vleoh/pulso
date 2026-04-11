@@ -186,7 +186,7 @@ const DEFAULT_INSTAGRAM_PUBLISHING_SETTINGS: InstagramPublishingSettings = {
   accountId: "",
   username: "",
   captionTemplate:
-    "{leadEmoji} {title}\n\n{kicker}\n{excerpt}\n\n{cta}\n\n{hashtags}",
+    "{leadEmoji} {leadLabel}\n\n{title}\n\n{excerpt}\n\n{cta}\n\n{hashtags}",
   includeSiteUrl: false,
   includeSourceCredit: false,
   maxPostsPerRun: 4,
