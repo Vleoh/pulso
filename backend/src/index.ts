@@ -5325,7 +5325,16 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
       </script>
     </div>`;
 
-    response.send(backofficeShell("Panel editorial", body, readString(request.query.ok)));
+    const requestedSection = readString(request.query.section).toLowerCase();
+    const activeSectionNav =
+      requestedSection === "autopilot"
+        ? "autopilot"
+        : requestedSection === "social"
+          ? "social"
+          : requestedSection === "theme"
+            ? "theme"
+            : "panel";
+    response.send(backofficeShell("Panel editorial", body, readString(request.query.ok), activeSectionNav));
   } catch (error) {
     next(error);
   }

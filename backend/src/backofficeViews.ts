@@ -3,7 +3,9 @@ import { PROVINCE_OPTIONS, SECTION_OPTIONS, provinceLabel, sectionLabel } from "
 import type { EditorialCommandChatMessage, EditorialCommandLogEntry } from "./siteSettings";
 import { escapeHtml } from "./utils";
 
-function resolveBackofficeNav(title: string): "panel" | "editorial" | "polls" | "users" {
+type BackofficeNavKey = "panel" | "editorial" | "polls" | "users" | "autopilot" | "social" | "theme";
+
+function resolveBackofficeNav(title: string): BackofficeNavKey {
   const normalized = title.trim().toLowerCase();
   if (normalized.includes("encuesta")) {
     return "polls";
@@ -27,10 +29,11 @@ function backofficeNavLink(params: {
   label: string;
   icon: string;
   isActive: boolean;
+  navKey: BackofficeNavKey;
   target?: string;
   rel?: string;
 }): string {
-  return `<a class="bo-nav-link ${params.isActive ? "is-active" : ""}" href="${params.href}"${
+  return `<a class="bo-nav-link ${params.isActive ? "is-active" : ""}" data-nav="${params.navKey}" href="${params.href}"${
     params.target ? ` target="${params.target}"` : ""
   }${params.rel ? ` rel="${params.rel}"` : ""}>
     <span class="bo-nav-icon">${params.icon}</span>
@@ -87,9 +90,14 @@ function backofficeIcon(name: string): string {
   }
 }
 
-export function backofficeShell(title: string, body: string, flashMessage?: string): string {
+export function backofficeShell(
+  title: string,
+  body: string,
+  flashMessage?: string,
+  activeNavOverride?: BackofficeNavKey,
+): string {
   const flash = flashMessage ? `<div class="flash">${escapeHtml(flashMessage)}</div>` : "";
-  const activeNav = resolveBackofficeNav(title);
+  const activeNav = activeNavOverride ?? resolveBackofficeNav(title);
   return `<!doctype html>
 <html lang="es">
 <head>
@@ -754,20 +762,20 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
       </div>
       <div class="side-section-label">Principal</div>
       <nav class="side-nav">
-        ${backofficeNavLink({ href: "/backoffice", label: "Dashboard", icon: backofficeIcon("panel"), isActive: activeNav === "panel" })}
-        ${backofficeNavLink({ href: "/backoffice/news/new", label: "Sala de Redaccion", icon: backofficeIcon("editorial"), isActive: activeNav === "editorial" })}
+        ${backofficeNavLink({ href: "/backoffice", label: "Dashboard", icon: backofficeIcon("panel"), navKey: "panel", isActive: activeNav === "panel" })}
+        ${backofficeNavLink({ href: "/backoffice/news/new", label: "Sala de Redaccion", icon: backofficeIcon("editorial"), navKey: "editorial", isActive: activeNav === "editorial" })}
       </nav>
       <div class="side-section-label">Contenido</div>
       <nav class="side-nav">
-        ${backofficeNavLink({ href: "/backoffice/polls", label: "Encuestas", icon: backofficeIcon("polls"), isActive: activeNav === "polls" })}
-        ${backofficeNavLink({ href: "/backoffice/news/review", label: "Cola revision", icon: backofficeIcon("editor"), isActive: false })}
-        ${backofficeNavLink({ href: "/backoffice/users", label: "Usuarios", icon: backofficeIcon("users"), isActive: activeNav === "users" })}
+        ${backofficeNavLink({ href: "/backoffice/polls", label: "Encuestas", icon: backofficeIcon("polls"), navKey: "polls", isActive: activeNav === "polls" })}
+        ${backofficeNavLink({ href: "/backoffice/news/review", label: "Cola revision", icon: backofficeIcon("editor"), navKey: "editorial", isActive: activeNav === "editorial" })}
+        ${backofficeNavLink({ href: "/backoffice/users", label: "Usuarios", icon: backofficeIcon("users"), navKey: "users", isActive: activeNav === "users" })}
       </nav>
       <div class="side-section-label">Sistema</div>
       <nav class="side-nav">
-        ${backofficeNavLink({ href: "/backoffice#autopilot-section", label: "Autopiloto", icon: backofficeIcon("autopilot"), isActive: false })}
-        ${backofficeNavLink({ href: "/backoffice#social-section", label: "Social", icon: backofficeIcon("social"), isActive: false })}
-        ${backofficeNavLink({ href: "/backoffice#theme-control", label: "Portada", icon: backofficeIcon("layout"), isActive: false })}
+        ${backofficeNavLink({ href: "/backoffice?section=autopilot#autopilot-section", label: "Autopiloto", icon: backofficeIcon("autopilot"), navKey: "autopilot", isActive: activeNav === "autopilot" })}
+        ${backofficeNavLink({ href: "/backoffice?section=social#social-section", label: "Social", icon: backofficeIcon("social"), navKey: "social", isActive: activeNav === "social" })}
+        ${backofficeNavLink({ href: "/backoffice?section=theme#theme-control", label: "Portada", icon: backofficeIcon("layout"), navKey: "theme", isActive: activeNav === "theme" })}
       </nav>
       <div class="side-footer">
         <a href="/backoffice/ia-lab"><span class="bo-nav-icon">${backofficeIcon("lab")}</span><span>Diagnostico IA</span></a>
@@ -804,56 +812,56 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
   <div id="boToastStack" class="toast-stack" aria-live="polite" aria-atomic="true"></div>
   <script>
     (function () {
-        function syncSidebarActiveState() {
-          const links = Array.from(document.querySelectorAll(".bo-nav-link"));
-          if (!links.length) {
-            return;
-          }
-          const path = (window.location.pathname || "").replace(/\/+$/, "") || "/";
-          const hash = window.location.hash || "";
-          links.forEach((link) => link.classList.remove("is-active"));
-          const match = (href) => links.find((link) => link.getAttribute("href") === href) || null;
-
-          if (path.startsWith("/backoffice/news/new")) {
-            const target = match("/backoffice/news/new");
-            if (target) {
-              target.classList.add("is-active");
-            }
-            return;
+      function syncSidebarActiveState() {
+        const links = Array.from(document.querySelectorAll(".bo-nav-link"));
+        if (!links.length) {
+          return;
         }
-        if (path.startsWith("/backoffice/polls")) {
-          const target = match("/backoffice/polls");
+        const url = new URL(window.location.href);
+        const path = (url.pathname || "").replace(/\/+$/, "") || "/";
+        const hash = window.location.hash || "";
+        const section = url.searchParams.get("section") || "";
+        links.forEach((link) => link.classList.remove("is-active"));
+        const activate = (navKey) => {
+          const target = links.find((link) => link.getAttribute("data-nav") === navKey) || null;
           if (target) {
             target.classList.add("is-active");
+            return true;
           }
+          return false;
+        };
+
+        if (path.startsWith("/backoffice/news/new")) {
+          activate("editorial");
+          return;
+        }
+        if (path.startsWith("/backoffice/polls")) {
+          activate("polls");
           return;
         }
         if (path.startsWith("/backoffice/news/review")) {
-          const target = match("/backoffice/news/review");
-          if (target) {
-            target.classList.add("is-active");
-          }
+          activate("editorial");
           return;
         }
         if (path.startsWith("/backoffice/users")) {
-          const target = match("/backoffice/users");
-          if (target) {
-            target.classList.add("is-active");
-          }
+          activate("users");
           return;
         }
-          if ((path === "/backoffice" || path === "/backoffice/") && hash) {
-            const target = match("/backoffice" + hash);
-            if (target) {
-              target.classList.add("is-active");
-              return;
-            }
+        if (path === "/backoffice" || path === "/backoffice/") {
+          if (section === "autopilot" || hash === "#autopilot-section") {
+            if (activate("autopilot")) return;
           }
-          const dashboard = match("/backoffice");
-          if (dashboard) {
-            dashboard.classList.add("is-active");
+          if (section === "social" || hash === "#social-section") {
+            if (activate("social")) return;
+          }
+          if (section === "theme" || hash === "#theme-control") {
+            if (activate("theme")) return;
+          }
+          if (activate("panel")) {
+            return;
           }
         }
+      }
 
       const toastStack = document.getElementById("boToastStack");
       function toast(message, level) {
@@ -873,10 +881,11 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
         }, 2600);
       }
       window.pulsoToast = toast;
-        syncSidebarActiveState();
-        window.addEventListener("pageshow", syncSidebarActiveState);
-        window.addEventListener("hashchange", syncSidebarActiveState);
-      })();
+      syncSidebarActiveState();
+      window.addEventListener("pageshow", syncSidebarActiveState);
+      window.addEventListener("hashchange", syncSidebarActiveState);
+      window.addEventListener("popstate", syncSidebarActiveState);
+    })();
   </script>
 </body>
 </html>`;
