@@ -34,11 +34,11 @@ function findMetaCandidates(html: string, key: string): string[] {
   const patterns = [
     new RegExp(
       `<meta[^>]+(?:property|name)=["']${escaped}["'][^>]+content=["']([^"']+)["'][^>]*>`,
-      "i",
+      "gi",
     ),
     new RegExp(
       `<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["']${escaped}["'][^>]*>`,
-      "i",
+      "gi",
     ),
   ];
   const values: string[] = [];
@@ -57,7 +57,7 @@ function findMetaContent(html: string, key: string): string | null {
   return findMetaCandidates(html, key)[0] ?? null;
 }
 
-function absoluteMediaUrl(pageUrl: string, candidate: string | null, kind: "image" | "video"): string | null {
+function absoluteMediaUrl(pageUrl: string, candidate: string | null | undefined, kind: "image" | "video"): string | null {
   const value = stripHtmlTags(candidate ?? "");
   if (!value) {
     return null;
@@ -81,6 +81,178 @@ function extractAttributeCandidates(html: string, expression: RegExp): string[] 
   return Array.from(new Set(results));
 }
 
+function parseTagAttributes(tag: string): Map<string, string> {
+  const attributes = new Map<string, string>();
+  for (const match of tag.matchAll(/([:@a-zA-Z0-9_-]+)\s*=\s*["']([^"']+)["']/g)) {
+    const key = (match[1] ?? "").trim().toLowerCase();
+    const value = stripHtmlTags(match[2] ?? "").trim();
+    if (key && value) {
+      attributes.set(key, value);
+    }
+  }
+  return attributes;
+}
+
+function parseSrcsetCandidates(rawValue: string | null | undefined): string[] {
+  const value = stripHtmlTags(rawValue ?? "");
+  if (!value) {
+    return [];
+  }
+
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((item) => {
+      const [urlPart, descriptorPart] = item.split(/\s+/, 2);
+      const descriptor = (descriptorPart ?? "").trim().toLowerCase();
+      let weight = 0;
+      if (descriptor.endsWith("w")) {
+        weight = Number(descriptor.slice(0, -1)) || 0;
+      } else if (descriptor.endsWith("x")) {
+        weight = (Number(descriptor.slice(0, -1)) || 0) * 1000;
+      }
+      return { url: urlPart?.trim() ?? "", weight };
+    })
+    .filter((entry) => entry.url.length > 0)
+    .sort((left, right) => right.weight - left.weight)
+    .map((entry) => entry.url);
+}
+
+function computeContextScore(fragment: string, widthRaw: string | undefined, heightRaw: string | undefined): number {
+  const context = fragment.toLowerCase();
+  let score = 0;
+
+  if (context.includes("<article")) {
+    score += 5;
+  }
+  if (context.includes("<main")) {
+    score += 4;
+  }
+  if (context.includes("<figure")) {
+    score += 4;
+  }
+  if (
+    context.includes("hero") ||
+    context.includes("featured") ||
+    context.includes("cover") ||
+    context.includes("story") ||
+    context.includes("article-body") ||
+    context.includes("entry-content")
+  ) {
+    score += 4;
+  }
+
+  const width = Number(widthRaw ?? "");
+  const height = Number(heightRaw ?? "");
+  if (Number.isFinite(width) && Number.isFinite(height)) {
+    const area = width * height;
+    if (width >= 900 || area >= 600_000) {
+      score += 5;
+    } else if (width >= 600 || area >= 200_000) {
+      score += 3;
+    } else if (width <= 200 || height <= 120) {
+      score -= 6;
+    }
+  }
+
+  return score;
+}
+
+function extractImageTagCandidates(html: string, pageUrl: string): string[] {
+  const ranked = new Map<string, number>();
+  const tagPattern = /<(img|source)\b[^>]*>/gi;
+
+  for (const match of html.matchAll(tagPattern)) {
+    const rawTag = match[0] ?? "";
+    const startIndex = Math.max(0, (match.index ?? 0) - 200);
+    const endIndex = Math.min(html.length, (match.index ?? 0) + rawTag.length + 200);
+    const surrounding = html.slice(startIndex, endIndex);
+    const attrs = parseTagAttributes(rawTag);
+    const candidateValues = [
+      attrs.get("src"),
+      attrs.get("data-src"),
+      attrs.get("data-lazy-src"),
+      attrs.get("data-original"),
+      attrs.get("data-image"),
+      attrs.get("data-thumb"),
+      attrs.get("data-full-size"),
+      attrs.get("data-large-file"),
+      attrs.get("data-medium-file"),
+      ...parseSrcsetCandidates(attrs.get("srcset")),
+      ...parseSrcsetCandidates(attrs.get("data-srcset")),
+      ...parseSrcsetCandidates(attrs.get("data-lazy-srcset")),
+    ];
+
+    const contextScore = computeContextScore(surrounding, attrs.get("width"), attrs.get("height"));
+    for (const candidate of candidateValues) {
+      const resolved = absoluteMediaUrl(pageUrl, candidate, "image");
+      if (!resolved || !isLikelyEditorialImage(resolved)) {
+        continue;
+      }
+      const score = scoreImageCandidate(resolved) + contextScore;
+      ranked.set(resolved, Math.max(score, ranked.get(resolved) ?? -1000));
+    }
+  }
+
+  return Array.from(ranked.entries())
+    .sort((left, right) => right[1] - left[1])
+    .map(([candidate]) => normalizeImageUrl(candidate))
+    .filter((candidate): candidate is string => Boolean(candidate));
+}
+
+function collectJsonLdImageValues(input: unknown, bucket: string[]): void {
+  if (!input) {
+    return;
+  }
+  if (typeof input === "string") {
+    bucket.push(input);
+    return;
+  }
+  if (Array.isArray(input)) {
+    for (const item of input) {
+      collectJsonLdImageValues(item, bucket);
+    }
+    return;
+  }
+  if (typeof input === "object") {
+    const record = input as Record<string, unknown>;
+    if (typeof record.url === "string") {
+      bucket.push(record.url);
+    }
+    if ("image" in record) {
+      collectJsonLdImageValues(record.image, bucket);
+    }
+    if ("thumbnailUrl" in record) {
+      collectJsonLdImageValues(record.thumbnailUrl, bucket);
+    }
+  }
+}
+
+function extractJsonLdImageCandidates(html: string, pageUrl: string): string[] {
+  const results: string[] = [];
+  for (const match of html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
+    const rawJson = (match[1] ?? "").trim();
+    if (!rawJson) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(rawJson) as unknown;
+      const values: string[] = [];
+      collectJsonLdImageValues(parsed, values);
+      for (const value of values) {
+        const resolved = absoluteMediaUrl(pageUrl, value, "image");
+        if (resolved && isLikelyEditorialImage(resolved)) {
+          results.push(resolved);
+        }
+      }
+    } catch {
+      continue;
+    }
+  }
+  return Array.from(new Set(results));
+}
+
 export function scoreImageCandidate(candidate: string): number {
   const normalized = candidate.trim().toLowerCase();
   if (!normalized) {
@@ -93,6 +265,17 @@ export function scoreImageCandidate(candidate: string): number {
     "icon",
     "favicon",
     "avatar",
+    "author",
+    "authors",
+    "newsletter",
+    "header",
+    "sharing",
+    "followgoogle",
+    "google-logo",
+    "google-icon",
+    "app-store",
+    "android-store",
+    "gda",
     "placeholder",
     "sprite",
     "spacer",
@@ -106,6 +289,8 @@ export function scoreImageCandidate(candidate: string): number {
     "google.com",
     "screenshot",
     "elementor",
+    "/pf/resources/images/",
+    "/img/authors/",
     "ads",
     "banner",
     "pixel",
@@ -157,6 +342,30 @@ export function isLikelyEditorialImage(candidate: string): boolean {
   if (!normalized) {
     return false;
   }
+  const hardBlockedSignals = [
+    "clarin-newsletter",
+    "clarin-sharing",
+    "/img/authors/",
+    "/collections/followgoogle/",
+    "/landings/bundles/landing/img/components/header/",
+    "/pf/resources/images/la-nacion.webp",
+    "/pf/resources/images/android-store",
+    "/pf/resources/images/app-store",
+    "/pf/resources/images/gda",
+    "google-icon",
+    "google-logo",
+  ];
+  if (hardBlockedSignals.some((token) => normalized.includes(token))) {
+    return false;
+  }
+  try {
+    const parsed = new URL(normalized);
+    if (parsed.pathname === "/" || parsed.pathname.length < 2) {
+      return false;
+    }
+  } catch {
+    return false;
+  }
   if (/^data:/i.test(normalized)) {
     return false;
   }
@@ -179,10 +388,13 @@ export function pickBestEditorialImageUrl(candidates: Array<string | null | unde
 function extractImageCandidates(html: string, pageUrl: string): string[] {
   const rawCandidates = [
     ...findMetaCandidates(html, "og:image"),
+    ...findMetaCandidates(html, "og:image:secure_url"),
     ...findMetaCandidates(html, "og:image:url"),
     ...findMetaCandidates(html, "twitter:image"),
     ...findMetaCandidates(html, "twitter:image:src"),
     ...findMetaCandidates(html, "image"),
+    ...extractJsonLdImageCandidates(html, pageUrl),
+    ...extractImageTagCandidates(html, pageUrl),
     ...extractAttributeCandidates(html, /<img[^>]+(?:src|data-src|data-lazy-src)=["']([^"']+)["']/gi),
   ];
 

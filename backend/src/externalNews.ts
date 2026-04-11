@@ -6,10 +6,154 @@ import type { FeedItem } from "./types";
 
 const rssParser = new Parser();
 const EXTERNAL_IMAGE_ENRICH_LIMIT = 10;
+const DIRECT_RSS_TIMEOUT_MS = 12_000;
+const POLITICAL_KEYWORDS = [
+  "milei",
+  "gobierno",
+  "congreso",
+  "eleccion",
+  "electoral",
+  "senado",
+  "diputados",
+  "presidente",
+  "ministro",
+  "bullrich",
+  "macri",
+  "kicillof",
+  "massa",
+  "villarruel",
+  "grabois",
+  "bregman",
+  "casa rosada",
+  "provincia",
+  "intendente",
+  "legislatura",
+  "justicia",
+  "seguridad",
+  "dolar",
+  "inflacion",
+  "economia",
+];
+
+const DIRECT_RSS_FEEDS = [
+  {
+    id: "clarin-politica",
+    url: "https://www.clarin.com/rss/politica/",
+    sourceName: "Clarín",
+    strictPolitics: true,
+  },
+  {
+    id: "lanacion-general",
+    url: "https://www.lanacion.com.ar/arc/outboundfeeds/rss/?outputType=xml",
+    sourceName: "La Nación",
+    strictPolitics: false,
+  },
+  {
+    id: "perfil-general",
+    url: "https://www.perfil.com/feed/",
+    sourceName: "Perfil",
+    strictPolitics: false,
+  },
+] as const;
 
 function extractRssImage(content: string): string | null {
   const match = content.match(/<img[^>]+src=["']([^"']+)["']/i);
   return normalizeImageUrl(match?.[1] ?? null);
+}
+
+function looksPolitical(text: string, strictPolitics: boolean): boolean {
+  const normalized = text
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+  const hits = POLITICAL_KEYWORDS.reduce((acc, token) => (normalized.includes(token) ? acc + 1 : acc), 0);
+  return strictPolitics ? hits >= 1 : hits >= 2;
+}
+
+async function parseRemoteFeed(feedUrl: string): Promise<Parser.Output<Record<string, unknown>>> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), DIRECT_RSS_TIMEOUT_MS);
+  try {
+    const response = await fetch(feedUrl, {
+      signal: controller.signal,
+      headers: {
+        "user-agent": "PulsoPaisFeedBot/1.0",
+        accept: "application/rss+xml, application/xml, text/xml;q=0.9, */*;q=0.8",
+      },
+    });
+    if (!response.ok) {
+      throw new Error(`RSS respondio ${response.status}`);
+    }
+    const xml = await response.text();
+    return await rssParser.parseString(xml);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function fetchExternalFromDirectFeeds(): Promise<FeedItem[]> {
+  const settled = await Promise.allSettled(
+    DIRECT_RSS_FEEDS.map(async (feedConfig) => {
+      const feed = await parseRemoteFeed(feedConfig.url);
+      return { feedConfig, feed };
+    }),
+  );
+
+  const mapped: FeedItem[] = [];
+  for (const result of settled) {
+    if (result.status !== "fulfilled") {
+      continue;
+    }
+
+    const { feedConfig, feed } = result.value;
+    for (const [index, item] of (feed.items ?? []).entries()) {
+      const title = readString(item.title);
+      const sourceUrl = normalizeHttpUrl(item.link ?? item.guid);
+      if (!title || !sourceUrl) {
+        continue;
+      }
+
+      const htmlContent =
+        readString((item as Record<string, unknown>)["content:encoded"]) ||
+        readString(item.content) ||
+        readString((item as Record<string, unknown>)["content:encodedSnippet"]);
+      const snippet = asNullable(readString(item.contentSnippet)) ?? asNullable(readString(item.summary));
+      const thematicText = `${title} ${snippet ?? ""} ${htmlContent}`.trim();
+      if (!looksPolitical(thematicText, feedConfig.strictPolitics)) {
+        continue;
+      }
+
+      const enclosureUrl =
+        normalizeImageUrl((item as { enclosure?: { url?: string | null } }).enclosure?.url ?? null) ??
+        normalizeImageUrl((item as Record<string, unknown>)["media:content"]) ??
+        extractRssImage(htmlContent);
+
+      mapped.push({
+        id: `${feedConfig.id}-${Date.now()}-${index}`,
+        slug: null,
+        title,
+        kicker: "Pulso en tiempo real",
+        excerpt: snippet ?? "Actualizacion automatica desde fuentes periodisticas abiertas.",
+        imageUrl: resolveManagedFeedImage(enclosureUrl, {
+          sourceUrl,
+          seed: `${title} ${feedConfig.sourceName}`,
+        }),
+        sourceName:
+          asNullable(readString((item as Record<string, unknown>).creator)) ??
+          asNullable(readString(feed.title)) ??
+          feedConfig.sourceName,
+        sourceUrl,
+        section: guessSectionFromText(thematicText),
+        province: null,
+        publishedAt: new Date(readString(item.isoDate) || readString(item.pubDate) || Date.now()).toISOString(),
+        isSponsored: false,
+        isFeatured: false,
+        isExternal: true,
+      });
+    }
+  }
+
+  return mapped;
 }
 
 async function fetchExternalFromGdelt(): Promise<FeedItem[]> {
@@ -151,12 +295,20 @@ export async function getExternalNews(): Promise<FeedItem[]> {
     return externalCache.items;
   }
 
-  const results = await Promise.allSettled([fetchExternalFromGdelt(), fetchExternalFromGoogleRss()]);
-  const fromGdelt = results[0].status === "fulfilled" ? results[0].value : [];
-  const fromGoogle = results[1].status === "fulfilled" ? results[1].value : [];
-  const mergedBase = dedupeByKey([...fromGdelt, ...fromGoogle])
-    .sort((left, right) => +new Date(right.publishedAt) - +new Date(left.publishedAt))
-    .slice(0, 40);
+  const results = await Promise.allSettled([
+    fetchExternalFromDirectFeeds(),
+    fetchExternalFromGdelt(),
+    fetchExternalFromGoogleRss(),
+  ]);
+  const fromDirectFeeds = results[0].status === "fulfilled" ? results[0].value : [];
+  const fromGdelt = results[1].status === "fulfilled" ? results[1].value : [];
+  const fromGoogle = results[2].status === "fulfilled" ? results[2].value : [];
+  const deduped = dedupeByKey([...fromDirectFeeds, ...fromGdelt, ...fromGoogle]).sort(
+    (left, right) => +new Date(right.publishedAt) - +new Date(left.publishedAt),
+  );
+  const directItems = deduped.filter((item) => !isGoogleNewsUrl(item.sourceUrl));
+  const googleItems = deduped.filter((item) => isGoogleNewsUrl(item.sourceUrl));
+  const mergedBase = [...directItems.slice(0, 28), ...googleItems.slice(0, 12)].slice(0, 40);
   const merged = await enrichExternalImages(mergedBase);
 
   externalCache = {
