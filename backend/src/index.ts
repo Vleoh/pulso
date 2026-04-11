@@ -1820,6 +1820,12 @@ async function runEditorialAutopilotCycle(triggerLabel: string): Promise<Autopil
     await setEditorialAutopilotSettings(prisma, {
       lastRunAt: new Date().toISOString(),
       lastRunSummary: summary,
+      nextRunAt: computeNextAutopilotRunAt({
+        settings: effectiveSettings,
+        now: new Date(),
+        nowParts,
+        remainingToday: 0,
+      }),
     });
     return {
       executedAt: new Date().toISOString(),
@@ -1892,6 +1898,12 @@ async function runEditorialAutopilotCycle(triggerLabel: string): Promise<Autopil
   await setEditorialAutopilotSettings(prisma, {
     lastRunAt: result.executedAt,
     lastRunSummary: [result.planSummary, result.executionSummary, result.socialSummary].filter(Boolean).join(" | "),
+    nextRunAt: computeNextAutopilotRunAt({
+      settings: effectiveSettings,
+      now: new Date(),
+      nowParts: getBuenosAiresNowParts(new Date()),
+      remainingToday: Math.max(0, remainingToday - Math.max(1, effectiveSettings.maxStoriesPerRun)),
+    }),
   });
 
   return result;
@@ -1905,6 +1917,24 @@ async function runEditorialAutopilotHeartbeat(triggerLabel: string): Promise<voi
   const settings = await getEditorialAutopilotSettings(prisma);
   if (!settings.enabled || settings.mode === "MANUAL") {
     return;
+  }
+
+  const now = new Date();
+  const nowParts = getBuenosAiresNowParts(now);
+  if (settings.nextRunAt) {
+    const nextRun = new Date(settings.nextRunAt);
+    if (Number.isFinite(nextRun.getTime()) && now.getTime() < nextRun.getTime()) {
+      return;
+    }
+  } else {
+    const seededNextRunAt = computeNextAutopilotRunAt({ settings, now, nowParts, remainingToday: settings.todayTarget });
+    if (seededNextRunAt) {
+      await setEditorialAutopilotSettings(prisma, { nextRunAt: seededNextRunAt });
+      const seededDate = new Date(seededNextRunAt);
+      if (Number.isFinite(seededDate.getTime()) && now.getTime() < seededDate.getTime()) {
+        return;
+      }
+    }
   }
 
   autopilotHeartbeatRunning = true;
@@ -1937,10 +1967,10 @@ function startEditorialAutopilotHeartbeat(): void {
     return;
   }
 
-  const intervalMs = AUTOPILOT_HEARTBEAT_MINUTES * 60 * 1000;
+  const intervalMs = 60 * 1000;
   setTimeout(() => {
     void runEditorialAutopilotHeartbeat("boot");
-  }, 45_000);
+  }, 15_000);
   autopilotHeartbeatTimer = setInterval(() => {
     void runEditorialAutopilotHeartbeat("heartbeat");
   }, intervalMs);
@@ -2765,13 +2795,14 @@ function buildAutopilotInstruction(settings: Awaited<ReturnType<typeof getEditor
   return guidance.filter(Boolean).join(" ");
 }
 
-function getBuenosAiresNowParts(baseDate = new Date()): { dateKey: string; hour: number } {
+function getBuenosAiresNowParts(baseDate = new Date()): { dateKey: string; hour: number; minute: number } {
   const formatter = new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/Buenos_Aires",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
+    minute: "2-digit",
     hourCycle: "h23",
   });
   const parts = formatter.formatToParts(baseDate);
@@ -2780,10 +2811,54 @@ function getBuenosAiresNowParts(baseDate = new Date()): { dateKey: string; hour:
   const month = byType.get("month") ?? "01";
   const day = byType.get("day") ?? "01";
   const hour = Number(byType.get("hour") ?? "0");
+  const minute = Number(byType.get("minute") ?? "0");
   return {
     dateKey: `${year}-${month}-${day}`,
     hour,
+    minute,
   };
+}
+
+function buildBuenosAiresDate(dateKey: string, hour: number, minute = 0): Date {
+  return new Date(`${dateKey}T${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:00-03:00`);
+}
+
+function computeNextAutopilotRunAt(params: {
+  settings: Awaited<ReturnType<typeof getEditorialAutopilotSettings>>;
+  now?: Date;
+  nowParts?: ReturnType<typeof getBuenosAiresNowParts>;
+  remainingToday?: number;
+}): string | null {
+  const settings = params.settings;
+  if (!settings.enabled || settings.mode === "MANUAL") {
+    return null;
+  }
+
+  const now = params.now ?? new Date();
+  const nowParts = params.nowParts ?? getBuenosAiresNowParts(now);
+  const windowStart = Math.max(0, Math.min(23, settings.windowStartHour));
+  const windowEnd = Math.max(windowStart, Math.min(23, settings.windowEndHour));
+  const remainingToday = Math.max(0, params.remainingToday ?? settings.todayTarget);
+
+  const currentMinuteOfDay = nowParts.hour * 60 + nowParts.minute;
+  const windowStartMinute = windowStart * 60;
+  const windowEndMinute = windowEnd * 60 + 59;
+
+  if (currentMinuteOfDay < windowStartMinute) {
+    return buildBuenosAiresDate(nowParts.dateKey, windowStart, 0).toISOString();
+  }
+
+  if (currentMinuteOfDay > windowEndMinute || remainingToday <= 0) {
+    const nextDay = new Date(buildBuenosAiresDate(nowParts.dateKey, 12, 0).getTime() + 24 * 60 * 60 * 1000);
+    const nextParts = getBuenosAiresNowParts(nextDay);
+    return buildBuenosAiresDate(nextParts.dateKey, windowStart, 0).toISOString();
+  }
+
+  const runsRemaining = Math.max(1, Math.ceil(remainingToday / Math.max(1, settings.maxStoriesPerRun)));
+  const minutesLeft = Math.max(1, windowEndMinute - currentMinuteOfDay);
+  const spacing = Math.max(8, Math.floor(minutesLeft / runsRemaining));
+  const nextMinute = Math.min(windowEndMinute, currentMinuteOfDay + spacing);
+  return buildBuenosAiresDate(nowParts.dateKey, Math.floor(nextMinute / 60), nextMinute % 60).toISOString();
 }
 
 function randomIntInRange(minValue: number, maxValue: number): number {
@@ -3167,6 +3242,9 @@ app.get("/api/autopilot/status", async (_request, response, next) => {
         instagramToken: Boolean(readString(process.env.INSTAGRAM_GRAPH_ACCESS_TOKEN)),
         heartbeatEnabled: AUTOPILOT_HEARTBEAT_ENABLED,
         heartbeatMinutes: AUTOPILOT_HEARTBEAT_MINUTES,
+      },
+      schedule: {
+        nextRunAt: autopilot.nextRunAt,
       },
     });
   } catch (error) {
@@ -4685,6 +4763,9 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
     const autopilotLastRunLabel = autopilotSettings.lastRunAt
       ? new Date(autopilotSettings.lastRunAt).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" })
       : "Nunca";
+    const autopilotNextRunLabel = autopilotSettings.nextRunAt
+      ? new Date(autopilotSettings.nextRunAt).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" })
+      : "Pendiente de planificacion";
     const instagramAccountSummary = instagramConnectionError
       ? `Error Meta: ${instagramConnectionError}`
       : summarizeInstagramAccounts(instagramConnection.accounts);
@@ -4761,6 +4842,10 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
           <div class="ap-meta-item">
             <label>Ultimo ciclo</label>
             <span>${escapeHtml(autopilotLastRunLabel)}</span>
+          </div>
+          <div class="ap-meta-item">
+            <label>Proximo ciclo</label>
+            <span>${escapeHtml(autopilotNextRunLabel)}</span>
           </div>
           <div class="ap-meta-item">
             <label>Social</label>
@@ -5255,7 +5340,13 @@ app.post("/backoffice/settings/autopilot", boGuard, async (request, response, ne
       autoPublishSite: readBoolean(request.body.autoPublishSite),
       allowDelete: readBoolean(request.body.allowDelete),
       socialEnabled: readBoolean(request.body.socialEnabled),
+      nextRunAt: new Date().toISOString(),
     });
+    if (settings.enabled && settings.mode !== "MANUAL") {
+      setTimeout(() => {
+        void runEditorialAutopilotHeartbeat("settings");
+      }, 3000);
+    }
     response.redirect(
       `/backoffice?ok=${encodeURIComponent(
         `Autopiloto actualizado - estado:${settings.enabled ? "ON" : "OFF"} modo:${settings.mode} diario:${settings.minDailyStories}-${settings.maxDailyStories} ventana:${settings.windowStartHour}-${settings.windowEndHour}h social:${settings.socialEnabled ? "ON" : "OFF"}`,

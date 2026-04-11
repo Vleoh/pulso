@@ -27,6 +27,7 @@ export const EDITORIAL_AUTOPILOT_TODAY_DATE_KEY = "editorial_autopilot_today_dat
 export const EDITORIAL_AUTOPILOT_TODAY_TARGET_KEY = "editorial_autopilot_today_target";
 export const EDITORIAL_AUTOPILOT_LAST_RUN_AT_KEY = "editorial_autopilot_last_run_at";
 export const EDITORIAL_AUTOPILOT_LAST_RUN_SUMMARY_KEY = "editorial_autopilot_last_run_summary";
+export const EDITORIAL_AUTOPILOT_NEXT_RUN_AT_KEY = "editorial_autopilot_next_run_at";
 export const INSTAGRAM_PUBLISHING_ENABLED_KEY = "instagram_publishing_enabled";
 export const INSTAGRAM_ACCOUNT_ID_KEY = "instagram_account_id";
 export const INSTAGRAM_USERNAME_KEY = "instagram_username";
@@ -101,6 +102,7 @@ export type EditorialAutopilotSettings = {
   todayTarget: number;
   lastRunAt: string | null;
   lastRunSummary: string;
+  nextRunAt: string | null;
 };
 
 export type InstagramPublishingSettings = {
@@ -176,6 +178,7 @@ const DEFAULT_EDITORIAL_AUTOPILOT_SETTINGS: EditorialAutopilotSettings = {
   todayTarget: 0,
   lastRunAt: null,
   lastRunSummary: "",
+  nextRunAt: null,
 };
 
 const DEFAULT_INSTAGRAM_PUBLISHING_SETTINGS: InstagramPublishingSettings = {
@@ -557,6 +560,7 @@ export async function getEditorialAutopilotSettings(prisma: PrismaLike): Promise
     todayTarget,
     lastRunAt,
     lastRunSummary,
+    nextRunAt,
   ] = await Promise.all([
     delegate.findUnique({ where: { key: EDITORIAL_AUTOPILOT_ENABLED_KEY }, select: { value: true } }),
     delegate.findUnique({ where: { key: EDITORIAL_AUTOPILOT_MODE_KEY }, select: { value: true } }),
@@ -575,6 +579,7 @@ export async function getEditorialAutopilotSettings(prisma: PrismaLike): Promise
     delegate.findUnique({ where: { key: EDITORIAL_AUTOPILOT_TODAY_TARGET_KEY }, select: { value: true } }),
     delegate.findUnique({ where: { key: EDITORIAL_AUTOPILOT_LAST_RUN_AT_KEY }, select: { value: true } }),
     delegate.findUnique({ where: { key: EDITORIAL_AUTOPILOT_LAST_RUN_SUMMARY_KEY }, select: { value: true } }),
+    delegate.findUnique({ where: { key: EDITORIAL_AUTOPILOT_NEXT_RUN_AT_KEY }, select: { value: true } }),
   ]);
 
   return {
@@ -629,6 +634,7 @@ export async function getEditorialAutopilotSettings(prisma: PrismaLike): Promise
     todayTarget: normalizeNumberSetting(todayTarget?.value, DEFAULT_EDITORIAL_AUTOPILOT_SETTINGS.todayTarget, 0, 30),
     lastRunAt: normalizeShortText(lastRunAt?.value, "", 120) || null,
     lastRunSummary: normalizeShortText(lastRunSummary?.value, "", 1000),
+    nextRunAt: normalizeShortText(nextRunAt?.value, "", 120) || null,
   };
 }
 
@@ -673,6 +679,7 @@ export async function setEditorialAutopilotSettings(
       value.lastRunSummary === undefined
         ? current.lastRunSummary
         : normalizeShortText(value.lastRunSummary, "", 1000),
+    nextRunAt: value.nextRunAt === undefined ? current.nextRunAt : normalizeShortText(value.nextRunAt, "", 120) || null,
   };
 
   const delegate = siteSettingDelegate(prisma);
@@ -761,6 +768,11 @@ export async function setEditorialAutopilotSettings(
       where: { key: EDITORIAL_AUTOPILOT_LAST_RUN_SUMMARY_KEY },
       update: { value: next.lastRunSummary },
       create: { key: EDITORIAL_AUTOPILOT_LAST_RUN_SUMMARY_KEY, value: next.lastRunSummary },
+    }),
+    delegate.upsert({
+      where: { key: EDITORIAL_AUTOPILOT_NEXT_RUN_AT_KEY },
+      update: { value: next.nextRunAt ?? "" },
+      create: { key: EDITORIAL_AUTOPILOT_NEXT_RUN_AT_KEY, value: next.nextRunAt ?? "" },
     }),
   ]);
 
