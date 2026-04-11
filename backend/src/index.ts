@@ -2843,6 +2843,8 @@ function computeNextAutopilotRunAt(params: {
   const currentMinuteOfDay = nowParts.hour * 60 + nowParts.minute;
   const windowStartMinute = windowStart * 60;
   const windowEndMinute = windowEnd * 60 + 59;
+  const lastRunParts = settings.lastRunAt ? getBuenosAiresNowParts(new Date(settings.lastRunAt)) : null;
+  const alreadyRanToday = Boolean(lastRunParts && lastRunParts.dateKey === nowParts.dateKey);
 
   if (currentMinuteOfDay < windowStartMinute) {
     return buildBuenosAiresDate(nowParts.dateKey, windowStart, 0).toISOString();
@@ -2854,9 +2856,14 @@ function computeNextAutopilotRunAt(params: {
     return buildBuenosAiresDate(nextParts.dateKey, windowStart, 0).toISOString();
   }
 
-  const runsRemaining = Math.max(1, Math.ceil(remainingToday / Math.max(1, settings.maxStoriesPerRun)));
+  if (!alreadyRanToday) {
+    return new Date(now.getTime() + 5_000).toISOString();
+  }
+
+  const maxStoriesPerRun = Math.max(1, settings.maxStoriesPerRun);
+  const runsRemaining = Math.max(1, Math.ceil(remainingToday / maxStoriesPerRun));
   const minutesLeft = Math.max(1, windowEndMinute - currentMinuteOfDay);
-  const spacing = Math.max(8, Math.floor(minutesLeft / runsRemaining));
+  const spacing = Math.max(8, Math.floor(minutesLeft / (runsRemaining + 1)));
   const nextMinute = Math.min(windowEndMinute, currentMinuteOfDay + spacing);
   return buildBuenosAiresDate(nowParts.dateKey, Math.floor(nextMinute / 60), nextMinute % 60).toISOString();
 }
