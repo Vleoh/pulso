@@ -666,6 +666,7 @@ function DesktopEdition({
 
         <aside className="cp-side-feed">
           <div className="cp-market-panel">
+            <small>Pulso del mercado</small>
             <h4>Mercado & Finanzas</h4>
             {markets.slice(0, 4).map((market) => (
               <div key={market.symbol} className="cp-market-row">
@@ -679,6 +680,7 @@ function DesktopEdition({
           </div>
 
           <div className="cp-newsletter">
+            <small>Brief diario</small>
             <p>Recibi las noticias que importan en tu correo.</p>
             <input type="email" placeholder="Tu email" />
             <button type="button">Suscribirme gratis</button>

@@ -4919,34 +4919,42 @@ a {
 }
 
 .cp-ad-tile {
-  border: 1px solid #dfdfdc;
-  background: #f7f7f5;
-  padding: 18px;
+  position: relative;
+  overflow: hidden;
+  border: 1px solid #d9c58a;
+  background:
+    radial-gradient(circle at top right, rgba(242, 183, 5, 0.12), transparent 38%),
+    linear-gradient(180deg, #f9f7f1 0%, #f4f0e4 100%);
+  padding: 22px 22px 24px;
   display: grid;
-  gap: 8px;
-  justify-items: center;
-  text-align: center;
+  gap: 12px;
+  text-align: left;
+  align-content: start;
 }
 
 .cp-ad-tile small {
-  font-size: 9px;
+  font-size: 10px;
   text-transform: uppercase;
-  letter-spacing: 0.22em;
-  color: #9d9d9a;
+  letter-spacing: 0.2em;
+  color: #8e6f12;
+  font-weight: 600;
 }
 
 .cp-ad-tile h4 {
   margin: 0;
   font-family: var(--font-headline), Georgia, serif;
-  font-size: 33px;
-  line-height: 0.96;
+  font-size: clamp(24px, 2.1vw, 34px);
+  line-height: 1.02;
+  max-width: 10ch;
+  color: #151515;
 }
 
 .cp-ad-tile p {
   margin: 0;
-  color: #666666;
-  font-size: 13px;
-  line-height: 1.45;
+  color: #545454;
+  font-size: 14px;
+  line-height: 1.55;
+  max-width: 28ch;
 }
 
 .cp-ad-tile button {
@@ -4955,9 +4963,16 @@ a {
   color: #ffffff;
   font-size: 10px;
   text-transform: uppercase;
-  letter-spacing: 0.14em;
-  padding: 10px 16px;
+  letter-spacing: 0.16em;
+  padding: 11px 16px;
   cursor: pointer;
+  width: fit-content;
+  transition: transform 140ms ease, background 140ms ease;
+}
+
+.cp-ad-tile button:hover {
+  background: #1d1d1d;
+  transform: translateY(-1px);
 }
 
 .cp-interview {
@@ -5261,89 +5276,125 @@ a {
 }
 
 .cp-market-panel {
-  border: 1px solid #e1e1dd;
-  background: #ffffff;
-  padding: 14px;
+  border: 1px solid #e6dfcf;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, #faf8f2 100%);
+  padding: 18px;
   display: grid;
-  gap: 10px;
+  gap: 12px;
+  border-radius: 18px;
+  box-shadow: 0 16px 40px -34px rgba(17, 17, 17, 0.34);
+}
+
+.cp-market-panel > small {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: #8f6f00;
+  font-weight: 600;
 }
 
 .cp-market-panel h4 {
   margin: 0;
   font-family: var(--font-headline), Georgia, serif;
-  font-size: 34px;
-  line-height: 0.95;
+  font-size: 24px;
+  line-height: 1;
+  color: #171717;
 }
 
 .cp-market-row {
-  border-top: 1px solid #ecece9;
-  padding-top: 9px;
+  border-top: 1px solid #ece7d7;
+  padding-top: 12px;
   display: flex;
   justify-content: space-between;
-  gap: 10px;
-  align-items: flex-start;
+  gap: 12px;
+  align-items: center;
 }
 
 .cp-market-row span {
   font-size: 10px;
   text-transform: uppercase;
-  letter-spacing: 0.11em;
-  color: #666666;
+  letter-spacing: 0.13em;
+  color: #716a5d;
+  font-weight: 600;
 }
 
 .cp-market-row div {
   text-align: right;
   display: grid;
-  gap: 2px;
+  gap: 3px;
 }
 
 .cp-market-row strong {
-  font-size: 14px;
-  color: #1f1f1f;
+  font-size: 15px;
+  color: #181818;
+  font-variant-numeric: tabular-nums;
 }
 
 .cp-market-row small {
   font-size: 11px;
   color: #937300;
+  font-variant-numeric: tabular-nums;
 }
 
 .cp-newsletter {
-  border: 1px solid #c9a647;
-  background: #f2b705;
-  padding: 14px;
+  border: 1px solid #1d1d1d;
+  background:
+    linear-gradient(180deg, #111111 0%, #171717 100%);
+  padding: 18px;
   display: grid;
-  gap: 8px;
+  gap: 12px;
+  border-radius: 18px;
+  box-shadow: 0 16px 40px -34px rgba(17, 17, 17, 0.45);
+}
+
+.cp-newsletter > small {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: #f2b705;
+  font-weight: 600;
 }
 
 .cp-newsletter p {
   margin: 0;
   font-family: var(--font-headline), Georgia, serif;
-  font-size: 30px;
-  line-height: 0.96;
-  color: #121212;
+  font-size: 23px;
+  line-height: 1.02;
+  color: #ffffff;
+  max-width: 11ch;
 }
 
 .cp-newsletter input {
-  border: 1px solid rgba(0, 0, 0, 0.2);
-  background: rgba(255, 255, 255, 0.48);
-  color: #161616;
-  padding: 10px;
+  border: 1px solid rgba(242, 183, 5, 0.24);
+  background: rgba(255, 255, 255, 0.06);
+  color: #f5f5f5;
+  padding: 12px 13px;
   font-size: 13px;
+  border-radius: 12px;
 }
 
 .cp-newsletter input::placeholder {
-  color: #605548;
+  color: #b7b1a7;
 }
 
 .cp-newsletter button {
   border: 0;
-  background: #111111;
-  color: #ffffff;
+  background: #f2b705;
+  color: #111111;
   font-size: 10px;
   text-transform: uppercase;
-  letter-spacing: 0.12em;
-  padding: 9px 12px;
+  letter-spacing: 0.16em;
+  padding: 12px 14px;
   cursor: pointer;
+  font-weight: 700;
+  border-radius: 12px;
+  transition: transform 140ms ease, filter 140ms ease;
+}
+
+.cp-newsletter button:hover {
+  filter: brightness(1.02);
+  transform: translateY(-1px);
 }
 
 .cp-poll-box {
