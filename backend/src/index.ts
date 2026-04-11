@@ -3446,18 +3446,15 @@ app.get("/api/news/:slug", async (request, response, next) => {
       return;
     }
 
-    const [internalRelated, externalRelated] = await Promise.all([
-      prisma.news.findMany({
-        where: {
-          id: { not: item.id },
-          status: NewsStatus.PUBLISHED,
-          OR: [{ section: item.section }, ...(item.province ? [{ province: item.province }] : [])],
-        },
-        orderBy: [{ isFeatured: "desc" }, { publishedAt: "desc" }, { createdAt: "desc" }],
-        take: 8,
-      }),
-      getExternalNews(),
-    ]);
+    const internalRelated = await prisma.news.findMany({
+      where: {
+        id: { not: item.id },
+        status: NewsStatus.PUBLISHED,
+        OR: [{ section: item.section }, ...(item.province ? [{ province: item.province }] : [])],
+      },
+      orderBy: [{ isFeatured: "desc" }, { publishedAt: "desc" }, { createdAt: "desc" }],
+      take: 8,
+    });
 
     response.json({
       item: {
@@ -3471,10 +3468,7 @@ app.get("/api/news/:slug", async (request, response, next) => {
         createdAt: item.createdAt.toISOString(),
         updatedAt: item.updatedAt.toISOString(),
       },
-      related: dedupeByKey([
-        ...internalRelated.map(toFeedItem),
-        ...externalRelated.filter((entry) => entry.section === item.section),
-      ]).slice(0, 6),
+      related: dedupeByKey(internalRelated.map(toFeedItem)).slice(0, 6),
     });
   } catch (error) {
     next(error);

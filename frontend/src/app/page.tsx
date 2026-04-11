@@ -256,9 +256,6 @@ function storyLink(item: Pick<FeedItem, "slug" | "sourceUrl" | "isExternal">): S
   if (item.slug && !item.isExternal) {
     return { href: `/noticias/${item.slug}`, external: false };
   }
-  if (item.sourceUrl) {
-    return { href: item.sourceUrl, external: true };
-  }
   return null;
 }
 

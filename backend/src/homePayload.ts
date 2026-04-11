@@ -1,6 +1,5 @@
 import { type PrismaClient, NewsSection, NewsStatus } from "@prisma/client";
 import { PROVINCE_OPTIONS, sectionLabel } from "./catalog";
-import { getExternalNews } from "./externalNews";
 import { dedupeByKey, toFeedItem } from "./feed";
 import type { HomePayload } from "./types";
 import { getHomeEngagementSettings, getHomeTheme } from "./siteSettings";
@@ -41,7 +40,7 @@ function feedVisualScore(item: { imageUrl: string | null; excerpt?: string | nul
 }
 
 export async function buildHomePayload(prisma: PrismaClient): Promise<HomePayload> {
-  const [internalNews, externalNews, theme, engagement, signalData] = await Promise.all([
+  const [internalNews, theme, engagement, signalData] = await Promise.all([
     prisma.news.findMany({
       where: {
         status: NewsStatus.PUBLISHED,
@@ -49,7 +48,6 @@ export async function buildHomePayload(prisma: PrismaClient): Promise<HomePayloa
       orderBy: [{ isHero: "desc" }, { isFeatured: "desc" }, { publishedAt: "desc" }, { createdAt: "desc" }],
       take: 180,
     }),
-    getExternalNews(),
     getHomeTheme(prisma),
     getHomeEngagementSettings(prisma),
     getSignalData(),
@@ -61,38 +59,25 @@ export async function buildHomePayload(prisma: PrismaClient): Promise<HomePayloa
       const original = internalNews.find((candidate) => candidate.id === item.id);
       return Boolean(original?.isHero);
     }) ??
-    internal[0] ??
-    externalNews[0] ??
-    null;
+    internal[0] ?? null;
 
-  const secondary = dedupeByKey([
-    ...internal.filter((item) => item.id !== hero?.id),
-    ...externalNews.filter((item) => item.id !== hero?.id),
-  ]).slice(0, 3);
+  const secondary = dedupeByKey(internal.filter((item) => item.id !== hero?.id)).slice(0, 3);
 
-  const latest = dedupeByKey([
-    ...internal.filter((item) => item.id !== hero?.id && !secondary.some((secondaryItem) => secondaryItem.id === item.id)),
-    ...externalNews,
-  ]).slice(0, 12);
+  const latest = dedupeByKey(
+    internal.filter((item) => item.id !== hero?.id && !secondary.some((secondaryItem) => secondaryItem.id === item.id)),
+  ).slice(0, 12);
 
-  const radarElectoral = dedupeByKey([
-    ...internal.filter((item) => item.section === NewsSection.RADAR_ELECTORAL),
-    ...externalNews.filter((item) => /eleccion|candidato|encuesta|ballotage|campana|congreso|senado|diputado/i.test(item.title)),
-  ]).slice(0, 8);
+  const radarElectoral = dedupeByKey(internal.filter((item) => item.section === NewsSection.RADAR_ELECTORAL)).slice(0, 8);
 
   const interviews = dedupeByKey([...internal.filter((item) => item.section === NewsSection.ENTREVISTAS), ...latest]).slice(0, 6);
   const opinion = dedupeByKey([...internal.filter((item) => item.section === NewsSection.OPINION), ...latest]).slice(0, 6);
-  const sponsored = dedupeByKey([...internal.filter((item) => item.isSponsored || item.section === NewsSection.PUBLINOTAS), ...latest]).slice(
-    0,
-    6,
-  );
+  const sponsored = dedupeByKey([...internal.filter((item) => item.isSponsored || item.section === NewsSection.PUBLINOTAS), ...latest]).slice(0, 6);
 
   const trendTopics = Array.from(
     new Set(
       [
         ...internalNews.flatMap((item) => item.tags ?? []),
         ...internalNews.map((item) => sectionLabel(item.section)),
-        ...externalNews.slice(0, 6).map((item) => item.title.split(" ").slice(0, 2).join(" ")),
         "Pulso Live",
         "Fact-check",
         "Comunidad",
@@ -102,11 +87,11 @@ export async function buildHomePayload(prisma: PrismaClient): Promise<HomePayloa
     ),
   ).slice(0, 10);
 
-  const ticker = dedupeByKey([...(hero ? [hero] : []), ...secondary, ...radarElectoral, ...externalNews])
+  const ticker = dedupeByKey([...(hero ? [hero] : []), ...secondary, ...radarElectoral, ...latest])
     .slice(0, 12)
     .map((item) => item.title);
 
-  const fallbackFederalPool = dedupeByKey([...internal, ...externalNews])
+  const fallbackFederalPool = dedupeByKey(internal)
     .sort((left, right) => feedVisualScore(right) - feedVisualScore(left))
     .filter((item) => Boolean(item.imageUrl || item.excerpt));
   const usedFederalFallbackIds = new Set<string>();
@@ -154,7 +139,7 @@ export async function buildHomePayload(prisma: PrismaClient): Promise<HomePayloa
     };
   });
 
-  const microCards = dedupeByKey([...latest, ...externalNews])
+  const microCards = dedupeByKey(latest)
     .slice(0, 12)
     .map((item, index) => ({
       id: item.id,
@@ -168,12 +153,7 @@ export async function buildHomePayload(prisma: PrismaClient): Promise<HomePayloa
       reactions: seededReactions(item.id, index),
     }));
 
-  const internationalLive = dedupeByKey([
-    ...internal.filter((item) => item.section === NewsSection.INTERNACIONALES),
-    ...externalNews.filter((item) =>
-      /internacional|eeuu|wall street|brasil|china|fmi|europa|rusia|ucrania|israel|gaza|mercados/i.test(item.title),
-    ),
-  ])
+  const internationalLive = dedupeByKey(internal.filter((item) => item.section === NewsSection.INTERNACIONALES))
     .slice(0, 9)
     .map((item) => ({
       id: item.id,
@@ -203,7 +183,7 @@ export async function buildHomePayload(prisma: PrismaClient): Promise<HomePayloa
     interviews,
     opinion,
     sponsored,
-    externalPulse: externalNews.slice(0, 10),
+    externalPulse: [],
     federalHighlights,
     adSlots: [
       {
