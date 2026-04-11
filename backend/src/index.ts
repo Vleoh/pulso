@@ -1135,8 +1135,8 @@ async function createStoriesFromBatchState(formState: BatchNewsFormState): Promi
     }
   }
 
-  if (createdCount === 0) {
-    throw new Error(errors[0] ?? "No se pudo crear ninguna noticia del lote.");
+  if (createdCount === 0 && errors.length === 0) {
+    throw new Error("No se pudo crear ninguna noticia del lote.");
   }
 
   return {
