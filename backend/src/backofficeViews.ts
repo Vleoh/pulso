@@ -60,6 +60,28 @@ function backofficeIcon(name: string): string {
       return `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5"></circle><path d="M5 20a7 7 0 0 1 14 0"></path></svg>`;
     case "pulse":
       return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h4l2-5 4 10 2-5h4"></path><circle cx="4" cy="12" r="1.5" fill="currentColor" stroke="none"></circle><circle cx="20" cy="12" r="1.5" fill="currentColor" stroke="none"></circle></svg>`;
+    case "autopilot":
+      return `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3"></path><path d="M12 19v3"></path><path d="M4.22 4.22l2.12 2.12"></path><path d="M17.66 17.66l2.12 2.12"></path><path d="M2 12h3"></path><path d="M19 12h3"></path><path d="M4.22 19.78l2.12-2.12"></path><path d="M17.66 6.34l2.12-2.12"></path></svg>`;
+    case "journalist":
+      return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 22V4a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v18l-7-3.5L4 22z"></path><path d="M8 7h8"></path><path d="M8 11h8"></path><path d="M8 15h5"></path></svg>`;
+    case "photographer":
+      return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"></path><circle cx="12" cy="13" r="3"></circle></svg>`;
+    case "cm":
+      return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path><path d="M8 10h8"></path><path d="M8 14h5"></path></svg>`;
+    case "editor":
+      return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z"></path></svg>`;
+    case "social":
+      return `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line></svg>`;
+    case "pipeline":
+      return `<svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>`;
+    case "instagram":
+      return `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"></path><line x1="17.5" y1="6.5" x2="17.51" y2="6.5"></line></svg>`;
+    case "play":
+      return `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><polygon points="10 8 16 12 10 16 10 8"></polygon></svg>`;
+    case "settings":
+      return `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>`;
+    case "news":
+      return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-2 2Zm0 0a2 2 0 0 1-2-2v-9c0-1.1.9-2 2-2h2"></path><path d="M18 14h-8"></path><path d="M15 18h-5"></path><path d="M10 6h8v4h-8V6Z"></path></svg>`;
     default:
       return `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"></circle></svg>`;
   }
@@ -437,6 +459,254 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
     .bo-deploy-row { display:grid; gap:4px; padding:10px 12px; border-radius:14px; background:rgba(255,255,255,.04); border:1px solid rgba(255,255,255,.08); }
     .bo-deploy-row strong { font-size:12px; letter-spacing:.1em; text-transform:uppercase; color:#f3ede0; }
     .bo-deploy-row span { color:#c8c0b4; font-size:12px; line-height:1.45; }
+
+    /* ── AUTOPILOT COMMAND BAR ── */
+    .ap-command-bar {
+      display:grid;
+      grid-template-columns:auto 1fr auto auto;
+      align-items:center;
+      gap:16px;
+      padding:18px 24px;
+      border-radius:20px;
+      background:linear-gradient(135deg,#191714 0%,#2a2520 100%);
+      border:1px solid rgba(242,183,5,.22);
+      box-shadow:0 8px 32px rgba(17,15,11,.22),inset 0 1px 0 rgba(255,255,255,.06);
+      margin-bottom:4px;
+    }
+    .ap-status-group { display:flex; align-items:center; gap:12px; }
+    .ap-status-dot {
+      width:10px; height:10px; border-radius:999px;
+      background:#4caf50;
+      box-shadow:0 0 0 3px rgba(76,175,80,.22);
+      flex:0 0 10px;
+    }
+    .ap-status-dot.is-off { background:#5a5550; box-shadow:none; }
+    .ap-status-dot.is-warning { background:#f2b705; box-shadow:0 0 0 3px rgba(242,183,5,.22); }
+    .ap-status-label { color:#f2b705; font-size:11px; letter-spacing:.22em; text-transform:uppercase; font-weight:800; }
+    .ap-meta { display:flex; align-items:center; gap:20px; flex-wrap:wrap; }
+    .ap-meta-item { display:flex; flex-direction:column; gap:2px; }
+    .ap-meta-item label { color:#8a837a; font-size:10px; letter-spacing:.18em; text-transform:uppercase; font-weight:700; }
+    .ap-meta-item span { color:#f0ece4; font-size:13px; font-weight:600; }
+    .ap-actions { display:flex; gap:10px; }
+    .ap-btn {
+      display:inline-flex; align-items:center; gap:8px;
+      padding:10px 16px; border-radius:12px;
+      border:1px solid rgba(255,255,255,.12);
+      background:rgba(255,255,255,.06);
+      color:#d8d2c8; font-size:12px; font-weight:700;
+      text-decoration:none; cursor:pointer;
+      letter-spacing:.08em; text-transform:uppercase;
+      transition:all .18s ease;
+    }
+    .ap-btn:hover { background:rgba(255,255,255,.12); border-color:rgba(255,255,255,.22); color:#fff; }
+    .ap-btn.primary {
+      background:#f2b705; border-color:#d1a32d; color:#151311;
+      box-shadow:0 6px 18px rgba(242,183,5,.28);
+    }
+    .ap-btn.primary:hover { background:#ffc82b; }
+    .ap-btn svg { width:14px; height:14px; stroke:currentColor; fill:none; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; flex:0 0 14px; }
+
+    /* ── AGENT PIPELINE ── */
+    .agent-pipeline {
+      display:grid;
+      grid-template-columns:repeat(6,1fr);
+      gap:0;
+      padding:0;
+    }
+    .agent-card {
+      display:grid;
+      gap:10px;
+      padding:18px 16px;
+      background:#fff;
+      border:1px solid #e4ddd2;
+      border-right-width:0;
+      position:relative;
+      transition:all .18s ease;
+    }
+    .agent-card:first-child { border-radius:18px 0 0 18px; }
+    .agent-card:last-child { border-radius:0 18px 18px 0; border-right-width:1px; }
+    .agent-card:hover { background:#fdfbf7; z-index:1; box-shadow:0 8px 24px rgba(17,15,11,.08); }
+    .agent-card.is-active { background:linear-gradient(180deg,#fff8e6,#fffdf8); border-color:#dfc06b; }
+    .agent-card.is-active .agent-status-dot { background:#f2b705; box-shadow:0 0 0 3px rgba(242,183,5,.22); animation:agent-pulse 2s ease-in-out infinite; }
+    .agent-card.is-ready .agent-status-dot { background:#4caf50; box-shadow:0 0 0 3px rgba(76,175,80,.22); }
+    .agent-card.is-standby .agent-status-dot { background:#9e9e9e; box-shadow:none; }
+    .agent-card.is-error .agent-status-dot { background:#e53935; box-shadow:0 0 0 3px rgba(229,57,53,.22); }
+    .agent-card-top { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; }
+    .agent-icon {
+      display:inline-flex; align-items:center; justify-content:center;
+      width:36px; height:36px; border-radius:10px;
+      background:#191714; color:#f2b705;
+      flex:0 0 36px;
+    }
+    .agent-icon svg { width:16px; height:16px; stroke:currentColor; fill:none; stroke-width:1.85; stroke-linecap:round; stroke-linejoin:round; }
+    .agent-status-dot { width:8px; height:8px; border-radius:999px; background:#9e9e9e; flex:0 0 8px; margin-top:4px; }
+    .agent-name { font-size:11px; letter-spacing:.14em; text-transform:uppercase; font-weight:700; color:#2b2723; line-height:1.2; }
+    .agent-role { font-size:11px; color:#9a9189; line-height:1.4; }
+    .agent-stat { font-size:11px; color:#6b6660; }
+    .agent-stat strong { color:#2b2723; font-size:13px; font-family:'Newsreader', Georgia, serif; }
+    .agent-connector {
+      position:absolute;
+      right:-1px;
+      top:50%;
+      transform:translateY(-50%);
+      width:2px;
+      height:28px;
+      background:linear-gradient(180deg,transparent,#d8d1c4,transparent);
+      z-index:2;
+    }
+
+    /* ── METRICS RIBBON ── */
+    .metrics-ribbon {
+      display:grid;
+      grid-template-columns:repeat(auto-fit,minmax(120px,1fr));
+      gap:1px;
+      background:#e4ddd2;
+      border:1px solid #e4ddd2;
+      border-radius:16px;
+      overflow:hidden;
+    }
+    .metric-cell {
+      display:grid;
+      gap:4px;
+      padding:16px 18px;
+      background:#fff;
+      transition:background .18s ease;
+    }
+    .metric-cell:hover { background:#fdfbf7; }
+    .metric-cell.accent { background:linear-gradient(180deg,#fff8e6,#fffdf8); }
+    .metric-cell label { color:#9a9189; font-size:10px; letter-spacing:.16em; text-transform:uppercase; font-weight:700; }
+    .metric-cell strong { font-family:'Newsreader',Georgia,serif; font-size:28px; line-height:1; color:#1a1816; }
+    .metric-cell span { color:#7b766e; font-size:11px; }
+
+    /* ── CONTENT GRID 3-COL ── */
+    .content-grid-3 { display:grid; gap:18px; grid-template-columns:1fr 1fr 340px; align-items:start; }
+    .content-grid-2 { display:grid; gap:18px; grid-template-columns:1fr 1fr; align-items:start; }
+
+    /* ── ACTIVITY FEED ENHANCED ── */
+    .activity-feed { display:grid; gap:0; }
+    .activity-item {
+      display:grid;
+      grid-template-columns:auto minmax(0,1fr) auto;
+      gap:14px;
+      align-items:start;
+      padding:14px 0;
+      border-top:1px solid #f0ebe2;
+    }
+    .activity-item:first-child { border-top:0; padding-top:0; }
+    .activity-avatar {
+      width:36px; height:36px; border-radius:10px;
+      background:#191714; color:#f2b705;
+      display:inline-flex; align-items:center; justify-content:center;
+      flex:0 0 36px;
+    }
+    .activity-avatar svg { width:14px; height:14px; stroke:currentColor; fill:none; stroke-width:1.85; stroke-linecap:round; stroke-linejoin:round; }
+    .activity-body { display:grid; gap:3px; min-width:0; }
+    .activity-body strong { font-size:13px; line-height:1.35; }
+    .activity-body span { color:#8a847a; font-size:11px; }
+    .activity-time { color:#a09990; font-size:11px; white-space:nowrap; padding-top:2px; }
+
+    /* ── AUTOPILOT CONFIG CARD ── */
+    .autopilot-card {
+      border:1px solid #e1c981;
+      background:linear-gradient(180deg,#fffdf8,#fff9ed);
+      border-radius:20px;
+      padding:22px;
+      display:grid;
+      gap:18px;
+    }
+    .autopilot-header { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+    .autopilot-title { display:grid; gap:4px; }
+    .autopilot-title h3 { margin:0; font-size:16px; letter-spacing:.08em; text-transform:uppercase; }
+    .autopilot-badges { display:flex; gap:8px; flex-wrap:wrap; }
+    .ap-badge {
+      display:inline-flex; align-items:center; gap:6px;
+      padding:5px 10px; border-radius:999px;
+      font-size:10px; letter-spacing:.1em; text-transform:uppercase; font-weight:700;
+    }
+    .ap-badge.on { background:#edf8f0; border:1px solid #aed2bb; color:#1f603b; }
+    .ap-badge.off { background:#f5f0e8; border:1px solid #d8d1c5; color:#6b665e; }
+    .ap-badge.social { background:#e8f0fe; border:1px solid #a8c4f0; color:#1a4fa0; }
+
+    /* ── LOG FEED ── */
+    .log-feed { display:grid; gap:8px; }
+    .log-entry {
+      display:grid;
+      grid-template-columns:auto minmax(0,1fr);
+      gap:12px;
+      align-items:start;
+      padding:12px 14px;
+      border-radius:14px;
+      border:1px solid #e5ded3;
+      background:#fff;
+    }
+    .log-entry.success { border-color:#b9d8c2; background:#f0f8f3; }
+    .log-entry.warning { border-color:#e2c06a; background:#fff7df; }
+    .log-entry.error { border-color:#d9aaaa; background:#fff0f0; }
+    .log-icon { width:28px; height:28px; border-radius:8px; display:inline-flex; align-items:center; justify-content:center; font-size:12px; flex:0 0 28px; }
+    .log-icon.success { background:#d4edda; color:#1f603b; }
+    .log-icon.warning { background:#fff3cd; color:#775a00; }
+    .log-icon.error { background:#f8d7da; color:#922828; }
+    .log-body { display:grid; gap:3px; }
+    .log-body strong { font-size:12px; }
+    .log-body span { color:#7b766e; font-size:11px; }
+
+    /* ── SOCIAL PANEL ── */
+    .social-panel { display:grid; gap:14px; }
+    .social-account-card {
+      display:grid;
+      grid-template-columns:auto 1fr auto;
+      gap:12px;
+      align-items:center;
+      padding:14px;
+      border-radius:16px;
+      border:1px solid #e3dccf;
+      background:#fff;
+    }
+    .social-platform-icon {
+      width:38px; height:38px; border-radius:10px;
+      display:inline-flex; align-items:center; justify-content:center;
+      background:linear-gradient(135deg,#833ab4,#fd1d1d,#fcb045);
+      color:#fff;
+    }
+    .social-platform-icon svg { width:18px; height:18px; stroke:currentColor; fill:none; stroke-width:1.85; stroke-linecap:round; stroke-linejoin:round; }
+    .social-account-info { display:grid; gap:2px; }
+    .social-account-info strong { font-size:13px; }
+    .social-account-info span { font-size:11px; color:#8a847a; }
+    .social-stat { text-align:right; }
+    .social-stat strong { font-family:'Newsreader',Georgia,serif; font-size:20px; display:block; }
+    .social-stat span { font-size:10px; color:#8a847a; letter-spacing:.1em; text-transform:uppercase; }
+
+    /* ── QUICK ACTIONS GRID ── */
+    .quick-actions { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
+    .quick-action {
+      display:grid;
+      gap:10px;
+      padding:16px;
+      border-radius:16px;
+      border:1px solid #e0d8cb;
+      background:linear-gradient(180deg,#fff,#fbf9f4);
+      text-decoration:none;
+      cursor:pointer;
+      transition:all .18s ease;
+      text-align:left;
+    }
+    .quick-action:hover { border-color:#d5bb7a; transform:translateY(-1px); box-shadow:0 8px 22px rgba(17,15,11,.07); }
+    .quick-action-icon {
+      width:34px; height:34px; border-radius:10px;
+      background:#191714; color:#f2b705;
+      display:inline-flex; align-items:center; justify-content:center;
+    }
+    .quick-action-icon svg { width:15px; height:15px; stroke:currentColor; fill:none; stroke-width:1.85; stroke-linecap:round; stroke-linejoin:round; }
+    .quick-action strong { font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:#2b2723; }
+    .quick-action small { font-size:11px; color:#746f66; line-height:1.45; }
+
+    /* ── SECTION HEADER ── */
+    .section-header { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px; }
+    .section-header h3 { margin:0; font-size:13px; letter-spacing:.14em; text-transform:uppercase; color:#2b2723; }
+    .section-header-actions { display:flex; gap:8px; }
+
+    /* ── PIPELINE ARROW ── */
+    @keyframes agent-pulse { 0%,100% { opacity:1; } 50% { opacity:.5; } }
     @keyframes toast-in { to { opacity:1; transform:translateY(0); } }
     @keyframes spin { from { transform:rotate(0deg); } to { transform:rotate(360deg); } }
     @media (max-width:1180px) {
@@ -448,9 +718,20 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
       .actions { justify-content:flex-start; }
       .bo-module-grid, .bo-hero { grid-template-columns:1fr; }
       .bo-side-panel { position:static; }
+      .agent-pipeline { grid-template-columns:repeat(3,1fr); }
+      .agent-card:nth-child(3) { border-radius:0 18px 0 0; border-right-width:1px; }
+      .agent-card:nth-child(4) { border-radius:0 0 0 18px; border-top-width:0; }
+      .agent-card:nth-child(6) { border-radius:0 0 18px 0; border-right-width:1px; }
+      .content-grid-3 { grid-template-columns:1fr; }
+      .content-grid-2 { grid-template-columns:1fr; }
+      .ap-command-bar { grid-template-columns:1fr; }
+      .metrics-ribbon { grid-template-columns:repeat(3,1fr); }
     }
     @media (max-width:900px) {
       .cols-2, .checks, .table-tools, .cms-layout, .bo-compact-grid, .bo-subgrid-3, .bo-editorial-grid, .bo-kpi-row, .bo-chat-layout { grid-template-columns:1fr; }
+      .agent-pipeline { grid-template-columns:repeat(2,1fr); }
+      .quick-actions { grid-template-columns:repeat(2,1fr); }
+      .metrics-ribbon { grid-template-columns:repeat(2,1fr); }
       .table-count { text-align:left; }
       table, thead, tbody, th, td, tr { display:block; }
       thead { display:none; }
@@ -471,13 +752,23 @@ export function backofficeShell(title: string, body: string, flashMessage?: stri
         <strong>Pulso Pais</strong>
         <span>Situation Room</span>
       </div>
-      <div class="side-section-label">Navegacion</div>
+      <div class="side-section-label">Principal</div>
       <nav class="side-nav">
-        ${backofficeNavLink({ href: "/backoffice", label: "Panel", icon: backofficeIcon("panel"), isActive: activeNav === "panel" })}
+        ${backofficeNavLink({ href: "/backoffice", label: "Dashboard", icon: backofficeIcon("panel"), isActive: activeNav === "panel" })}
         ${backofficeNavLink({ href: "/backoffice/news/new", label: "Centro IA", icon: backofficeIcon("editorial"), isActive: activeNav === "editorial" })}
+        ${backofficeNavLink({ href: "/backoffice/news/new?template=coverage", label: "Sala de Redaccion", icon: backofficeIcon("journalist"), isActive: false })}
+      </nav>
+      <div class="side-section-label">Contenido</div>
+      <nav class="side-nav">
         ${backofficeNavLink({ href: "/backoffice/polls", label: "Encuestas", icon: backofficeIcon("polls"), isActive: activeNav === "polls" })}
+        ${backofficeNavLink({ href: "/backoffice/news/review", label: "Cola revision", icon: backofficeIcon("editor"), isActive: false })}
         ${backofficeNavLink({ href: "/backoffice/users", label: "Usuarios", icon: backofficeIcon("users"), isActive: activeNav === "users" })}
-        ${backofficeNavLink({ href: "/backoffice#theme-control", label: "Control portada", icon: backofficeIcon("layout"), isActive: activeNav === "panel" })}
+      </nav>
+      <div class="side-section-label">Sistema</div>
+      <nav class="side-nav">
+        ${backofficeNavLink({ href: "/backoffice#autopilot-section", label: "Autopiloto", icon: backofficeIcon("autopilot"), isActive: false })}
+        ${backofficeNavLink({ href: "/backoffice#social-section", label: "Social", icon: backofficeIcon("social"), isActive: false })}
+        ${backofficeNavLink({ href: "/backoffice#theme-control", label: "Portada", icon: backofficeIcon("layout"), isActive: false })}
       </nav>
       <div class="side-footer">
         <a href="/backoffice/ia-lab"><span class="bo-nav-icon">${backofficeIcon("lab")}</span><span>Diagnostico IA</span></a>

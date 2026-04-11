@@ -101,6 +101,23 @@ export function normalizeImageUrl(value: unknown): string | null {
   }
 }
 
+export function getUrlHostname(value: unknown): string | null {
+  const normalized = normalizeHttpUrl(value);
+  if (!normalized) {
+    return null;
+  }
+  try {
+    return new URL(normalized).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+export function isGoogleNewsUrl(value: unknown): boolean {
+  const hostname = getUrlHostname(value);
+  return hostname === "news.google.com" || hostname === "google.com" || hostname?.endsWith(".google.com") === true;
+}
+
 export function readBoolean(value: unknown): boolean {
   if (typeof value === "boolean") {
     return value;

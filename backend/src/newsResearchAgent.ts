@@ -1,6 +1,6 @@
 import { getExternalNews } from "./externalNews";
 import { type FeedItem } from "./types";
-import { normalizeHttpUrl } from "./utils";
+import { isGoogleNewsUrl, normalizeHttpUrl } from "./utils";
 import {
   fetchArticleSnapshot,
   pickBestEditorialImageUrl,
@@ -126,6 +126,9 @@ async function buildRankedSources(options: NewsResearchOptions): Promise<RankedS
 
   const ranked: RankedSource[] = [];
   for (const [index, item] of sliced.entries()) {
+    if (isGoogleNewsUrl(item.sourceUrl)) {
+      continue;
+    }
     const withSnapshot = item.sourceUrl ? snapshotByUrl.get(item.sourceUrl) ?? null : null;
     const title = withSnapshot?.title || item.title;
     const excerpt = withSnapshot?.description || item.excerpt || null;
@@ -158,6 +161,8 @@ async function buildRankedSources(options: NewsResearchOptions): Promise<RankedS
 
   return ranked
     .filter((entry) => entry.source.sourceUrl.length > 0)
+    .filter((entry) => !isGoogleNewsUrl(entry.source.sourceUrl))
+    .filter((entry) => Boolean(entry.source.imageUrl || entry.source.videoPosterUrl))
     .sort((left, right) => {
       if (right.source.matchScore !== left.source.matchScore) {
         return right.source.matchScore - left.source.matchScore;

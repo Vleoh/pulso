@@ -160,6 +160,44 @@ function clampCaption(input: string): string {
   return input.trim().slice(0, 2100);
 }
 
+function normalizeHashtagToken(input: string): string {
+  return input
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-zA-Z0-9\s_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\s+/g, "");
+}
+
+function buildCommunityManagerHashtags(
+  news: Pick<News, "tags" | "section">,
+  maxTags = 6,
+): string[] {
+  const sectionTags: Record<string, string[]> = {
+    NACION: ["PulsoPais", "PoliticaArgentina", "AgendaPublica"],
+    RADAR_ELECTORAL: ["PulsoPais", "Elecciones2027", "RadarElectoral"],
+    ECONOMIA: ["PulsoPais", "EconomiaArgentina", "Mercados"],
+    PROVINCIAS: ["PulsoPais", "ArgentinaFederal", "Provincias"],
+    MUNICIPIOS: ["PulsoPais", "PoliticaLocal", "Municipios"],
+    OPINION: ["PulsoPais", "AnalisisPolitico", "Opinion"],
+    ENTREVISTAS: ["PulsoPais", "Entrevista", "AgendaPublica"],
+    INTERNACIONALES: ["PulsoPais", "Mundo", "Geopolitica"],
+  };
+  const rawTags = [
+    ...(sectionTags[readString(news.section).toUpperCase()] ?? ["PulsoPais", "PoliticaArgentina"]),
+    ...(news.tags ?? []).map((item) => readString(item)),
+  ];
+  return Array.from(
+    new Set(
+      rawTags
+        .map((item) => normalizeHashtagToken(item))
+        .filter(Boolean)
+        .map((item) => `#${item}`),
+    ),
+  ).slice(0, maxTags);
+}
+
 export function buildInstagramCaption(
   news: Pick<News, "title" | "excerpt" | "sourceName" | "tags" | "slug" | "section" | "kicker">,
   preferences: InstagramPublishingPreferences,
@@ -178,26 +216,35 @@ export function buildInstagramCaption(
     DISTRITOS: "distritos",
   };
   const leadLabel = sectionEmojiMap[readString(news.section).toUpperCase()] ?? "agenda";
-  const tags = (news.tags ?? [])
-    .map((item) => item.replace(/[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ_-]+/g, " ").trim())
-    .filter(Boolean)
-    .slice(0, 5)
-    .map((item) => `#${item.replace(/\s+/g, "")}`);
+  const leadEmojiMap: Record<string, string> = {
+    politica: "🗳️",
+    federal: "🧭",
+    territorio: "🏙️",
+    analisis: "📌",
+    entrevista: "🎙️",
+    contenido: "📣",
+    radar: "📡",
+    economia: "📈",
+    mundo: "🌎",
+    distritos: "🗺️",
+    agenda: "📰",
+  };
+  const tags = buildCommunityManagerHashtags(news);
   const shortExcerpt = readString(news.excerpt).slice(0, 180);
   const kicker = readString(news.kicker);
 
   const replacements: Record<string, string> = {
     "{title}": readString(news.title),
     "{excerpt}": shortExcerpt,
-    "{cta}": preferences.includeSiteUrl ? "Link a la nota completa abajo." : "Nota completa en el link de la bio.",
+    "{cta}": preferences.includeSiteUrl ? "Amplia en la nota completa." : "Lee la nota completa desde el link en bio.",
     "{url}": preferences.includeSiteUrl ? publicUrl : "",
     "{source}": preferences.includeSourceCredit ? `Fuente base: ${readString(news.sourceName) || "Pulso Pais"}` : "",
     "{hashtags}": tags.join(" "),
-    "{leadEmoji}": leadLabel,
+    "{leadEmoji}": leadEmojiMap[leadLabel] ?? "📰",
     "{kicker}": kicker,
   };
 
-  let caption = preferences.captionTemplate || "{leadEmoji} | {title}\n\n{kicker}\n{excerpt}\n\n{cta}\n\n{hashtags}";
+  let caption = preferences.captionTemplate || "{leadEmoji} {title}\n\n{kicker}\n{excerpt}\n\n{cta}\n\n{hashtags}";
   for (const [needle, value] of Object.entries(replacements)) {
     caption = caption.replaceAll(needle, value);
   }

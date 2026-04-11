@@ -1,6 +1,6 @@
 import Parser from "rss-parser";
 import { fetchArticleSnapshot, pickBestEditorialImageUrl } from "./articleMedia";
-import { asNullable, normalizeHttpUrl, normalizeImageUrl, parseGdeltDate, readString } from "./utils";
+import { asNullable, isGoogleNewsUrl, normalizeHttpUrl, normalizeImageUrl, parseGdeltDate, readString } from "./utils";
 import { dedupeByKey, guessSectionFromText, resolveManagedFeedImage } from "./feed";
 import type { FeedItem } from "./types";
 
@@ -117,6 +117,12 @@ async function enrichExternalImages(items: FeedItem[]): Promise<FeedItem[]> {
   }
 
   return items.map((item) => {
+    if (isGoogleNewsUrl(item.sourceUrl)) {
+      return {
+        ...item,
+        imageUrl: null,
+      };
+    }
     const snapshot = snapshotById.get(item.id);
     if (!snapshot) {
       return item;

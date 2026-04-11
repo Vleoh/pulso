@@ -162,6 +162,14 @@ function resolveFrontendPublicUrl(): string {
 const FALLBACK_FRONTEND_PUBLIC_URL = IS_PRODUCTION ? "https://pulso-pais.vercel.app" : "http://localhost:3000";
 const FRONTEND_PUBLIC_URL = resolveFrontendPublicUrl() || FALLBACK_FRONTEND_PUBLIC_URL;
 const AUTOPILOT_RUN_SECRET = readString(process.env.AUTOPILOT_RUN_SECRET);
+const AUTOPILOT_HEARTBEAT_ENABLED =
+  readString(process.env.AUTOPILOT_HEARTBEAT_ENABLED).length > 0
+    ? readBoolean(process.env.AUTOPILOT_HEARTBEAT_ENABLED)
+    : IS_PRODUCTION;
+const AUTOPILOT_HEARTBEAT_MINUTES = Math.max(
+  5,
+  Math.min(60, Number(readString(process.env.AUTOPILOT_HEARTBEAT_MINUTES) || "20") || 20),
+);
 const CORS_ORIGINS = (process.env.CORS_ORIGINS ?? "*,http://localhost:3000,http://127.0.0.1:3000,https://*.vercel.app")
   .split(",")
   .map((origin) => origin.trim())
@@ -176,6 +184,8 @@ const VIDEO_BLOCK_REGEX = /\[\[VIDEO_PRINCIPAL\]\][\s\S]*?\[\[\/VIDEO_PRINCIPAL\
 const IMAGE_PROBE_TIMEOUT_MS = 4500;
 const IMAGE_PROBE_CACHE_TTL_MS = 15 * 60 * 1000;
 const imageProbeCache = new Map<string, { ok: boolean; expiresAt: number }>();
+let autopilotHeartbeatTimer: NodeJS.Timeout | null = null;
+let autopilotHeartbeatRunning = false;
 
 function shortCommit(input: string | null | undefined): string {
   const value = readString(input);
@@ -1739,16 +1749,31 @@ async function maybePublishLatestNewsToInstagram(params: {
   }
 
   const published: string[] = [];
+  const failed: string[] = [];
   for (const target of ranked) {
-    const result = await publishNewsToInstagram({
-      news: target,
-      preferences: settings,
-      frontendBaseUrl: normalizedFrontendBaseUrl(),
-    });
-    published.push(result.permalink ? `${target.slug}: ${result.permalink}` : `${target.slug}: ${result.mediaId}`);
+    try {
+      const result = await publishNewsToInstagram({
+        news: target,
+        preferences: settings,
+        frontendBaseUrl: normalizedFrontendBaseUrl(),
+      });
+      published.push(result.permalink ? `${target.slug}: ${result.permalink}` : `${target.slug}: ${result.mediaId}`);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "fallo desconocido";
+      failed.push(`${target.slug}: ${detail}`);
+    }
   }
 
-  return `Instagram publico ${published.length} pieza(s): ${published.join(" | ")}`;
+  if (published.length === 0) {
+    throw new Error(`Instagram no publico ninguna pieza. ${failed.join(" | ")}`);
+  }
+
+  return [
+    `Instagram publico ${published.length} pieza(s): ${published.join(" | ")}`,
+    failed.length > 0 ? `fallidas: ${failed.join(" | ")}` : "",
+  ]
+    .filter(Boolean)
+    .join(" | ");
 }
 
 async function runEditorialAutopilotCycle(triggerLabel: string): Promise<AutopilotRunSummary> {
@@ -1870,6 +1895,58 @@ async function runEditorialAutopilotCycle(triggerLabel: string): Promise<Autopil
   });
 
   return result;
+}
+
+async function runEditorialAutopilotHeartbeat(triggerLabel: string): Promise<void> {
+  if (!AUTOPILOT_HEARTBEAT_ENABLED || autopilotHeartbeatRunning) {
+    return;
+  }
+
+  const settings = await getEditorialAutopilotSettings(prisma);
+  if (!settings.enabled || settings.mode === "MANUAL") {
+    return;
+  }
+
+  autopilotHeartbeatRunning = true;
+  try {
+    const result = await runEditorialAutopilotCycle(triggerLabel);
+    console.log(
+      `[autopilot:${triggerLabel}] ${[result.planSummary, result.executionSummary, result.socialSummary]
+        .filter(Boolean)
+        .join(" | ")}`,
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Fallo desconocido en autopiloto";
+    const expectedSkip =
+      message.includes("Fuera de ventana operativa") ||
+      message.includes("Objetivo diario cubierto") ||
+      message.includes("esta desactivado") ||
+      message.includes("esta apagado");
+    if (expectedSkip) {
+      console.log(`[autopilot:${triggerLabel}] ${message}`);
+    } else {
+      console.error(`[autopilot:${triggerLabel}] ${message}`);
+    }
+  } finally {
+    autopilotHeartbeatRunning = false;
+  }
+}
+
+function startEditorialAutopilotHeartbeat(): void {
+  if (!AUTOPILOT_HEARTBEAT_ENABLED || autopilotHeartbeatTimer) {
+    return;
+  }
+
+  const intervalMs = AUTOPILOT_HEARTBEAT_MINUTES * 60 * 1000;
+  setTimeout(() => {
+    void runEditorialAutopilotHeartbeat("boot");
+  }, 45_000);
+  autopilotHeartbeatTimer = setInterval(() => {
+    void runEditorialAutopilotHeartbeat("heartbeat");
+  }, intervalMs);
+  console.log(
+    `[autopilot] heartbeat activo cada ${AUTOPILOT_HEARTBEAT_MINUTES} minuto(s)${IS_PRODUCTION ? " en produccion" : ""}.`,
+  );
 }
 
 function buildPollAssistInput(raw: Record<string, unknown>) {
@@ -3088,6 +3165,8 @@ app.get("/api/autopilot/status", async (_request, response, next) => {
       configured: {
         autopilotSecret: Boolean(AUTOPILOT_RUN_SECRET),
         instagramToken: Boolean(readString(process.env.INSTAGRAM_GRAPH_ACCESS_TOKEN)),
+        heartbeatEnabled: AUTOPILOT_HEARTBEAT_ENABLED,
+        heartbeatMinutes: AUTOPILOT_HEARTBEAT_MINUTES,
       },
     });
   } catch (error) {
@@ -4655,402 +4734,444 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
         </div>`;
       })
       .join("");
-    const body = `<div class="grid">
-      <section class="bo-hero">
-        <div class="bo-hero-copy">
-          <small>Panel de control</small>
-          <h2>Backoffice Editorial</h2>
-          <p>Centro de comando para contenido, portada, encuestas y operaciones de IA editorial. Monitorea el pulso de la nacion y actua sobre el sitio en tiempo real.</p>
+    const body = `<div style="display:grid;gap:18px;">
+
+      <!-- ══ AUTOPILOT COMMAND BAR ══ -->
+      <section id="autopilot-section" class="ap-command-bar">
+        <div class="ap-status-group">
+          <div class="ap-status-dot ${autopilotSettings.enabled ? "" : "is-off"}"></div>
+          <div>
+            <div class="ap-status-label">${autopilotSettings.enabled ? "Autopiloto activo" : "Autopiloto apagado"}</div>
+            <div style="color:#8a837a;font-size:10px;letter-spacing:.14em;text-transform:uppercase;font-weight:600;margin-top:2px;">Sala de Redaccion Autonoma</div>
+          </div>
         </div>
-        <div class="bo-hero-art" aria-hidden="true"></div>
+        <div class="ap-meta">
+          <div class="ap-meta-item">
+            <label>Modo</label>
+            <span>${escapeHtml(autopilotSettings.enabled ? autopilotModeLabel : "Inactivo")}</span>
+          </div>
+          <div class="ap-meta-item">
+            <label>Ventana</label>
+            <span>${autopilotSettings.windowStartHour}:00 — ${autopilotSettings.windowEndHour}:59</span>
+          </div>
+          <div class="ap-meta-item">
+            <label>Cuota diaria</label>
+            <span>${autopilotSettings.minDailyStories}–${autopilotSettings.maxDailyStories} notas</span>
+          </div>
+          <div class="ap-meta-item">
+            <label>Ultimo ciclo</label>
+            <span>${escapeHtml(autopilotLastRunLabel)}</span>
+          </div>
+          <div class="ap-meta-item">
+            <label>Social</label>
+            <span>${autopilotSettings.socialEnabled ? "Instagram ON" : "Social OFF"}</span>
+          </div>
+        </div>
+        <div class="ap-actions">
+          <a class="ap-btn" href="/backoffice#autopilot-config">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+            Configurar
+          </a>
+          <form method="post" action="/backoffice/autopilot/run" style="display:inline;">
+            <button type="submit" class="ap-btn primary">
+              <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><polygon points="10 8 16 12 10 16 10 8" fill="currentColor" stroke="none"></polygon></svg>
+              Ejecutar ciclo IA
+            </button>
+          </form>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          ${autopilotSettings.lastRunSummary ? `<span style="color:#8a837a;font-size:11px;max-width:220px;line-height:1.4;">${escapeHtml(currentErrorSafe(autopilotSettings.lastRunSummary).slice(0, 80))}${autopilotSettings.lastRunSummary.length > 80 ? "…" : ""}</span>` : ""}
+        </div>
       </section>
 
-      <section class="bo-stat-grid">
-        <article class="bo-stat-card"><span>Total notas</span><strong>${total}</strong></article>
-        <article class="bo-stat-card"><span>Publicadas</span><strong>${published}</strong></article>
-        <article class="bo-stat-card"><span>Draft</span><strong>${drafts}</strong></article>
-        <article class="bo-stat-card emphasis"><span>IA review</span><strong>${aiReview}</strong></article>
-        <article class="bo-stat-card"><span>Externas</span><strong>${externalLinked}</strong></article>
-        <article class="bo-stat-card"><span>Thin external</span><strong>${thinExternal}</strong></article>
-        <article class="bo-stat-card"><span>Encuestas live</span><strong>${pollPublished}</strong></article>
-        <article class="bo-stat-card"><span>Votos totales</span><strong>${pollVotes}</strong></article>
-        <article class="bo-stat-card ${autopilotSettings.enabled ? "emphasis" : ""}"><span>Autopiloto</span><strong>${autopilotSettings.enabled ? autopilotModeLabel : "OFF"}</strong></article>
-        <article class="bo-stat-card"><span>IG detectadas</span><strong>${instagramConfiguredCount}</strong></article>
+      <!-- ══ AGENT PIPELINE ══ -->
+      <section>
+        <div class="section-header">
+          <h3>Pipeline de agentes IA</h3>
+          <div class="section-header-actions">
+            <a class="button" href="/backoffice/news/new?template=coverage" style="font-size:11px;padding:7px 12px;min-height:auto;">Nueva cobertura</a>
+          </div>
+        </div>
+        <div class="agent-pipeline">
+          <div class="agent-card ${aiResearchSettings.enabled ? "is-ready" : "is-standby"}">
+            <div class="agent-card-top">
+              <div class="agent-icon"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"></circle><path d="m20 20-3.5-3.5"></path></svg></div>
+              <div class="agent-status-dot"></div>
+            </div>
+            <div class="agent-name">Investigador</div>
+            <div class="agent-role">Raspa fuentes, analiza agenda, rankea por relevancia editorial</div>
+            <div class="agent-stat"><strong>${externalLinked}</strong> fuentes activas</div>
+          </div>
+          <div class="agent-card ${aiResearchSettings.enabled ? "is-active" : "is-standby"}">
+            <div class="agent-card-top">
+              <div class="agent-icon"><svg viewBox="0 0 24 24"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z"></path></svg></div>
+              <div class="agent-status-dot"></div>
+            </div>
+            <div class="agent-name">Redactor</div>
+            <div class="agent-role">Reescribe con lineamiento Pulso Pais, genera titulos y copete</div>
+            <div class="agent-stat"><strong>${drafts}</strong> en borrador</div>
+          </div>
+          <div class="agent-card is-ready">
+            <div class="agent-card-top">
+              <div class="agent-icon"><svg viewBox="0 0 24 24"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"></path><circle cx="12" cy="13" r="3"></circle></svg></div>
+              <div class="agent-status-dot"></div>
+            </div>
+            <div class="agent-name">Fotografo</div>
+            <div class="agent-role">Selecciona y valida portada editorial, cropea y optimiza imagen</div>
+            <div class="agent-stat"><strong>${published}</strong> con foto aprobada</div>
+          </div>
+          <div class="agent-card ${aiReview > 0 ? "is-warning" : "is-ready"}">
+            <div class="agent-card-top">
+              <div class="agent-icon" style="background:#2a2520;"><svg viewBox="0 0 24 24"><path d="M9 12l2 2 4-4"></path><path d="M12 22C6.477 22 2 17.523 2 12S6.477 2 12 2s10 4.477 10 10-4.477 10-10 10z"></path></svg></div>
+              <div class="agent-status-dot ${aiReview > 0 ? "is-warning" : ""}"></div>
+            </div>
+            <div class="agent-name">Editor</div>
+            <div class="agent-role">Compliance editorial, revision de calidad, aprobacion o rechazo</div>
+            <div class="agent-stat"><strong>${aiReview}</strong> en cola revision</div>
+          </div>
+          <div class="agent-card is-ready">
+            <div class="agent-card-top">
+              <div class="agent-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg></div>
+              <div class="agent-status-dot"></div>
+            </div>
+            <div class="agent-name">Publicador web</div>
+            <div class="agent-role">Promueve PUBLISHED, gestiona slug y SEO, actualiza portada</div>
+            <div class="agent-stat"><strong>${published}</strong> publicadas hoy</div>
+          </div>
+          <div class="agent-card ${autopilotSettings.socialEnabled && instagramConfiguredCount > 0 ? "is-active" : "is-standby"}">
+            <div class="agent-card-top">
+              <div class="agent-icon" style="background:linear-gradient(135deg,#833ab4,#fd1d1d,#fcb045);"><svg viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"></path><line x1="17.5" y1="6.5" x2="17.51" y2="6.5"></line></svg></div>
+              <div class="agent-status-dot"></div>
+            </div>
+            <div class="agent-name">CM Social</div>
+                    <div class="agent-role">Adapta notas al tono de Instagram, decide queue social y publica piezas nativas</div>
+            <div class="agent-stat"><strong>${instagramConfiguredCount}</strong> cuenta${instagramConfiguredCount !== 1 ? "s" : ""} IG</div>
+          </div>
+        </div>
       </section>
 
-      <section class="bo-module-grid">
-        <div class="grid">
-          <article class="card">
-            <div class="split-title">
-              <div>
-                <div class="bo-kicker">IA editorial</div>
-                <h3 style="margin-top:10px;">Centro de mando autonomo</h3>
-              </div>
-              <div class="bo-inline-stat">
-                <span><strong>Modo:</strong> ${escapeHtml(autopilotSettings.enabled ? autopilotModeLabel : "OFF")}</span>
-                <span><strong>Diario:</strong> ${autopilotSettings.minDailyStories}-${autopilotSettings.maxDailyStories}</span>
-                <span><strong>Ventana:</strong> ${autopilotSettings.windowStartHour}:00-${autopilotSettings.windowEndHour}:59</span>
-              </div>
-            </div>
-            <p class="muted">Define la consigna persistente del medio, la coyuntura temporal y el ritmo operativo. Desde aca decides cuando la IA investiga, internaliza externas, publica en web y empuja a social.</p>
-            <div class="bo-editorial-grid">
-              <form method="post" action="/backoffice/settings/autopilot" style="display:grid; gap:12px;">
-                <div class="bo-toggle-row">
-                  <div><strong>Activo</strong><span>Permite ejecutar ciclos autonomos desde panel o cron</span></div>
-                  <label><input type="checkbox" name="enabled" ${autopilotSettings.enabled ? "checked" : ""} /></label>
-                </div>
-                <div class="field">
-                  <label for="autopilotMode">Modo</label>
-                  <select id="autopilotMode" name="mode">${EDITORIAL_AUTOPILOT_MODE_OPTIONS.map((option) => `<option value="${option.value}" ${autopilotSettings.mode === option.value ? "selected" : ""}>${option.label}</option>`).join("")}</select>
-                </div>
-                <div class="bo-compact-grid">
-                  <div class="field">
-                    <label for="autopilotMaxStories">Notas por corrida</label>
-                    <input id="autopilotMaxStories" name="maxStoriesPerRun" type="number" min="1" max="20" value="${autopilotSettings.maxStoriesPerRun}" />
-                  </div>
-                  <div class="field">
-                    <label for="autopilotInternalizeLimit">Internalizar externas</label>
-                    <input id="autopilotInternalizeLimit" name="internalizeLimit" type="number" min="0" max="20" value="${autopilotSettings.internalizeLimit}" />
-                  </div>
-                </div>
-                <div class="bo-compact-grid">
-                  <div class="field">
-                    <label for="autopilotMinDailyStories">Minimo diario</label>
-                    <input id="autopilotMinDailyStories" name="minDailyStories" type="number" min="1" max="30" value="${autopilotSettings.minDailyStories}" />
-                  </div>
-                  <div class="field">
-                    <label for="autopilotMaxDailyStories">Maximo diario</label>
-                    <input id="autopilotMaxDailyStories" name="maxDailyStories" type="number" min="1" max="30" value="${autopilotSettings.maxDailyStories}" />
-                  </div>
-                </div>
-                <div class="bo-compact-grid">
-                  <div class="field">
-                    <label for="autopilotWindowStart">Desde</label>
-                    <input id="autopilotWindowStart" name="windowStartHour" type="number" min="0" max="23" value="${autopilotSettings.windowStartHour}" />
-                  </div>
-                  <div class="field">
-                    <label for="autopilotWindowEnd">Hasta</label>
-                    <input id="autopilotWindowEnd" name="windowEndHour" type="number" min="1" max="23" value="${autopilotSettings.windowEndHour}" />
-                  </div>
-                </div>
-                <div class="field">
-                  <label for="autopilotInstruction">Prompt base persistente</label>
-                  <textarea id="autopilotInstruction" name="instruction" rows="5">${currentErrorSafe(autopilotSettings.instruction)}</textarea>
-                </div>
-                <div class="field">
-                  <label for="autopilotTemporalPrompt">Prompt temporal</label>
-                  <textarea id="autopilotTemporalPrompt" name="temporalPrompt" rows="3">${currentErrorSafe(autopilotSettings.temporalPrompt)}</textarea>
-                </div>
-                <div class="bo-compact-grid">
-                  <div class="bo-toggle-row">
-                    <div><strong>Auto publicar web</strong><span>Promueve el ciclo a PUBLISHED cuando el plan cierre bien</span></div>
-                    <label><input type="checkbox" name="autoPublishSite" ${autopilotSettings.autoPublishSite ? "checked" : ""} /></label>
-                  </div>
-                  <div class="bo-toggle-row">
-                    <div><strong>Empujar a social</strong><span>Intenta publicar la mejor nota del ciclo en Instagram</span></div>
-                    <label><input type="checkbox" name="socialEnabled" ${autopilotSettings.socialEnabled ? "checked" : ""} /></label>
-                  </div>
-                </div>
-                <div class="bo-toggle-row">
-                  <div><strong>Permitir borrados</strong><span>Solo habilitalo si aceptas acciones destructivas durante el experimento</span></div>
-                  <label><input type="checkbox" name="allowDelete" ${autopilotSettings.allowDelete ? "checked" : ""} /></label>
-                </div>
-                <div class="bo-form-actions">
-                  <button class="primary" type="submit">Guardar IA editorial</button>
-                  <a class="button" href="/backoffice/news/new?template=status">Abrir IA editorial</a>
-                </div>
-              </form>
+      <!-- ══ METRICS RIBBON ══ -->
+      <div class="metrics-ribbon">
+        <div class="metric-cell">
+          <label>Total notas</label>
+          <strong>${total}</strong>
+          <span>en el CMS</span>
+        </div>
+        <div class="metric-cell accent">
+          <label>Publicadas</label>
+          <strong>${published}</strong>
+          <span>en el sitio</span>
+        </div>
+        <div class="metric-cell">
+          <label>Borradores</label>
+          <strong>${drafts}</strong>
+          <span>en edicion</span>
+        </div>
+        <div class="metric-cell ${aiReview > 0 ? "accent" : ""}">
+          <label>En revision</label>
+          <strong>${aiReview}</strong>
+          <span>pendientes IA</span>
+        </div>
+        <div class="metric-cell">
+          <label>Externas</label>
+          <strong>${externalLinked}</strong>
+          <span>fuentes vinculadas</span>
+        </div>
+        <div class="metric-cell">
+          <label>Thin ext.</label>
+          <strong>${thinExternal}</strong>
+          <span>a internalizar</span>
+        </div>
+        <div class="metric-cell">
+          <label>Encuestas live</label>
+          <strong>${pollPublished}</strong>
+          <span>${pollVotes} votos totales</span>
+        </div>
+        <div class="metric-cell ${instagramConfiguredCount > 0 ? "accent" : ""}">
+          <label>Instagram</label>
+          <strong>${instagramConfiguredCount}</strong>
+          <span>cuenta${instagramConfiguredCount !== 1 ? "s" : ""} activa${instagramConfiguredCount !== 1 ? "s" : ""}</span>
+        </div>
+      </div>
 
-              <div class="bo-support-stack">
-                <div class="bo-soft-card">
-                  <h4>Estado operativo</h4>
-                  <p>Ultimo ciclo: <strong>${escapeHtml(autopilotLastRunLabel)}</strong></p>
-                  <p>${escapeHtml(autopilotSettings.lastRunSummary || "Sin corridas registradas todavia.")}</p>
-                  <div class="bo-kpi-row">
-                    <div class="bo-kpi">
-                      <span>Externas</span>
-                      <strong>${externalLinked}</strong>
-                    </div>
-                    <div class="bo-kpi">
-                      <span>Thin external</span>
-                      <strong>${thinExternal}</strong>
-                    </div>
-                    <div class="bo-kpi">
-                      <span>IG detectadas</span>
-                      <strong>${instagramConfiguredCount}</strong>
-                    </div>
-                    <div class="bo-kpi">
-                      <span>Encuestas live</span>
-                      <strong>${pollPublished}</strong>
-                    </div>
-                  </div>
-                </div>
+      <!-- ══ MAIN CONTENT GRID ══ -->
+      <div class="content-grid-3">
 
-                <div class="bo-soft-card">
-                  <h4>Guardrails activos</h4>
-                  <p>La IA usa el agente periodista si esta encendido, respeta la ventana horaria y no borra contenido salvo que lo habilites de forma explicita.</p>
-                  <div class="bo-note-box">
-                    <strong>Social actual</strong>
-                    <p>${escapeHtml(instagramAccountSummary)}</p>
-                  </div>
-                </div>
+        <!-- Actividad reciente + Acciones rapidas -->
+        <div style="display:grid;gap:18px;">
 
-                <form class="bo-soft-card" method="post" action="/backoffice/autopilot/run">
-                  <h4>Ejecutar ahora</h4>
-                  <p>Lanza una corrida inmediata con la configuracion actual para verificar prompts, cupo y publicacion social.</p>
-                  <button class="primary" type="submit">Correr ciclo IA ahora</button>
-                </form>
-              </div>
+          <!-- Quick Actions -->
+          <div class="card" style="padding:20px;">
+            <div class="section-header">
+              <h3>Acciones rapidas</h3>
             </div>
-          </article>
+            <div class="quick-actions">
+              <a class="quick-action" href="/backoffice/news/new?template=coverage">
+                <div class="quick-action-icon"><svg viewBox="0 0 24 24"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z"></path></svg></div>
+                <strong>Crear nota</strong>
+                <small>Chat con el periodista IA para cobertura individual o en lote.</small>
+              </a>
+              <a class="quick-action" href="/backoffice/news/new?template=internalize">
+                <div class="quick-action-icon"><svg viewBox="0 0 24 24"><path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-2 2zm0 0a2 2 0 0 1-2-2v-9c0-1.1.9-2 2-2h2"></path><path d="M18 14h-8"></path><path d="M15 18h-5"></path><path d="M10 6h8v4h-8V6Z"></path></svg></div>
+                <strong>Internalizar</strong>
+                <small>Convierte notas ajenas en propias con foto y tono editorial.</small>
+              </a>
+              <a class="quick-action" href="/backoffice/news/new?template=cleanup">
+                <div class="quick-action-icon"><svg viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg></div>
+                <strong>Depurar CMS</strong>
+                <small>IA corrige, limpia y prepara borrados con confirmacion.</small>
+              </a>
+              <a class="quick-action" href="/backoffice/polls/new">
+                <div class="quick-action-icon"><svg viewBox="0 0 24 24"><path d="M4 19h16"></path><rect x="5" y="11" width="3" height="6" rx="1"></rect><rect x="10.5" y="7" width="3" height="10" rx="1"></rect><rect x="16" y="4" width="3" height="13" rx="1"></rect></svg></div>
+                <strong>Nueva encuesta</strong>
+                <small>Crea encuesta para Instagram y sitio con candidatos.</small>
+              </a>
+              <a class="quick-action" href="/backoffice/ia-lab">
+                <div class="quick-action-icon"><svg viewBox="0 0 24 24"><path d="M10 3v4l-4.5 8.2A3 3 0 0 0 8.1 20h7.8a3 3 0 0 0 2.6-4.8L14 7V3"></path><path d="M8.5 13h7"></path></svg></div>
+                <strong>Diagnostico IA</strong>
+                <small>Verifica salud del modelo, contexto y tokens disponibles.</small>
+              </a>
+              <a class="quick-action" href="/backoffice/news/review">
+                <div class="quick-action-icon" style="background:${aiReview > 0 ? "#7b3f00" : "#191714"};"><svg viewBox="0 0 24 24"><path d="M9 12l2 2 4-4"></path><path d="M12 22C6.477 22 2 17.523 2 12S6.477 2 12 2s10 4.477 10 10-4.477 10-10 10z"></path></svg></div>
+                <strong>Cola revision</strong>
+                <small>${aiReview > 0 ? `${aiReview} pieza${aiReview !== 1 ? "s" : ""} pendiente${aiReview !== 1 ? "s" : ""} de revision.` : "Sin piezas pendientes ahora."}</small>
+              </a>
+            </div>
+          </div>
 
-          <article class="card">
-            <div class="split-title">
-              <div>
-                <div class="bo-kicker">Cola de revision</div>
-                <h3 style="margin-top:10px;">Piezas bloqueadas o pendientes</h3>
-              </div>
-              <a class="button" href="/backoffice/news/review">Abrir revision</a>
+          <!-- Actividad reciente del newsroom -->
+          <div class="card" style="padding:20px;">
+            <div class="section-header">
+              <h3>Actividad del newsroom</h3>
             </div>
-            <p class="muted" style="margin-bottom:12px;">Si el agente fotografo o compliance no dejan publicar, la pieza queda aca con motivo visible para editarla o corregirla.</p>
-            <div class="bo-log-list ${reviewRows ? "" : "is-empty"}">
-              ${reviewRows || `<p class="muted">No hay piezas pendientes de revision en este momento.</p>`}
-            </div>
-          </article>
-
-          <article class="card">
-            <div class="split-title">
-              <div>
-                <div class="bo-kicker">Modulo de encuestas</div>
-                <h3 style="margin-top:10px;">Monitor Electoral y Conversion</h3>
-              </div>
-              <a class="button primary" href="/backoffice/polls/new">Nueva encuesta</a>
-            </div>
-            <p class="muted">Crea encuestas para Instagram y trafico del sitio, monitorea conversion de votos y ranking de candidatos con analiticas en vivo.</p>
-            <div class="actions">
-              <a class="button" href="/backoffice/polls">Gestionar encuestas</a>
-              <a class="button" href="/backoffice/news/new?template=internalize">Abrir IA editorial</a>
-            </div>
-          </article>
-
-          <article class="card">
-            <div class="split-title">
-              <div>
-                <div class="bo-kicker">Flujo editorial reciente</div>
-                <h3 style="margin-top:10px;">Actividad del newsroom</h3>
-              </div>
-            </div>
-            <div class="bo-activity-list">
-              ${recentNewsRows || `<div class="bo-note-box"><p>No hay noticias recientes para mostrar.</p></div>`}
+            <div class="activity-feed">
+              ${recentNewsRows || `<div class="bo-note-box"><p class="muted">No hay actividad reciente registrada.</p></div>`}
               ${recentPollRows}
             </div>
-          </article>
-
-          <article class="card">
-            <div class="split-title">
-              <div>
-                <div class="bo-kicker">Operaciones IA</div>
-                <h3 style="margin-top:10px;">Acciones rapidas</h3>
-              </div>
-            </div>
-            <div class="bo-action-grid">
-              <a class="bo-action-tile" href="/backoffice/news/new?template=coverage">
-                <span class="bo-action-icon">${renderDashboardActionIcon("create")}</span>
-                <strong>Crear nota</strong>
-                <small>Un solo chat para pedir 1 nota o una cobertura completa, con memoria, plan y ejecucion.</small>
-              </a>
-              <a class="bo-action-tile" href="/backoffice/news/new?template=internalize">
-                <span class="bo-action-icon">${renderDashboardActionIcon("internalize")}</span>
-                <strong>Internalizar externas</strong>
-                <small>Transforma notas ajenas en notas propias con foto valida, contexto y tono Pulso Pais.</small>
-              </a>
-              <a class="bo-action-tile" href="/backoffice/news/new?template=cleanup">
-                <span class="bo-action-icon">${renderDashboardActionIcon("cleanup")}</span>
-                <strong>Depurar CMS</strong>
-                <small>Pidele a la IA corregir errores, limpiar pruebas o preparar borrados masivos con confirmacion.</small>
-              </a>
-              <form class="bo-action-tile" method="post" action="/backoffice/autopilot/run" style="padding:0; border:0; background:none;">
-                <button type="submit" class="bo-action-tile" style="width:100%; text-align:left;">
-                  <span class="bo-action-icon">${renderDashboardActionIcon("autopilot")}</span>
-                  <strong>Ejecutar ciclo IA</strong>
-                  <small>Corre investigacion, internalizacion, publicacion web y social segun tu configuracion.</small>
-                </button>
-              </form>
-              <a class="bo-action-tile" href="/backoffice/users">
-                <span class="bo-action-icon">${renderDashboardActionIcon("users")}</span>
-                <strong>Ver usuarios</strong>
-                <small>Consulta audiencia, trazabilidad y planes sin salir del dashboard.</small>
-              </a>
-            </div>
-          </article>
+          </div>
         </div>
 
-        <aside class="bo-side-panel">
-          <div class="bo-side-card" id="boDeployStatus">
-            <div class="split-title">
-              <h3>Estado de despliegue</h3>
-              <span id="boDeployBadge" class="bo-deploy-status ${deployStatusClass}">${deployStatus.sync}</span>
-            </div>
-            <div class="bo-deploy-grid">
-              <div class="bo-deploy-row">
-                <strong>Backend Render</strong>
-                <span id="boDeployBackend">${escapeHtml(deployStatus.backend.versionLabel)}</span>
+        <!-- Config autopiloto + Cola revision -->
+        <div style="display:grid;gap:18px;align-content:start;">
+
+          <!-- Autopilot Config -->
+          <div id="autopilot-config" class="autopilot-card">
+            <div class="autopilot-header">
+              <div class="autopilot-title">
+                <div class="bo-kicker">Centro de mando IA</div>
+                <h3>Autopiloto editorial</h3>
               </div>
-              <div class="bo-deploy-row">
-                <strong>Frontend Vercel</strong>
-                <span id="boDeployFrontend">${escapeHtml(frontendVersionLabel)}</span>
+              <div class="autopilot-badges">
+                <span class="ap-badge ${autopilotSettings.enabled ? "on" : "off"}">${autopilotSettings.enabled ? "● Activo" : "○ Inactivo"}</span>
+                ${autopilotSettings.socialEnabled ? `<span class="ap-badge social">📱 Social</span>` : ""}
               </div>
             </div>
-            <p id="boDeploySummary" class="muted">${
-              deployStatus.error ? escapeHtml(deployStatus.error) : `Sincronizacion actual: ${escapeHtml(deployStatus.sync)}.`
-            }</p>
-            <div class="actions">
-              <a class="button" href="${escapeHtml(normalizedFrontendBaseUrl())}" target="_blank" rel="noreferrer">Abrir front</a>
-              <a class="button" href="/backoffice/news/new?template=status">Abrir IA</a>
+            <form method="post" action="/backoffice/settings/autopilot" style="display:grid;gap:12px;">
+              <div class="bo-toggle-row" style="border-bottom:1px solid #e8dfc9;padding-bottom:12px;">
+                <div><strong>Activo</strong><span>Permite ciclos autonomos desde panel o cron</span></div>
+                <label><input type="checkbox" name="enabled" ${autopilotSettings.enabled ? "checked" : ""} /></label>
+              </div>
+              <div class="field">
+                <label for="autopilotMode2">Modo editorial</label>
+                <select id="autopilotMode2" name="mode">${EDITORIAL_AUTOPILOT_MODE_OPTIONS.map((option) => `<option value="${option.value}" ${autopilotSettings.mode === option.value ? "selected" : ""}>${option.label}</option>`).join("")}</select>
+              </div>
+              <div class="bo-compact-grid">
+                <div class="field">
+                  <label>Notas por corrida</label>
+                  <input name="maxStoriesPerRun" type="number" min="1" max="20" value="${autopilotSettings.maxStoriesPerRun}" />
+                </div>
+                <div class="field">
+                  <label>Internalizar ext.</label>
+                  <input name="internalizeLimit" type="number" min="0" max="20" value="${autopilotSettings.internalizeLimit}" />
+                </div>
+              </div>
+              <div class="bo-compact-grid">
+                <div class="field">
+                  <label>Cuota min. diaria</label>
+                  <input name="minDailyStories" type="number" min="1" max="30" value="${autopilotSettings.minDailyStories}" />
+                </div>
+                <div class="field">
+                  <label>Cuota max. diaria</label>
+                  <input name="maxDailyStories" type="number" min="1" max="30" value="${autopilotSettings.maxDailyStories}" />
+                </div>
+              </div>
+              <div class="bo-compact-grid">
+                <div class="field">
+                  <label>Desde (hora)</label>
+                  <input name="windowStartHour" type="number" min="0" max="23" value="${autopilotSettings.windowStartHour}" />
+                </div>
+                <div class="field">
+                  <label>Hasta (hora)</label>
+                  <input name="windowEndHour" type="number" min="1" max="23" value="${autopilotSettings.windowEndHour}" />
+                </div>
+              </div>
+              <div class="field">
+                <label>Prompt base persistente</label>
+                <textarea name="instruction" rows="4" style="font-size:12px;">${currentErrorSafe(autopilotSettings.instruction)}</textarea>
+              </div>
+              <div class="field">
+                <label>Prompt temporal (coyuntura)</label>
+                <textarea name="temporalPrompt" rows="2" style="font-size:12px;">${currentErrorSafe(autopilotSettings.temporalPrompt)}</textarea>
+              </div>
+              <div class="bo-toggle-row" style="border:0;padding:0;">
+                <div><strong>Auto publicar web</strong><span>Promueve a PUBLISHED si el ciclo cierra bien</span></div>
+                <label><input type="checkbox" name="autoPublishSite" ${autopilotSettings.autoPublishSite ? "checked" : ""} /></label>
+              </div>
+              <div class="bo-toggle-row" style="border:0;padding:0;">
+                <div><strong>Empujar a social</strong><span>El CM IA selecciona y publica hasta el maximo configurado en Instagram</span></div>
+                <label><input type="checkbox" name="socialEnabled" ${autopilotSettings.socialEnabled ? "checked" : ""} /></label>
+              </div>
+              <div class="bo-form-actions">
+                <button class="primary" type="submit">Guardar configuracion</button>
+              </div>
+            </form>
+            <div style="background:rgba(0,0,0,.04);border-radius:14px;padding:12px;display:grid;gap:6px;">
+              <div style="font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#7a6e5e;font-weight:700;">Ultimo ciclo</div>
+              <p style="margin:0;font-size:12px;color:#4e4840;line-height:1.5;">${escapeHtml(autopilotSettings.lastRunSummary || "Sin corridas registradas todavia.")}</p>
             </div>
           </div>
 
-          <div>
-            <h3>Control de portada</h3>
-            <p>Gestiona layout editorial, interacciones del front y comportamiento del agente periodista sin salir del dashboard.</p>
+          <!-- Cola de revision -->
+          <div class="card" style="padding:20px;">
+            <div class="section-header">
+              <h3>Cola de revision <span style="background:${aiReview > 0 ? "#fff4d0" : "#f0f0f0"};color:${aiReview > 0 ? "#825f00" : "#888"};border-radius:999px;padding:2px 8px;font-size:11px;font-weight:700;">${aiReview}</span></h3>
+              <a class="button" href="/backoffice/news/review" style="font-size:11px;padding:7px 12px;min-height:auto;">Ver todo</a>
+            </div>
+            <p class="muted" style="margin-bottom:12px;">Piezas bloqueadas por el agente editor o compliance que requieren intervencion humana.</p>
+            <div class="log-feed">
+              ${reviewRows ? reviewRows.split('<div class="bo-soft-line">').slice(1).slice(0,4).map(row => {
+                const titleMatch = row.match(/<strong>(.*?)<\/strong>/);
+                const spanMatch = row.match(/<span>(.*?)<\/span>/);
+                return `<div class="log-entry warning">
+                  <div class="log-icon warning">⚠</div>
+                  <div class="log-body">
+                    <strong>${titleMatch ? titleMatch[1] : "Pieza pendiente"}</strong>
+                    <span>${spanMatch?.[1] ? spanMatch[1].replace(/<[^>]*>/g, "").slice(0, 80) : ""}</span>
+                  </div>
+                </div>`;
+              }).join("") : `<div class="log-entry success"><div class="log-icon success">✓</div><div class="log-body"><strong>Cola limpia</strong><span>No hay piezas pendientes de revision.</span></div></div>`}
+            </div>
+          </div>
+        </div>
+
+        <!-- Sidebar: Social + Portada + Deploy -->
+        <aside style="display:grid;gap:16px;align-content:start;">
+
+          <!-- Agente periodista toggle -->
+          <div class="card" style="padding:18px;">
+            <div class="section-header" style="margin-bottom:12px;">
+              <h3>Agente periodista</h3>
+              <span class="ap-badge ${aiResearchSettings.enabled ? "on" : "off"}">${aiResearchSettings.enabled ? "ON" : "OFF"}</span>
+            </div>
+            <p class="muted" style="margin-bottom:12px;">Investiga agenda en tiempo real, reescribe con fuentes y consigue portada editorial valida.</p>
+            <form method="post" action="/backoffice/settings/ai-research" style="display:grid;gap:10px;">
+              <div class="bo-toggle-row" style="border:0;padding:0;">
+                <div><strong>Activo</strong><span>${aiResearchSettings.enabled ? "Investigando fuentes" : "Desactivado"}</span></div>
+                <label><input type="checkbox" name="enabled" ${aiResearchSettings.enabled ? "checked" : ""} /></label>
+              </div>
+              <button class="primary" type="submit" style="font-size:12px;">Guardar agente</button>
+            </form>
           </div>
 
-          <form id="theme-control" method="post" action="/backoffice/settings/theme" style="display:grid; gap:12px;">
-            <div class="field">
-              <label for="homeTheme">Layout de portada</label>
-              <select id="homeTheme" name="homeTheme">${themeOptions}</select>
+          <!-- Social: Instagram -->
+          <div id="social-section" class="card" style="padding:18px;">
+            <div class="section-header" style="margin-bottom:12px;">
+              <h3>Social media</h3>
             </div>
-            <button class="primary" type="submit">Guardar cambios portada</button>
-          </form>
-
-          <form method="post" action="/backoffice/settings/engagement" style="display:grid; gap:10px;">
-            <div class="bo-toggle-row">
-              <div><strong>Comentarios</strong><span>Control global de discusion</span></div>
-              <label><input type="checkbox" name="commentsEnabled" ${engagementSettings.commentsEnabled ? "checked" : ""} /></label>
-            </div>
-            <div class="bo-toggle-row">
-              <div><strong>Reacciones</strong><span>Botones de apoyo y guardado</span></div>
-              <label><input type="checkbox" name="reactionsEnabled" ${engagementSettings.reactionsEnabled ? "checked" : ""} /></label>
-            </div>
-            <div class="bo-toggle-row">
-              <div><strong>Analisis en vivo</strong><span>Insights contextuales en tarjetas</span></div>
-              <label><input type="checkbox" name="analysisEnabled" ${engagementSettings.analysisEnabled ? "checked" : ""} /></label>
-            </div>
-            <button class="primary" type="submit">Guardar interacciones</button>
-          </form>
-
-          <form method="post" action="/backoffice/settings/ai-research" style="display:grid; gap:12px;">
-            <div>
-              <h3 style="margin-bottom:8px;">Agente periodista</h3>
-              <p>Investiga agenda, toma fuentes, internaliza enlaces externos y consigue media portada.</p>
-            </div>
-            <div class="bo-toggle-row">
-              <div><strong>Activo</strong><span>${aiResearchSettings.enabled ? "Investigando y reescribiendo" : "Desactivado"}</span></div>
-              <label><input type="checkbox" name="enabled" ${aiResearchSettings.enabled ? "checked" : ""} /></label>
-            </div>
-            <div class="bo-toggle-row">
-              <div><strong>Leer texto completo</strong><span>Extrae cuerpo desde la fuente</span></div>
-              <label><input type="checkbox" name="fetchArticleText" ${aiResearchSettings.fetchArticleText ? "checked" : ""} /></label>
-            </div>
-            <div class="bo-toggle-row">
-              <div><strong>Sin link externo</strong><span>Publica la nota propia como destino principal</span></div>
-              <label><input type="checkbox" name="internalizeSourceLinks" ${aiResearchSettings.internalizeSourceLinks ? "checked" : ""} /></label>
-            </div>
-            <div class="bo-toggle-row">
-              <div><strong>Crop automatico</strong><span>${aiResearchSettings.cropWidth}x${aiResearchSettings.cropHeight}</span></div>
-              <label><input type="checkbox" name="cropImage" ${aiResearchSettings.cropImage ? "checked" : ""} /></label>
-            </div>
-            <div class="bo-compact-grid">
-              <div class="field">
-                <label for="hotNewsLimit">Fuentes max.</label>
-                <input id="hotNewsLimit" name="hotNewsLimit" type="number" min="3" max="20" value="${aiResearchSettings.hotNewsLimit}" />
-              </div>
-              <div class="field">
-                <label for="cropWidth">Crop</label>
-                <div style="display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px;">
-                  <input id="cropWidth" name="cropWidth" type="number" min="480" max="2400" value="${aiResearchSettings.cropWidth}" />
-                  <input id="cropHeight" name="cropHeight" type="number" min="320" max="1800" value="${aiResearchSettings.cropHeight}" />
+            <div class="social-panel">
+              <div class="social-account-card">
+                <div class="social-platform-icon"><svg viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"></path><line x1="17.5" y1="6.5" x2="17.51" y2="6.5"></line></svg></div>
+                <div class="social-account-info">
+                  <strong>Instagram</strong>
+                  <span>${escapeHtml(instagramAccountSummary.slice(0, 48))}${instagramAccountSummary.length > 48 ? "…" : ""}</span>
+                </div>
+                <div class="social-stat">
+                  <strong>${instagramConfiguredCount}</strong>
+                  <span>cuentas</span>
                 </div>
               </div>
             </div>
-            <div class="field">
-              <label for="campaignLine">Bajada/campana activa</label>
-              <textarea id="campaignLine" name="campaignLine" rows="3">${currentErrorSafe(aiResearchSettings.campaignLine)}</textarea>
+            <div style="margin-top:12px;display:grid;gap:8px;">
+              <a class="button" href="/backoffice#autopilot-config" style="font-size:11px;padding:8px 12px;min-height:auto;text-align:center;">Configurar social</a>
             </div>
-            <button class="primary" type="submit">Guardar agente periodista</button>
-            <p>Notas con fuente externa detectadas: <strong>${externalLinked}</strong>. Candidatas a internalizacion inmediata: <strong>${thinExternal}</strong>.</p>
-          </form>
+          </div>
 
-          <form method="post" action="/backoffice/settings/instagram" style="display:grid; gap:12px;">
-            <div>
-              <h3 style="margin-bottom:8px;">Instagram Graph</h3>
-              <p>${escapeHtml(instagramAccountSummary)}</p>
+          <!-- Control de portada -->
+          <div id="theme-control" class="card" style="padding:18px;background:#191714;border-color:#2a2723;">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px;">
+              <h3 style="margin:0;font-size:13px;letter-spacing:.14em;text-transform:uppercase;color:#f2b705;">Control de portada</h3>
             </div>
-            <div class="bo-toggle-row">
-              <div><strong>Activo</strong><span>Publica desde el backend con el token de Meta configurado</span></div>
-              <label><input type="checkbox" name="enabled" ${instagramSettings.enabled ? "checked" : ""} /></label>
-            </div>
-            <div class="field">
-              <label for="instagramAccountId">Instagram account id</label>
-              <input id="instagramAccountId" name="accountId" value="${currentErrorSafe(instagramSettings.accountId)}" />
-            </div>
-            <div class="field">
-              <label for="instagramUsername">Usuario esperado</label>
-              <input id="instagramUsername" name="username" value="${currentErrorSafe(instagramSettings.username)}" />
-            </div>
-            <div class="field">
-              <label for="instagramCaptionTemplate">Plantilla caption</label>
-              <textarea id="instagramCaptionTemplate" name="captionTemplate" rows="5">${currentErrorSafe(instagramSettings.captionTemplate)}</textarea>
-            </div>
-            <div class="bo-compact-grid">
-              <div class="bo-toggle-row">
-                <div><strong>Link sitio</strong><span>Inserta URL de la nota</span></div>
-                <label><input type="checkbox" name="includeSiteUrl" ${instagramSettings.includeSiteUrl ? "checked" : ""} /></label>
+            <p style="color:#d0cbc2;font-size:12px;line-height:1.5;margin:0 0 12px;">Layout editorial, interacciones y comportamiento del front.</p>
+            <form id="form-theme" method="post" action="/backoffice/settings/theme" style="display:grid;gap:10px;">
+              <div class="field">
+                <label style="color:#ddd3bd;">Layout de portada</label>
+                <select name="homeTheme" style="background:#24211d;border-color:#3a3630;color:#f6f4ee;">${themeOptions}</select>
               </div>
-              <div class="bo-toggle-row">
-                <div><strong>Credito fuente</strong><span>Menciona fuente base si existe</span></div>
-                <label><input type="checkbox" name="includeSourceCredit" ${instagramSettings.includeSourceCredit ? "checked" : ""} /></label>
+              <button class="primary" type="submit" style="font-size:12px;">Guardar portada</button>
+            </form>
+            <form method="post" action="/backoffice/settings/engagement" style="display:grid;gap:8px;margin-top:14px;padding-top:14px;border-top:1px solid rgba(255,255,255,.08);">
+              <div class="bo-toggle-row" style="border-bottom:1px solid rgba(255,255,255,.08);padding-bottom:8px;">
+                <div><strong style="color:#f0ece4;font-size:12px;">Comentarios</strong></div>
+                <label><input type="checkbox" name="commentsEnabled" ${engagementSettings.commentsEnabled ? "checked" : ""} /></label>
+              </div>
+              <div class="bo-toggle-row" style="border-bottom:1px solid rgba(255,255,255,.08);padding-bottom:8px;">
+                <div><strong style="color:#f0ece4;font-size:12px;">Reacciones</strong></div>
+                <label><input type="checkbox" name="reactionsEnabled" ${engagementSettings.reactionsEnabled ? "checked" : ""} /></label>
+              </div>
+              <div class="bo-toggle-row" style="border:0;padding:0;">
+                <div><strong style="color:#f0ece4;font-size:12px;">Analisis en vivo</strong></div>
+                <label><input type="checkbox" name="analysisEnabled" ${engagementSettings.analysisEnabled ? "checked" : ""} /></label>
+              </div>
+              <button class="primary" type="submit" style="font-size:12px;margin-top:4px;">Guardar engagement</button>
+            </form>
+          </div>
+
+          <!-- Deploy status -->
+          <div class="card" id="boDeployStatus" style="padding:18px;">
+            <div class="split-title" style="margin-bottom:12px;">
+              <h3 style="font-size:13px;">Deploy status</h3>
+              <span id="boDeployBadge" class="bo-deploy-status ${deployStatusClass}">${deployStatus.sync}</span>
+            </div>
+            <div style="display:grid;gap:8px;margin-bottom:12px;">
+              <div style="display:flex;justify-content:space-between;font-size:12px;padding:8px 10px;background:#f5f2eb;border-radius:10px;">
+                <span style="color:#6b6660;">Backend</span>
+                <span id="boDeployBackend" style="font-weight:600;">${escapeHtml(deployStatus.backend.versionLabel)}</span>
+              </div>
+              <div style="display:flex;justify-content:space-between;font-size:12px;padding:8px 10px;background:#f5f2eb;border-radius:10px;">
+                <span style="color:#6b6660;">Frontend</span>
+                <span id="boDeployFrontend" style="font-weight:600;">${escapeHtml(frontendVersionLabel)}</span>
               </div>
             </div>
-            <div class="field">
-              <label for="instagramMaxPostsPerRun">Posts max. por corrida</label>
-              <input id="instagramMaxPostsPerRun" name="maxPostsPerRun" type="number" min="1" max="5" value="${instagramSettings.maxPostsPerRun}" />
+            <p id="boDeploySummary" class="muted">${deployStatus.error ? escapeHtml(deployStatus.error) : `Sync: ${escapeHtml(deployStatus.sync)}.`}</p>
+            <div class="actions" style="margin-top:10px;">
+              <a class="button" href="${escapeHtml(normalizedFrontendBaseUrl())}" target="_blank" rel="noreferrer" style="font-size:11px;padding:7px 12px;min-height:auto;">Ver sitio</a>
             </div>
-            <button class="primary" type="submit">Guardar Instagram</button>
-          </form>
+          </div>
         </aside>
-      </section>
+      </div>
 
-      ${renderNewsTable(news, { frontendBaseUrl: normalizedFrontendBaseUrl() })}
       <script>
-        (function () {
-          const badge = document.getElementById("boDeployBadge");
-          const backendEl = document.getElementById("boDeployBackend");
-          const frontendEl = document.getElementById("boDeployFrontend");
-          const summaryEl = document.getElementById("boDeploySummary");
-
+        (() => {
           function renderStatus(payload) {
-            if (!payload || !badge || !backendEl || !frontendEl || !summaryEl) {
-              return;
-            }
-            const sync = payload.sync || "unknown";
-            badge.textContent = String(sync).toUpperCase();
+            const sync = payload.sync ?? "unknown";
+            const badge = document.getElementById("boDeployBadge");
+            const backendEl = document.getElementById("boDeployBackend");
+            const frontendEl = document.getElementById("boDeployFrontend");
+            const summaryEl = document.getElementById("boDeploySummary");
+            if (!badge) return;
             badge.className = "bo-deploy-status " + (sync === "synced" ? "is-synced" : sync === "drift" ? "is-drift" : "is-unknown");
-            backendEl.textContent = payload.backend && payload.backend.versionLabel ? payload.backend.versionLabel : "Sin dato";
-            frontendEl.textContent = payload.frontend && payload.frontend.versionLabel ? payload.frontend.versionLabel : "Sin respuesta publica";
-            summaryEl.textContent = payload.error ? String(payload.error) : "Sincronizacion actual: " + String(sync) + ".";
+            badge.textContent = sync;
+            if (backendEl) backendEl.textContent = payload.backend && payload.backend.versionLabel ? payload.backend.versionLabel : "Sin datos";
+            if (frontendEl) frontendEl.textContent = payload.frontend && payload.frontend.versionLabel ? payload.frontend.versionLabel : "Sin respuesta publica";
+            if (summaryEl) summaryEl.textContent = payload.error ? String(payload.error) : "Sincronizacion actual: " + String(sync) + ".";
           }
-
           async function refreshStatus() {
             try {
               const response = await fetch("/api/deploy/status", { headers: { accept: "application/json" } });
-              if (!response.ok) {
-                return;
-              }
+              if (!response.ok) return;
               renderStatus(await response.json());
             } catch (_error) {}
           }
-
           window.setTimeout(refreshStatus, 600);
           window.setInterval(refreshStatus, 15000);
         })();
@@ -6612,6 +6733,7 @@ app.use((error: unknown, _request: Request, response: Response, _next: NextFunct
 
 async function bootstrap(): Promise<void> {
   await prisma.$connect();
+  startEditorialAutopilotHeartbeat();
   app.listen(PORT, () => {
     console.log(`Pulso backend escuchando en http://localhost:${PORT}`);
   });
@@ -6623,12 +6745,13 @@ bootstrap().catch((error) => {
 });
 
 const shutdown = async () => {
+  if (autopilotHeartbeatTimer) {
+    clearInterval(autopilotHeartbeatTimer);
+    autopilotHeartbeatTimer = null;
+  }
   await prisma.$disconnect();
   process.exit(0);
 };
 
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
-
-
-

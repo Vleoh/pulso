@@ -1,4 +1,4 @@
-import { normalizeHttpUrl, normalizeImageUrl, readString } from "./utils";
+import { isGoogleNewsUrl, normalizeHttpUrl, normalizeImageUrl, readString } from "./utils";
 
 export type ArticleSnapshot = {
   title: string | null;
@@ -283,6 +283,17 @@ function extractParagraphs(html: string, maxItems = 3): string[] {
 }
 
 export async function fetchArticleSnapshot(url: string): Promise<ArticleSnapshot> {
+  if (isGoogleNewsUrl(url)) {
+    return {
+      title: null,
+      description: null,
+      imageUrl: null,
+      imageCandidates: [],
+      videoUrl: null,
+      videoPosterUrl: null,
+      paragraphs: [],
+    };
+  }
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 9000);
   try {

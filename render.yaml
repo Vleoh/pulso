@@ -50,6 +50,10 @@ services:
         value: qwen3
       - key: AI_TIMEOUT_MS
         value: "30000"
+      - key: AUTOPILOT_HEARTBEAT_ENABLED
+        value: "true"
+      - key: AUTOPILOT_HEARTBEAT_MINUTES
+        value: "20"
       - key: AI_OLLAMA_URL
         sync: false
       - key: OPENWEATHER_API_KEY
