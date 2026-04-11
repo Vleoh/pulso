@@ -51,6 +51,7 @@ const NAV_ITEMS: Array<{ label: string; section?: NewsSection }> = [
 ];
 
 const LOGO_SRC = "/logo.png?v=20260403";
+const APP_TIMEZONE = "America/Argentina/Buenos_Aires";
 
 function sanitizeDisplayText(input: string): string {
   return input
@@ -126,6 +127,7 @@ function formatDate(dateIso: string): string {
     month: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
+    timeZone: APP_TIMEZONE,
   });
 }
 
@@ -580,18 +582,18 @@ function DesktopEdition({
         </aside>
       </section>
 
-      {interviewStory ? (
-        <section className="cp-shell cp-interview">
-          <div className="cp-interview-copy">
-            <p>La entrevista del dia</p>
-            <h3>
-              "La crisis actual no es solo economica, es de representacion politica profunda."
-            </h3>
-            <span>{sanitizeDisplayText(authorFor(interviewStory) ?? "Elena Martinez de Hoz")}</span>
-            <StoryAnchor item={interviewStory} className="cp-read-btn">
-              Leer entrevista completa
-            </StoryAnchor>
-          </div>
+        {interviewStory ? (
+          <section className="cp-shell cp-interview">
+            <div className="cp-interview-copy">
+              <p>{sanitizeDisplayText(interviewStory.kicker ?? "La entrevista del dia")}</p>
+              <h3>
+                "{shortText(cleanTitle(interviewStory), 110)}"
+              </h3>
+              <span>{sanitizeDisplayText(authorFor(interviewStory) ?? interviewStory.sourceName ?? "Redaccion Pulso Pais")}</span>
+              <StoryAnchor item={interviewStory} className="cp-read-btn">
+                Leer entrevista completa
+              </StoryAnchor>
+            </div>
           <div className="cp-interview-image">
             <SmartImage
               src={interviewStory.imageUrl}
@@ -993,7 +995,10 @@ export default async function Home() {
   const mostRead = prioritizeStories(fillList(dedupe([...home.secondary, ...home.latest, ...home.externalPulse]), rest, 6), 4);
   const opinionStories = fillList(dedupe([...home.opinion, ...rest.filter((item) => item.section === "OPINION")]), rest, 3);
   const buenosAiresStories = fillList(rest.filter((item) => item.province === "BUENOS_AIRES" || item.province === "CABA"), rest, 2);
-  const interviewStory = home.interviews[0] ?? rest.find((item) => item.section === "ENTREVISTAS") ?? rest[0] ?? null;
+  const interviewStory =
+    home.interviews.find((item) => item.section === "ENTREVISTAS" || (item as { isInterview?: boolean }).isInterview) ??
+    rest.find((item) => item.section === "ENTREVISTAS" || (item as { isInterview?: boolean }).isInterview) ??
+    null;
   const electionStory = home.radarElectoral[0] ?? rest.find((item) => item.section === "RADAR_ELECTORAL") ?? rest[1] ?? null;
   const sportsStory = findSports(rest);
   const federalDesktop = prioritizeFederalEntries(home.federalHighlights, 8);

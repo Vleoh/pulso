@@ -161,6 +161,7 @@ function resolveFrontendPublicUrl(): string {
 
 const FALLBACK_FRONTEND_PUBLIC_URL = IS_PRODUCTION ? "https://pulso-pais.vercel.app" : "http://localhost:3000";
 const FRONTEND_PUBLIC_URL = resolveFrontendPublicUrl() || FALLBACK_FRONTEND_PUBLIC_URL;
+const APP_TIMEZONE = "America/Argentina/Buenos_Aires";
 const AUTOPILOT_RUN_SECRET = readString(process.env.AUTOPILOT_RUN_SECRET);
 const AUTOPILOT_HEARTBEAT_ENABLED =
   readString(process.env.AUTOPILOT_HEARTBEAT_ENABLED).length > 0
@@ -199,6 +200,26 @@ async function ensureAutopilotDueRun(triggerLabel: string): Promise<void> {
 function shortCommit(input: string | null | undefined): string {
   const value = readString(input);
   return value ? value.slice(0, 7) : "dev";
+}
+
+function formatBuenosAiresDateTime(value: Date | string | null | undefined): string {
+  if (!value) {
+    return "-";
+  }
+  const parsed = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return "-";
+  }
+  return parsed.toLocaleString("es-AR", {
+    dateStyle: "short",
+    timeStyle: "short",
+    timeZone: APP_TIMEZONE,
+  });
+}
+
+function isContingencyModel(model: string | null | undefined): boolean {
+  const normalized = readString(model).toLowerCase();
+  return normalized.startsWith("fallback-");
 }
 
 function buildBackendVersionInfo(): RuntimeVersionInfo {
@@ -990,19 +1011,17 @@ async function createStoriesFromBatchState(formState: BatchNewsFormState): Promi
     const fallbackKicker = item.focus === "CAMPAIGN" ? "Escenario Electoral" : "Mesa de situacion";
     const fallbackExcerpt = item.focus === "CAMPAIGN" ? safeCampaignTopic : safeGeneralBrief;
     const sourceItem = researchSources.length > 0 ? researchSources[index % researchSources.length] : null;
-    const sourceGalleryCandidates =
-      researchSources.length > 0
-        ? [researchSources[(index + 1) % researchSources.length], researchSources[(index + 2) % researchSources.length]]
-        : [];
     try {
+      if (isContingencyModel(draft.model ?? batch.model)) {
+        throw new Error("Borrador de contingencia: requiere revision editorial antes de publicar.");
+      }
       const finalSection = draft.section && isNewsSection(draft.section) ? draft.section : formState.sectionHint || "NACION";
       const finalProvince = draft.province && isProvince(draft.province) ? draft.province : formState.provinceHint || "";
-      const sourceVideoCandidates = researchSources.length > 0 ? [sourceItem, researchLead, ...sourceGalleryCandidates] : [];
+      const sourceVideoCandidates = sourceItem ? [sourceItem] : [];
       const baseImageCandidatesRaw = uniqueNormalizedImageUrls(
         [
           draft.imageUrl,
           sourceItem?.imageUrl ?? null,
-          researchLead?.imageUrl ?? null,
           sourceItem?.videoPosterUrl ?? null,
           formState.requireImageUrl || formState.useResearchAgent ? fallbackBatchImageByIndex(index) : null,
         ],
@@ -1011,7 +1030,7 @@ async function createStoriesFromBatchState(formState: BatchNewsFormState): Promi
       const baseImageCandidates = baseImageCandidatesRaw
         .map((url) => applyResearchImageTransform(url, aiResearchSettings))
         .filter((url): url is string => Boolean(url));
-      const imageReferer = sourceItem?.sourceUrl ?? researchLead?.sourceUrl ?? null;
+      const imageReferer = sourceItem?.sourceUrl ?? null;
       const managedCoverCandidate = await pickManagedImageCandidate(
         baseImageCandidates.map((url) => ({ url, referer: imageReferer })),
         5,
@@ -1020,50 +1039,30 @@ async function createStoriesFromBatchState(formState: BatchNewsFormState): Promi
         throw new Error("El agente fotografo no encontro una portada editorial valida para este item.");
       }
       const finalImage = managedCoverCandidate.rawUrl;
-      const galleryImages = uniqueNormalizedImageUrls(
-        sourceGalleryCandidates.map((entry) => entry?.imageUrl ?? null),
-        3,
-      )
-        .filter((url) => !baseImageCandidatesRaw.includes(url))
-        .map((url) => applyResearchImageTransform(url, aiResearchSettings))
-        .filter((url): url is string => Boolean(url));
-      const reachableGallery = await captureManagedImageList(
-        galleryImages
-          .filter((url) => url !== finalImage)
-          .map((url, galleryIndex) => ({
-            url,
-            referer: sourceGalleryCandidates[galleryIndex]?.sourceUrl ?? imageReferer,
-          })),
-        3,
-      );
       const reachableVideo = await pickReachableVideo(
         uniqueNormalizedVideoUrls(sourceVideoCandidates.map((entry) => entry?.videoUrl ?? null), 3),
         3,
       );
       const videoPosterSource =
-        uniqueNormalizedImageUrls([sourceItem?.videoPosterUrl ?? null, researchLead?.videoPosterUrl ?? null, finalImage], 3)[0] ?? null;
+        uniqueNormalizedImageUrls([sourceItem?.videoPosterUrl ?? null, finalImage], 3)[0] ?? null;
       const videoPoster =
         videoPosterSource
           ? (await ensureManagedImageCaptured(videoPosterSource, { referer: imageReferer })) ?? buildManagedImageUrl(videoPosterSource)
           : null;
       const managedCover = managedCoverCandidate.managedUrl;
 
-      const finalSourceName = draft.sourceName ?? sourceItem?.sourceName ?? researchLead?.sourceName ?? formState.defaultSourceName;
+      const finalSourceName = draft.sourceName ?? sourceItem?.sourceName ?? formState.defaultSourceName;
       const finalSourceUrl =
         formState.useResearchAgent && aiResearchSettings.internalizeSourceLinks
           ? ""
           : normalizeHttpUrl(draft.sourceUrl) ??
             normalizeHttpUrl(sourceItem?.sourceUrl) ??
-            normalizeHttpUrl(researchLead?.sourceUrl) ??
             normalizeHttpUrl(formState.defaultSourceUrl) ??
             "";
-      const finalBody = appendGalleryBlockToBody(
-        appendPrimaryVideoBlockToBody(
-          draft.body ?? draft.excerpt ?? fallbackExcerpt,
-          buildManagedVideoUrl(reachableVideo),
-          videoPoster,
-        ),
-        reachableGallery,
+      const finalBody = appendPrimaryVideoBlockToBody(
+        draft.body ?? draft.excerpt ?? fallbackExcerpt,
+        buildManagedVideoUrl(reachableVideo),
+        videoPoster,
       );
 
       const normalized = normalizeNewsInput({
@@ -1279,6 +1278,9 @@ async function internalizeExternalNewsFromState(rewriteState: ExternalRewriteFor
 
       const suggestion = await generateDraftWithAi(assistInput, mergedContext);
       const finalSuggestion = await postProcessResearchedSuggestion(suggestion, settings, source, [source], rewriteState.instruction);
+      if (isContingencyModel(finalSuggestion.model)) {
+        throw new Error("Borrador de contingencia: la fuente requiere revision editorial antes de publicarse.");
+      }
 
       const finalSection = rewriteState.sectionHint || existing?.section || (isNewsSection(source.section) ? source.section : "NACION");
       const finalProvince = rewriteState.provinceHint || existing?.province || null;
@@ -1479,6 +1481,9 @@ async function rewriteExistingNewsByCommand(operation: Extract<EditorialCommandO
       const processed = operation.useResearchAgent
         ? await postProcessResearchedSuggestion(suggestion, settings, researchLead, researchSources, `${operation.instruction} ${row.title}`)
         : suggestion;
+      if (isContingencyModel(processed.model)) {
+        throw new Error("Borrador de contingencia: la reescritura requiere revision editorial antes de publicarse.");
+      }
 
       const baseCoverCandidates = uniqueNormalizedImageUrls(
         [processed.imageUrl, row.imageUrl, fallbackResearchImage(row.title)],
@@ -4823,10 +4828,10 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
       EDITORIAL_AUTOPILOT_MODE_OPTIONS.find((option) => option.value === autopilotSettings.mode)?.label ??
       autopilotSettings.mode;
     const autopilotLastRunLabel = autopilotSettings.lastRunAt
-      ? new Date(autopilotSettings.lastRunAt).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" })
+      ? formatBuenosAiresDateTime(autopilotSettings.lastRunAt)
       : "Nunca";
     const autopilotNextRunLabel = autopilotSettings.nextRunAt
-      ? new Date(autopilotSettings.nextRunAt).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" })
+      ? formatBuenosAiresDateTime(autopilotSettings.nextRunAt)
       : "Pendiente de planificacion";
     const instagramAccountSummary = instagramConnectionError
       ? `Error Meta: ${instagramConnectionError}`
@@ -4835,7 +4840,7 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
     const recentNewsRows = news
       .slice(0, 4)
       .map((item) => {
-        const when = new Date(item.updatedAt).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" });
+        const when = formatBuenosAiresDateTime(item.updatedAt);
         const event =
           item.status === NewsStatus.PUBLISHED
             ? `Nota publicada: "${currentErrorSafe(item.title)}"`
@@ -4855,7 +4860,7 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
     const recentPollRows = pollRows
       .slice(0, 2)
       .map((item) => {
-        const when = new Date(item.updatedAt).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" });
+        const when = formatBuenosAiresDateTime(item.updatedAt);
         return `<div class="bo-activity-row">
           <div class="bo-activity-time">${when}</div>
           <div class="bo-activity-copy">
@@ -4870,7 +4875,7 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
       .filter((item) => item.aiDecision === "REVIEW")
       .slice(0, 6)
       .map((item) => {
-        const when = new Date(item.updatedAt).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" });
+        const when = formatBuenosAiresDateTime(item.updatedAt);
         return `<div class="bo-soft-line">
           <strong>${currentErrorSafe(item.title)}</strong>
           <span>${currentErrorSafe(item.aiReason ?? "Pendiente de revision editorial")} &middot; ${when}</span>
@@ -5595,22 +5600,20 @@ app.post("/backoffice/news/batch", boGuard, async (request, response, next) => {
       const draft = item.draft;
 
       try {
+        if (isContingencyModel(draft.model ?? batch.model)) {
+          throw new Error("Borrador de contingencia: requiere revision editorial antes de publicar.");
+        }
         const finalSection = draft.section && isNewsSection(draft.section) ? draft.section : sectionHint ?? "NACION";
         const finalProvince = draft.province && isProvince(draft.province) ? draft.province : provinceHint ?? "";
         const fallbackTitle = item.focus === "CAMPAIGN" ? `Radar de campana ${index + 1}` : `Agenda politica ${index + 1}`;
         const fallbackKicker = item.focus === "CAMPAIGN" ? "Escenario Electoral" : "Mesa de situacion";
         const fallbackExcerpt = item.focus === "CAMPAIGN" ? safeCampaignTopic : safeGeneralBrief;
         const sourceItem = researchSources.length > 0 ? researchSources[index % researchSources.length] : null;
-        const sourceGalleryCandidates =
-          researchSources.length > 0
-            ? [researchSources[(index + 1) % researchSources.length], researchSources[(index + 2) % researchSources.length]]
-            : [];
-        const sourceVideoCandidates = researchSources.length > 0 ? [sourceItem, researchLead, ...sourceGalleryCandidates] : [];
+        const sourceVideoCandidates = sourceItem ? [sourceItem] : [];
         const baseImageCandidatesRaw = uniqueNormalizedImageUrls(
           [
             draft.imageUrl,
             sourceItem?.imageUrl ?? null,
-            researchLead?.imageUrl ?? null,
             sourceItem?.videoPosterUrl ?? null,
             requireImageUrl || useResearchAgent ? fallbackBatchImageByIndex(index) : null,
           ],
@@ -5622,26 +5625,12 @@ app.post("/backoffice/news/batch", boGuard, async (request, response, next) => {
         const reachableCover = await pickReachableImage(baseImageCandidates, 3);
         const fallbackCover = applyResearchImageTransform(fallbackBatchImageByIndex(index), aiResearchSettings);
         const finalImage = reachableCover ?? (fallbackCover && (await probeImageUrl(fallbackCover)) ? fallbackCover : "");
-        const galleryImages = uniqueNormalizedImageUrls(
-          sourceGalleryCandidates.map((entry) => entry?.imageUrl ?? null),
-          3,
-        )
-          .filter((url) => !baseImageCandidatesRaw.includes(url))
-          .map((url) => applyResearchImageTransform(url, aiResearchSettings))
-          .filter((url): url is string => Boolean(url));
-        const reachableGallery = await captureManagedImageList(
-          (await pickReachableImages(galleryImages, 3, 8)).filter((url) => url !== finalImage),
-          3,
-        );
         const reachableVideo = await pickReachableVideo(
           uniqueNormalizedVideoUrls(sourceVideoCandidates.map((entry) => entry?.videoUrl ?? null), 3),
           3,
         );
         const videoPosterSource =
-          uniqueNormalizedImageUrls(
-            [sourceItem?.videoPosterUrl ?? null, researchLead?.videoPosterUrl ?? null, finalImage],
-            3,
-          )[0] ?? null;
+          uniqueNormalizedImageUrls([sourceItem?.videoPosterUrl ?? null, finalImage], 3)[0] ?? null;
         const videoPoster =
           videoPosterSource ? (await ensureManagedImageCaptured(videoPosterSource)) ?? buildManagedImageUrl(videoPosterSource) : null;
         const managedCover = await ensureManagedImageCaptured(finalImage);
@@ -5649,22 +5638,18 @@ app.post("/backoffice/news/batch", boGuard, async (request, response, next) => {
           throw new Error("El agente fotografo no pudo capturar la portada editorial del item.");
         }
 
-        const finalSourceName = draft.sourceName ?? sourceItem?.sourceName ?? researchLead?.sourceName ?? defaultSourceName;
+        const finalSourceName = draft.sourceName ?? sourceItem?.sourceName ?? defaultSourceName;
         const finalSourceUrl =
           useResearchAgent && aiResearchSettings.internalizeSourceLinks
             ? ""
             : normalizeHttpUrl(draft.sourceUrl) ??
               normalizeHttpUrl(sourceItem?.sourceUrl) ??
-              normalizeHttpUrl(researchLead?.sourceUrl) ??
               normalizeHttpUrl(defaultSourceUrl) ??
               "";
-        const finalBody = appendGalleryBlockToBody(
-          appendPrimaryVideoBlockToBody(
-            draft.body ?? draft.excerpt ?? fallbackExcerpt,
-            buildManagedVideoUrl(reachableVideo),
-            videoPoster,
-          ),
-          reachableGallery,
+        const finalBody = appendPrimaryVideoBlockToBody(
+          draft.body ?? draft.excerpt ?? fallbackExcerpt,
+          buildManagedVideoUrl(reachableVideo),
+          videoPoster,
         );
 
         const normalized = normalizeNewsInput({

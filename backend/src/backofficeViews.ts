@@ -4,6 +4,22 @@ import type { EditorialCommandChatMessage, EditorialCommandLogEntry } from "./si
 import { escapeHtml } from "./utils";
 
 type BackofficeNavKey = "panel" | "editorial" | "polls" | "users" | "autopilot" | "social" | "theme";
+const BACKOFFICE_TIMEZONE = "America/Argentina/Buenos_Aires";
+
+function formatBackofficeDateTime(value: Date | string | null | undefined): string {
+  if (!value) {
+    return "-";
+  }
+  const parsed = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return "-";
+  }
+  return parsed.toLocaleString("es-AR", {
+    dateStyle: "short",
+    timeStyle: "short",
+    timeZone: BACKOFFICE_TIMEZONE,
+  });
+}
 
 function resolveBackofficeNav(title: string): BackofficeNavKey {
   const normalized = title.trim().toLowerCase();
@@ -950,9 +966,7 @@ export function renderNewsTable(news: News[], options?: { frontendBaseUrl?: stri
         .filter(Boolean)
         .join(" ");
 
-      const published = item.publishedAt
-        ? new Date(item.publishedAt).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" })
-        : "-";
+      const published = item.publishedAt ? formatBackofficeDateTime(item.publishedAt) : "-";
       const openUrl = item.slug
         ? `${frontendBaseUrl}/noticias/${item.slug}`
         : item.sourceUrl && item.sourceUrl.length > 0
@@ -1144,7 +1158,7 @@ function renderEditorialStudio(params: {
     return `<article class="bo-chat-message ${item.role === "user" ? "is-user" : item.role === "assistant" ? "is-assistant" : "is-system"}">
       <div class="bo-chat-meta">
         <strong>${escapeHtml(roleLabel)}</strong>
-        <span>${escapeHtml(kindLabel)} &middot; ${escapeHtml(new Date(item.createdAt).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" }))}</span>
+        <span>${escapeHtml(kindLabel)} &middot; ${escapeHtml(formatBackofficeDateTime(item.createdAt))}</span>
       </div>
       <div class="bo-chat-body">${escapeHtml(item.text).replace(/\r?\n/g, "<br />")}</div>
     </article>`;
@@ -1154,7 +1168,7 @@ function renderEditorialStudio(params: {
     return `<article class="bo-log-item is-${escapeHtml(item.level)}">
       <div class="bo-chat-meta">
         <strong>${escapeHtml(item.title)}</strong>
-        <span>${escapeHtml(new Date(item.createdAt).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" }))}</span>
+        <span>${escapeHtml(formatBackofficeDateTime(item.createdAt))}</span>
       </div>
       <div class="bo-chat-body">${escapeHtml(item.detail).replace(/\r?\n/g, "<br />")}</div>
     </article>`;
@@ -2250,10 +2264,8 @@ export type BackofficeUserListItem = {
 export function renderUsersTable(items: BackofficeUserListItem[]): string {
   const rows = items
     .map((item) => {
-      const createdAt = new Date(item.createdAt).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" });
-      const lastLoginAt = item.lastLoginAt
-        ? new Date(item.lastLoginAt).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" })
-        : "-";
+      const createdAt = formatBackofficeDateTime(item.createdAt);
+      const lastLoginAt = item.lastLoginAt ? formatBackofficeDateTime(item.lastLoginAt) : "-";
       const searchIndex = escapeHtml(`${item.email} ${item.displayName ?? ""} ${item.plan}`.toLowerCase());
 
       return `<tr data-user-row data-plan="${item.plan}" data-search="${searchIndex}">
@@ -2401,10 +2413,8 @@ export function renderPollTable(items: BackofficePollListItem[]): string {
 
   const rows = items
     .map((item) => {
-      const published = item.publishedAt
-        ? new Date(item.publishedAt).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" })
-        : "-";
-      const updated = new Date(item.updatedAt).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" });
+      const published = item.publishedAt ? formatBackofficeDateTime(item.publishedAt) : "-";
+      const updated = formatBackofficeDateTime(item.updatedAt);
       const searchIndex = escapeHtml(`${item.title} ${item.slug} ${item.question} ${item.status}`.toLowerCase());
       const statusClass = item.status === PollStatus.PUBLISHED ? "live" : "draft";
       const leader = item.leaderLabel ? escapeHtml(item.leaderLabel) : "-";

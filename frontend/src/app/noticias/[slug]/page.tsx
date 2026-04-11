@@ -8,6 +8,7 @@ import { getHomeData, getNewsBySlug, getNewsList } from "@/lib/api";
 import type { FeedItem, NewsSection } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
+const APP_TIMEZONE = "America/Argentina/Buenos_Aires";
 
 const SECTION_LABEL: Record<NewsSection, string> = {
   NACION: "Nacion",
@@ -241,6 +242,7 @@ function formatDate(dateIso: string): string {
     year: "numeric",
     hour: "2-digit",
     minute: "2-digit",
+    timeZone: APP_TIMEZONE,
   });
 }
 
@@ -361,23 +363,6 @@ export default async function NewsDetailPage({ params }: NewsDetailPageProps) {
               <video controls preload="metadata" poster={posterUrl ?? undefined}>
                 <source src={videoUrl} />
               </video>
-            </section>
-          ) : null}
-
-          {galleryUrls.length > 0 ? (
-            <section className="news-detail-gallery" aria-label="Galeria de imagenes de la nota">
-              {galleryUrls.map((url, index) => (
-                <figure key={`${url}-${index}`} className="news-detail-gallery-item">
-                  <SmartImage
-                    src={url}
-                    alt={`Galeria ${index + 1}: ${cleanTitle({ title: payload.item.title, section: payload.item.section })}`}
-                    fill
-                    sizes="(max-width: 900px) 100vw, 46vw"
-                    className="news-related-image"
-                    fallbackClassName="news-related-placeholder"
-                  />
-                </figure>
-              ))}
             </section>
           ) : null}
 

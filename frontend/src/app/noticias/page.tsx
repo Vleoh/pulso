@@ -6,6 +6,7 @@ import { getHomeData, getNewsList } from "@/lib/api";
 import type { FeedItem, NewsSection } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
+const APP_TIMEZONE = "America/Argentina/Buenos_Aires";
 
 const NEWS_SECTIONS: Array<{ value: NewsSection; label: string }> = [
   { value: "NACION", label: "Nacion" },
@@ -38,6 +39,7 @@ function formatDate(dateIso: string): string {
     month: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
+    timeZone: APP_TIMEZONE,
   });
 }
 

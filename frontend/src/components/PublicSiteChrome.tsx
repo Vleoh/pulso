@@ -13,6 +13,7 @@ const NAV_ITEMS: Array<{ label: string; section?: NewsSection }> = [
 ];
 
 const LOGO_SRC = "/logo.png?v=20260403";
+const APP_TIMEZONE = "America/Argentina/Buenos_Aires";
 
 function sanitizeDisplayText(input: string): string {
   return input
@@ -24,9 +25,9 @@ function sanitizeDisplayText(input: string): string {
 
 function formatHeaderDate(dateIso: string): string {
   const date = new Date(dateIso);
-  const weekday = date.toLocaleDateString("es-AR", { weekday: "short" }).replace(".", "");
-  const day = date.toLocaleDateString("es-AR", { day: "2-digit" });
-  const month = date.toLocaleDateString("es-AR", { month: "short" }).replace(".", "");
+  const weekday = date.toLocaleDateString("es-AR", { weekday: "short", timeZone: APP_TIMEZONE }).replace(".", "");
+  const day = date.toLocaleDateString("es-AR", { day: "2-digit", timeZone: APP_TIMEZONE });
+  const month = date.toLocaleDateString("es-AR", { month: "short", timeZone: APP_TIMEZONE }).replace(".", "");
   return `${weekday} ${day} ${month}`.toUpperCase();
 }
 
