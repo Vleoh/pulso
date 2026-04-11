@@ -186,6 +186,16 @@ const IMAGE_PROBE_CACHE_TTL_MS = 15 * 60 * 1000;
 const imageProbeCache = new Map<string, { ok: boolean; expiresAt: number }>();
 let autopilotHeartbeatTimer: NodeJS.Timeout | null = null;
 let autopilotHeartbeatRunning = false;
+let autopilotRequestKickAt = 0;
+
+function kickAutopilotHeartbeatFromRequest(triggerLabel: string): void {
+  const now = Date.now();
+  if (autopilotHeartbeatRunning || now - autopilotRequestKickAt < 15_000) {
+    return;
+  }
+  autopilotRequestKickAt = now;
+  void runEditorialAutopilotHeartbeat(triggerLabel);
+}
 
 function shortCommit(input: string | null | undefined): string {
   const value = readString(input);
@@ -1968,9 +1978,7 @@ function startEditorialAutopilotHeartbeat(): void {
   }
 
   const intervalMs = 60 * 1000;
-  setTimeout(() => {
-    void runEditorialAutopilotHeartbeat("boot");
-  }, 15_000);
+  void runEditorialAutopilotHeartbeat("boot");
   autopilotHeartbeatTimer = setInterval(() => {
     void runEditorialAutopilotHeartbeat("heartbeat");
   }, intervalMs);
@@ -3233,6 +3241,7 @@ app.get("/api/deploy/status", async (_request, response, next) => {
 });
 
 app.get("/api/autopilot/status", async (_request, response, next) => {
+  kickAutopilotHeartbeatFromRequest("status");
   try {
     const [autopilot, instagram] = await Promise.all([
       getEditorialAutopilotSettings(prisma),
@@ -3274,6 +3283,7 @@ app.get("/api/autopilot/run", async (request, response, next) => {
 });
 
 app.get("/api/home", async (_request, response, next) => {
+  kickAutopilotHeartbeatFromRequest("home");
   try {
     const payload = await buildHomePayload(prisma);
     response.json(payload);
@@ -4712,6 +4722,7 @@ app.get("/backoffice/ai/health", boGuard, async (_request, response, next) => {
 });
 
 app.get("/backoffice", boGuard, async (request, response, next) => {
+  kickAutopilotHeartbeatFromRequest("dashboard");
   try {
     const [
       news,
@@ -5350,9 +5361,7 @@ app.post("/backoffice/settings/autopilot", boGuard, async (request, response, ne
       nextRunAt: new Date().toISOString(),
     });
     if (settings.enabled && settings.mode !== "MANUAL") {
-      setTimeout(() => {
-        void runEditorialAutopilotHeartbeat("settings");
-      }, 3000);
+      kickAutopilotHeartbeatFromRequest("settings");
     }
     response.redirect(
       `/backoffice?ok=${encodeURIComponent(
