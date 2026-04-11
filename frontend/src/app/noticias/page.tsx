@@ -1,12 +1,11 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { PublicSiteChrome } from "@/components/PublicSiteChrome";
 import { SmartImage } from "@/components/SmartImage";
-import { getNewsList } from "@/lib/api";
+import { getHomeData, getNewsList } from "@/lib/api";
 import type { FeedItem, NewsSection } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
-
-const LOGO_SRC = "/logo.png?v=20260403";
 
 const NEWS_SECTIONS: Array<{ value: NewsSection; label: string }> = [
   { value: "NACION", label: "Nacion" },
@@ -45,9 +44,6 @@ function formatDate(dateIso: string): string {
 function storyLink(item: Pick<FeedItem, "slug" | "sourceUrl" | "isExternal">): { href: string; external: boolean } | null {
   if (item.slug && !item.isExternal) {
     return { href: `/noticias/${item.slug}`, external: false };
-  }
-  if (item.sourceUrl) {
-    return { href: item.sourceUrl, external: true };
   }
   return null;
 }
@@ -104,23 +100,31 @@ export default async function NewsHubPage({ searchParams }: NewsHubPageProps) {
   const params = await searchParams;
   const sectionRaw = String(params.section ?? "").toUpperCase();
   const activeSection = NEWS_SECTIONS.find((entry) => entry.value === sectionRaw);
+  const home = await getHomeData();
   const items = await getNewsList({
     section: activeSection?.value,
     limit: 60,
-    external: true,
   });
 
   return (
     <main className="news-hub-screen">
+      <PublicSiteChrome
+        activeSection={activeSection?.value ?? null}
+        ticker={home.ticker[0] ?? "Pulso Pais monitorea la agenda politica argentina en tiempo real."}
+        weatherLabel={`${home.social.weather.location} ${home.social.weather.temperatureC === null ? "--" : `${home.social.weather.temperatureC}C`}`}
+        markets={home.social.markets}
+        dateIso={home.generatedAt}
+        backofficeUrl={process.env.NEXT_PUBLIC_BACKOFFICE_URL ?? "https://pulso-backend-kgtc.onrender.com/backoffice"}
+      />
+
       <div className="news-hub-shell">
         <header className="news-hub-header">
           <div>
             <div className="news-hub-brand-lockup">
-              <img src={LOGO_SRC} alt="Pulso Pais" width={168} height={54} />
               <span>Archivo vivo de cobertura politica federal</span>
             </div>
             <h1>{activeSection ? activeSection.label : "Noticias"}</h1>
-            <p>Lectura continua con notas propias, seguimiento territorial y acceso a las fuentes cuando corresponde.</p>
+            <p>Lectura continua con notas propias, seguimiento territorial y un archivo interno consistente con la portada de Pulso Pais.</p>
           </div>
           <div className="news-hub-actions">
             <Link href="/">Volver al Home</Link>

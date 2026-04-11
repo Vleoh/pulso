@@ -1,8 +1,8 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { EngagementBar } from "@/components/EngagementBar";
+import { PublicSiteChrome } from "@/components/PublicSiteChrome";
 import { SmartImage } from "@/components/SmartImage";
-import { UserSessionNav } from "@/components/UserSessionNav";
 import { getFeaturedPoll, getHomeData } from "@/lib/api";
 import type { FeedItem, NewsSection, PollItem } from "@/lib/types";
 
@@ -127,14 +127,6 @@ function formatDate(dateIso: string): string {
     hour: "2-digit",
     minute: "2-digit",
   });
-}
-
-function formatHeaderDate(dateIso: string): string {
-  const date = new Date(dateIso);
-  const weekday = date.toLocaleDateString("es-AR", { weekday: "short" }).replace(".", "");
-  const day = date.toLocaleDateString("es-AR", { day: "2-digit" });
-  const month = date.toLocaleDateString("es-AR", { month: "short" }).replace(".", "");
-  return `${weekday} ${day} ${month}`.toUpperCase();
 }
 
 function formatMoney(value: number | null, currency: string): string {
@@ -511,58 +503,13 @@ function DesktopEdition({
 }) {
   return (
     <main className="cp-home">
-      <section className="cp-ticker-top">
-        <div className="cp-shell cp-ticker-row">
-          {markets.slice(0, 2).map((market) => (
-            <p key={market.symbol}>
-              <strong>{sanitizeDisplayText(market.label)}</strong> {formatMoney(market.price, market.currency)}
-            </p>
-          ))}
-          <p>{sanitizeDisplayText(weatherLabel)}</p>
-          <span className="cp-breaking-dot" aria-hidden="true" />
-          <p>{shortText(stripCategoryPrefix(sanitizeDisplayText(ticker)), 84)}</p>
-        </div>
-      </section>
-
-      <header className="cp-shell cp-header">
-        <div className="cp-header-icons">
-          <button type="button" aria-label="Menu">
-            <UiIcon name="menu" />
-          </button>
-          <button type="button" aria-label="Buscar">
-            <UiIcon name="search" />
-          </button>
-        </div>
-
-        <div className="cp-brand">
-          <img src={LOGO_SRC} alt="Pulso Pais" width={230} height={74} className="cp-brand-logo" />
-          <p>El diario de la situacion</p>
-        </div>
-
-        <div className="cp-header-actions">
-          <span>{formatHeaderDate(hero?.publishedAt ?? new Date().toISOString())}</span>
-          <button type="button">Newsletter</button>
-          <button type="button" className="primary">
-            Suscribirse
-          </button>
-          <a href={backofficeUrl} target="_blank" rel="noreferrer">
-            Backoffice
-          </a>
-          <UserSessionNav />
-        </div>
-      </header>
-
-      <nav className="cp-shell cp-nav">
-        {NAV_ITEMS.map((item, index) => (
-          <Link
-            key={item.label}
-            href={item.section ? `/noticias?section=${item.section}` : "/noticias"}
-            className={index === 0 ? "active" : ""}
-          >
-            {item.label}
-          </Link>
-        ))}
-      </nav>
+      <PublicSiteChrome
+        ticker={shortText(stripCategoryPrefix(sanitizeDisplayText(ticker)), 84)}
+        weatherLabel={weatherLabel}
+        markets={markets}
+        dateIso={hero?.publishedAt ?? new Date().toISOString()}
+        backofficeUrl={backofficeUrl}
+      />
 
       <section className="cp-shell cp-hero-grid">
         {hero ? (

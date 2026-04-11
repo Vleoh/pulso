@@ -3059,12 +3059,12 @@ function renderBatchNewsForm(params: {
               </label>
               <label>
                 <input type="checkbox" name="includeCampaignLine" ${current.includeCampaignLine ? "checked" : ""} />
-                Incluir bajada editorial/campana en la corrida
+                Incluir foco editorial temporal en la corrida
               </label>
             </div>
             <div class="field">
-              <label for="campaignLine">Bajada editorial / campana activa (opcional)</label>
-              <textarea id="campaignLine" name="campaignLine" rows="2" placeholder="Ej: consolidar presencia territorial en conurbano con foco en gestion y empleo.">${currentErrorSafe(
+              <label for="campaignLine">Foco editorial temporal (opcional)</label>
+              <textarea id="campaignLine" name="campaignLine" rows="2" placeholder="Ej: priorizar agenda economica cotidiana, impacto federal y consecuencias reales.">${currentErrorSafe(
                 current.campaignLine,
               )}</textarea>
             </div>
@@ -3081,14 +3081,14 @@ function renderBatchNewsForm(params: {
               <p class="hint">Deja <strong>1</strong> para nota individual autogenerada.</p>
             </div>
             <div class="field">
-              <label for="campaignPercent">Porcentaje campana (%)</label>
+              <label for="campaignPercent">Porcentaje de foco especial (%)</label>
               <input id="campaignPercent" name="campaignPercent" type="number" min="0" max="100" value="${current.campaignPercent}" required />
               <p id="batchSplit" class="hint"></p>
             </div>
           </div>
           <div class="field">
-            <label for="campaignTopic">Tema de campana (bloque estrategico)</label>
-            <textarea id="campaignTopic" name="campaignTopic" rows="3" placeholder="Ej: cierre de alianzas y armados seccionales en PBA para 2027.">${currentErrorSafe(
+            <label for="campaignTopic">Tema de foco especial</label>
+            <textarea id="campaignTopic" name="campaignTopic" rows="3" placeholder="Ej: conflicto fiscal con provincias, listas legislativas o economia del bolsillo.">${currentErrorSafe(
               current.campaignTopic,
             )}</textarea>
           </div>

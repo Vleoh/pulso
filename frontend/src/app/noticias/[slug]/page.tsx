@@ -2,14 +2,12 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { ReactNode } from "react";
+import { PublicSiteChrome } from "@/components/PublicSiteChrome";
 import { SmartImage } from "@/components/SmartImage";
-import { UserSessionNav } from "@/components/UserSessionNav";
-import { getNewsBySlug, getNewsList } from "@/lib/api";
+import { getHomeData, getNewsBySlug, getNewsList } from "@/lib/api";
 import type { FeedItem, NewsSection } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
-
-const LOGO_SRC = "/logo.png?v=20260403";
 
 const SECTION_LABEL: Record<NewsSection, string> = {
   NACION: "Nacion",
@@ -206,9 +204,6 @@ function storyLink(item: { slug: string | null; sourceUrl: string | null; isExte
   if (item.slug && !item.isExternal) {
     return { href: `/noticias/${item.slug}`, external: false };
   }
-  if (item.sourceUrl) {
-    return { href: item.sourceUrl, external: true };
-  }
   return null;
 }
 
@@ -247,14 +242,6 @@ function formatDate(dateIso: string): string {
     hour: "2-digit",
     minute: "2-digit",
   });
-}
-
-function formatHeaderDate(dateIso: string): string {
-  const date = new Date(dateIso);
-  const weekday = date.toLocaleDateString("es-AR", { weekday: "short" }).replace(".", "");
-  const day = date.toLocaleDateString("es-AR", { day: "2-digit" });
-  const month = date.toLocaleDateString("es-AR", { month: "short" }).replace(".", "");
-  return `${weekday} ${day} ${month}`.toUpperCase();
 }
 
 function detailParagraphs(body: string | null, excerpt: string | null): string[] {
@@ -301,13 +288,14 @@ export async function generateMetadata({ params }: NewsDetailPageProps): Promise
 
 export default async function NewsDetailPage({ params }: NewsDetailPageProps) {
   const { slug } = await params;
+  const home = await getHomeData();
   const payload = await getNewsBySlug(slug);
 
   if (!payload?.item) {
     notFound();
   }
 
-  const stream = (await getNewsList({ limit: 16, external: true })).filter((entry) => entry.id !== payload.item.id);
+  const stream = (await getNewsList({ limit: 16 })).filter((entry) => entry.id !== payload.item.id);
   const mostRead = dedupeById([...payload.related, ...stream]).slice(0, 6);
   const sideStream = stream.slice(0, 3);
   const related = dedupeById(payload.related).slice(0, 6);
@@ -318,37 +306,14 @@ export default async function NewsDetailPage({ params }: NewsDetailPageProps) {
 
   return (
     <main className="news-detail-screen">
-      <header className="cp-shell cp-header news-detail-site-header">
-        <div className="cp-header-icons">
-          <Link href="/" aria-label="Volver al inicio" className="news-inline-icon">
-            Inicio
-          </Link>
-          <Link href="/noticias" aria-label="Ver noticias" className="news-inline-icon">
-            Noticias
-          </Link>
-        </div>
-
-        <div className="cp-brand">
-          <Link href="/" className="news-brand-link">
-            <img src={LOGO_SRC} alt="Pulso Pais" width={230} height={74} className="cp-brand-logo" />
-          </Link>
-          <p>El diario de la situacion</p>
-        </div>
-
-        <div className="cp-header-actions">
-          <span>{formatHeaderDate(payload.item.publishedAt)}</span>
-          <Link href="/noticias">Seguir leyendo</Link>
-          <UserSessionNav />
-        </div>
-      </header>
-
-      <nav className="cp-shell cp-nav news-detail-site-nav">
-        {NAV_ITEMS.map((item) => (
-          <Link key={item.label} href={item.section ? `/noticias?section=${item.section}` : "/noticias"} className={item.section === payload.item.section ? "active" : ""}>
-            {item.label}
-          </Link>
-        ))}
-      </nav>
+      <PublicSiteChrome
+        activeSection={payload.item.section}
+        ticker={home.ticker[0] ?? cleanTitle({ title: payload.item.title, section: payload.item.section })}
+        weatherLabel={`${home.social.weather.location} ${home.social.weather.temperatureC === null ? "--" : `${home.social.weather.temperatureC}C`}`}
+        markets={home.social.markets}
+        dateIso={payload.item.publishedAt}
+        backofficeUrl={process.env.NEXT_PUBLIC_BACKOFFICE_URL ?? "https://pulso-backend-kgtc.onrender.com/backoffice"}
+      />
 
       <section className="cp-shell news-detail-layout">
         <article className="news-detail-shell">
@@ -425,11 +390,6 @@ export default async function NewsDetailPage({ params }: NewsDetailPageProps) {
           </section>
 
           <footer className="news-detail-footer">
-            {payload.item.sourceUrl ? (
-              <a href={payload.item.sourceUrl} target="_blank" rel="noreferrer">
-                Ver fuente original
-              </a>
-            ) : null}
             <div className="news-detail-tags">
               {payload.item.tags.map((tag) => (
                 <span key={tag}>{sanitizeDisplayText(tag)}</span>
@@ -499,7 +459,7 @@ export default async function NewsDetailPage({ params }: NewsDetailPageProps) {
 
       {related.length > 0 ? (
         <section className="cp-shell news-related-shell">
-          <h3>Relacionadas</h3>
+          <h3>Segui leyendo</h3>
           <div className="news-related-grid">
             {related.map((entry) => {
               const card = (
