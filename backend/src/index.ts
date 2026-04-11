@@ -2810,6 +2810,7 @@ function previewEditorialCommandPlan(plan: EditorialCommandPlan): EditorialComma
 }
 
 function buildAutopilotInstruction(settings: Awaited<ReturnType<typeof getEditorialAutopilotSettings>>): string {
+  const shouldPublish = resolveAutopilotShouldPublish(settings);
   const guidance = [
     settings.instruction,
     settings.temporalPrompt,
@@ -2818,7 +2819,7 @@ function buildAutopilotInstruction(settings: Awaited<ReturnType<typeof getEditor
     settings.internalizeLimit > 0
       ? `Si detectas thin external o enlaces a portales, internaliza hasta ${settings.internalizeLimit} primero.`
       : "No internalices notas externas en esta corrida salvo que la instruccion lo exija.",
-    settings.autoPublishSite
+    shouldPublish
       ? "Si la evidencia y la portada son suficientes, deja las notas listas para PUBLISHED."
       : "Trabaja conservadoramente y deja las notas nuevas en DRAFT.",
     settings.allowDelete
@@ -2910,13 +2911,17 @@ function randomIntInRange(minValue: number, maxValue: number): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
+function resolveAutopilotShouldPublish(settings: Awaited<ReturnType<typeof getEditorialAutopilotSettings>>): boolean {
+  return settings.mode === "AUTO" || settings.autoPublishSite;
+}
+
 function applyAutopilotPolicyToPlan(
   plan: EditorialCommandPlan,
   settings: Awaited<ReturnType<typeof getEditorialAutopilotSettings>>,
 ): EditorialCommandPlan {
   const maxStories = Math.max(1, settings.maxStoriesPerRun);
   const internalizeLimit = Math.max(0, settings.internalizeLimit);
-  const publishStatus = settings.autoPublishSite ? NewsStatus.PUBLISHED : NewsStatus.DRAFT;
+  const publishStatus = resolveAutopilotShouldPublish(settings) ? NewsStatus.PUBLISHED : NewsStatus.DRAFT;
 
   return {
     ...plan,
