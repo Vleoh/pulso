@@ -1691,9 +1691,38 @@ async function executeEditorialCommandPlan(plan: EditorialCommandPlan, commandSt
         campaignLine: commandState.campaignLine,
         deleteDuplicates: operation.deleteDuplicates,
       };
-      const result = await internalizeExternalNewsFromState(state);
-      const errorHint = result.errors.length > 0 ? ` &middot; alertas: ${result.errors.slice(0, 2).join(" | ")}` : "";
-      resultLines.push(`Internalizar: ${result.createdCount} creadas, ${result.updatedCount} actualizadas, ${result.deletedCount} eliminadas${errorHint}`);
+      try {
+        const result = await internalizeExternalNewsFromState(state);
+        const errorHint = result.errors.length > 0 ? ` &middot; alertas: ${result.errors.slice(0, 2).join(" | ")}` : "";
+        resultLines.push(`Internalizar: ${result.createdCount} creadas, ${result.updatedCount} actualizadas, ${result.deletedCount} eliminadas${errorHint}`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "No se pudo internalizar la agenda externa.";
+        const canFallback = message.includes("No se encontraron fuentes externas candidatas") || message.includes("No se pudo internalizar ninguna fuente externa");
+        if (!canFallback) {
+          throw error;
+        }
+
+        const fallbackState: BatchNewsFormState = {
+          ...defaultBatchNewsFormState(),
+          totalItems: Math.max(1, operation.limit),
+          campaignPercent: 0,
+          campaignTopic: "",
+          generalBrief: operation.instruction,
+          useResearchAgent: true,
+          includeCampaignLine: operation.includeCampaignLine,
+          campaignLine: commandState.campaignLine,
+          publishStatus: operation.publishStatus ?? NewsStatus.DRAFT,
+          sectionHint: operation.sectionHint ?? "",
+          provinceHint: operation.provinceHint ?? "",
+          requireImageUrl: true,
+          defaultSourceName: "Pulso Pais IA",
+          defaultAuthorName: "Redaccion Pulso Pais",
+          defaultSourceUrl: "",
+        };
+        const fallback = await createStoriesFromBatchState(fallbackState);
+        const errorHint = fallback.errors.length > 0 ? ` &middot; alertas: ${fallback.errors.slice(0, 2).join(" | ")}` : "";
+        resultLines.push(`Internalizar: sin candidatas; fallback crear ${fallback.createdCount}/${fallback.totalRequested} notas (${fallback.model})${errorHint}`);
+      }
       continue;
     }
 
