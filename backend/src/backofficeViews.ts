@@ -3,7 +3,7 @@ import { PROVINCE_OPTIONS, SECTION_OPTIONS, provinceLabel, sectionLabel } from "
 import type { EditorialCommandChatMessage, EditorialCommandLogEntry } from "./siteSettings";
 import { escapeHtml } from "./utils";
 
-type BackofficeNavKey = "panel" | "editorial" | "polls" | "users" | "autopilot" | "social" | "theme";
+type BackofficeNavKey = "panel" | "editorial" | "review" | "polls" | "users" | "autopilot" | "social" | "theme";
 const BACKOFFICE_TIMEZONE = "America/Argentina/Buenos_Aires";
 
 function formatBackofficeDateTime(value: Date | string | null | undefined): string {
@@ -28,6 +28,9 @@ function resolveBackofficeNav(title: string): BackofficeNavKey {
   }
   if (normalized.includes("usuario")) {
     return "users";
+  }
+  if (normalized.includes("revision")) {
+    return "review";
   }
   if (
     normalized.includes("noticia") ||
@@ -784,7 +787,7 @@ export function backofficeShell(
       <div class="side-section-label">Contenido</div>
       <nav class="side-nav">
         ${backofficeNavLink({ href: "/backoffice/polls", label: "Encuestas", icon: backofficeIcon("polls"), navKey: "polls", isActive: activeNav === "polls" })}
-        ${backofficeNavLink({ href: "/backoffice/news/review", label: "Cola revision", icon: backofficeIcon("editor"), navKey: "editorial", isActive: activeNav === "editorial" })}
+        ${backofficeNavLink({ href: "/backoffice/news/review", label: "Cola revision", icon: backofficeIcon("editor"), navKey: "review", isActive: activeNav === "review" })}
         ${backofficeNavLink({ href: "/backoffice/users", label: "Usuarios", icon: backofficeIcon("users"), navKey: "users", isActive: activeNav === "users" })}
       </nav>
       <div class="side-section-label">Sistema</div>
@@ -856,7 +859,7 @@ export function backofficeShell(
           return;
         }
         if (path.startsWith("/backoffice/news/review")) {
-          activate("editorial");
+          activate("review");
           return;
         }
         if (path.startsWith("/backoffice/users")) {

@@ -38,6 +38,7 @@ export const INSTAGRAM_MAX_POSTS_PER_RUN_KEY = "instagram_max_posts_per_run";
 export const EDITORIAL_COMMAND_CHAT_HISTORY_KEY = "editorial_command_chat_history";
 export const EDITORIAL_COMMAND_CHAT_LOGS_KEY = "editorial_command_chat_logs";
 export const EDITORIAL_COMMAND_PENDING_PLAN_KEY = "editorial_command_pending_plan";
+export const AGENT_ACTIVITY_LOGS_KEY = "agent_activity_logs";
 
 export const HOME_THEME_OPTIONS = [
   { value: "editorial", label: "Cronista Dorado (default)" },
@@ -136,6 +137,25 @@ export type EditorialCommandLogEntry = {
   createdAt: string;
 };
 
+export type AgentActivityName =
+  | "investigator"
+  | "writer"
+  | "photographer"
+  | "editor"
+  | "publisher"
+  | "social"
+  | "autopilot";
+
+export type AgentActivityLogEntry = {
+  id: string;
+  agent: AgentActivityName;
+  level: "info" | "success" | "warn" | "error";
+  title: string;
+  detail: string;
+  createdAt: string;
+  newsId?: string | null;
+};
+
 export type EditorialCommandChatState = {
   history: EditorialCommandChatMessage[];
   logs: EditorialCommandLogEntry[];
@@ -197,6 +217,8 @@ const DEFAULT_EDITORIAL_COMMAND_CHAT_STATE: EditorialCommandChatState = {
   logs: [],
   pendingPlanJson: "",
 };
+
+const DEFAULT_AGENT_ACTIVITY_LOGS: AgentActivityLogEntry[] = [];
 
 export function normalizeHomeTheme(value: string): HomeTheme {
   const normalized = value.trim().toLowerCase();
@@ -331,6 +353,48 @@ function normalizeLogEntry(raw: unknown): EditorialCommandLogEntry | null {
     title,
     detail,
     createdAt: normalizeShortText(typeof entry.createdAt === "string" ? entry.createdAt : "", "", 120) || new Date().toISOString(),
+  };
+}
+
+function normalizeAgentName(value: unknown): AgentActivityName {
+  const normalized = normalizeShortText(typeof value === "string" ? value : "", "", 32).toLowerCase();
+  if (
+    normalized === "investigator" ||
+    normalized === "writer" ||
+    normalized === "photographer" ||
+    normalized === "editor" ||
+    normalized === "publisher" ||
+    normalized === "social" ||
+    normalized === "autopilot"
+  ) {
+    return normalized;
+  }
+  return "autopilot";
+}
+
+function normalizeAgentActivityEntry(raw: unknown): AgentActivityLogEntry | null {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  const entry = raw as Record<string, unknown>;
+  const level =
+    entry.level === "info" || entry.level === "success" || entry.level === "warn" || entry.level === "error"
+      ? entry.level
+      : "info";
+  const title = normalizeShortText(typeof entry.title === "string" ? entry.title : "", "", 220);
+  const detail = normalizeShortText(typeof entry.detail === "string" ? entry.detail : "", "", 2000);
+  if (!title) {
+    return null;
+  }
+  const newsIdRaw = normalizeShortText(typeof entry.newsId === "string" ? entry.newsId : "", "", 64);
+  return {
+    id: normalizeShortText(typeof entry.id === "string" ? entry.id : "", "", 120) || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    agent: normalizeAgentName(entry.agent),
+    level,
+    title,
+    detail,
+    createdAt: normalizeShortText(typeof entry.createdAt === "string" ? entry.createdAt : "", "", 120) || new Date().toISOString(),
+    newsId: newsIdRaw || null,
   };
 }
 
@@ -933,5 +997,41 @@ export async function setEditorialCommandChatState(
       create: { key: EDITORIAL_COMMAND_PENDING_PLAN_KEY, value: next.pendingPlanJson },
     }),
   ]);
+  return next;
+}
+
+export async function getAgentActivityLogs(prisma: PrismaLike): Promise<AgentActivityLogEntry[]> {
+  const delegate = siteSettingDelegate(prisma);
+  const row = await delegate.findUnique({ where: { key: AGENT_ACTIVITY_LOGS_KEY }, select: { value: true } });
+  const parsed = safeParseJson(row?.value, DEFAULT_AGENT_ACTIVITY_LOGS);
+  if (!Array.isArray(parsed)) {
+    return [];
+  }
+  return parsed
+    .map((item) => normalizeAgentActivityEntry(item))
+    .filter((item): item is AgentActivityLogEntry => Boolean(item))
+    .slice(-200);
+}
+
+export async function appendAgentActivityLog(
+  prisma: PrismaLike,
+  value: Omit<AgentActivityLogEntry, "id" | "createdAt"> & { id?: string; createdAt?: string },
+): Promise<AgentActivityLogEntry[]> {
+  const current = await getAgentActivityLogs(prisma);
+  const nextEntry = normalizeAgentActivityEntry({
+    ...value,
+    id: value.id ?? `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    createdAt: value.createdAt ?? new Date().toISOString(),
+  });
+  if (!nextEntry) {
+    return current;
+  }
+  const next = [...current, nextEntry].slice(-200);
+  const delegate = siteSettingDelegate(prisma);
+  await delegate.upsert({
+    where: { key: AGENT_ACTIVITY_LOGS_KEY },
+    update: { value: JSON.stringify(next) },
+    create: { key: AGENT_ACTIVITY_LOGS_KEY, value: JSON.stringify(next) },
+  });
   return next;
 }

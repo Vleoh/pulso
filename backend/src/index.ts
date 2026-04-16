@@ -90,8 +90,12 @@ import {
   EDITORIAL_AUTOPILOT_MODE_OPTIONS,
   getEditorialCommandChatState,
   setEditorialCommandChatState,
+  getAgentActivityLogs,
+  appendAgentActivityLog,
   type EditorialCommandChatMessage,
   type EditorialCommandLogEntry,
+  type AgentActivityName,
+  type AgentActivityLogEntry,
 } from "./siteSettings";
 import { buildNewsResearchContext, sourceFeedToText } from "./newsResearchAgent";
 import {
@@ -504,6 +508,47 @@ type ManagedImageCandidate = {
   referer?: string | null;
 };
 
+function tokenizeForAssetRanking(input: string | null | undefined): string[] {
+  const normalized = readString(input)
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, " ")
+    .replace(/[^a-z0-9]+/g, " ");
+  if (!normalized) {
+    return [];
+  }
+  const stop = new Set(["de", "la", "el", "los", "las", "del", "para", "con", "por", "que", "una", "un", "en"]);
+  return Array.from(
+    new Set(
+      normalized
+        .split(/\s+/)
+        .map((item) => item.trim())
+        .filter((item) => item.length > 2 && !stop.has(item)),
+    ),
+  ).slice(0, 18);
+}
+
+function rankImageCandidatesByStory(
+  candidates: ManagedImageCandidate[],
+  context: { title?: string | null; excerpt?: string | null },
+): ManagedImageCandidate[] {
+  const tokens = tokenizeForAssetRanking([context.title, context.excerpt].filter(Boolean).join(" "));
+  if (tokens.length === 0) {
+    return candidates;
+  }
+  const heavyNegative = ["book", "cover", "indice", "manual", "pdf", "infografia", "diagram", "chart", "logo"];
+  return [...candidates].sort((left, right) => {
+    const score = (entry: ManagedImageCandidate) => {
+      const raw = normalizeImageUrl(entry.url) ?? "";
+      const haystack = raw.toLowerCase();
+      const positive = tokens.reduce((acc, token) => (haystack.includes(token) ? acc + 3 : acc), 0);
+      const negative = heavyNegative.reduce((acc, token) => (haystack.includes(token) ? acc + 5 : acc), 0);
+      return positive - negative;
+    };
+    return score(right) - score(left);
+  });
+}
+
 async function pickReachableImage(imageUrls: string[], maxChecks = 4): Promise<string | null> {
   const unique = Array.from(new Set(imageUrls.map((item) => item.trim()).filter(Boolean)));
   const capped = unique.slice(0, Math.max(1, maxChecks));
@@ -664,11 +709,18 @@ async function createReviewNewsDraft(params: {
         aiEvaluatedAt: new Date(),
       },
     });
+    await logAgentActivity({
+      agent: "editor",
+      level: "warn",
+      title: "Nota enviada a cola de revision",
+      detail: `${params.title} · ${params.aiReason}`,
+      newsId: existingReview.id,
+    });
     return;
   }
 
   const uniqueSlug = await ensureUniqueSlug(prisma, normalized.slug);
-  await prisma.news.create({
+  const created = await prisma.news.create({
     data: {
       ...normalized,
       slug: uniqueSlug,
@@ -678,6 +730,13 @@ async function createReviewNewsDraft(params: {
       aiModel: params.aiModel ?? null,
       aiEvaluatedAt: new Date(),
     },
+  });
+  await logAgentActivity({
+    agent: "editor",
+    level: "warn",
+    title: "Nueva pieza en cola de revision",
+    detail: `${params.title} · ${params.aiReason}`,
+    newsId: created.id,
   });
 }
 
@@ -828,6 +887,9 @@ async function postProcessResearchedSuggestion(
       section: suggestion.section && isNewsSection(suggestion.section) ? suggestion.section : null,
       province: suggestion.province && isProvince(suggestion.province) ? suggestion.province : null,
       sourceName: suggestion.sourceName ?? leadSource?.sourceName ?? null,
+    },
+    traceContext: {
+      title: readString(suggestion.title) || "Agenda politica argentina",
     },
   });
   if (!managedCoverCandidate) {
@@ -1062,6 +1124,9 @@ async function createStoriesFromBatchState(formState: BatchNewsFormState): Promi
           section: isNewsSection(finalSection) ? finalSection : null,
           province: isProvince(finalProvince) ? finalProvince : null,
           sourceName: draft.sourceName ?? sourceItem?.sourceName ?? formState.defaultSourceName,
+        },
+        traceContext: {
+          title: draft.title ?? fallbackTitle,
         },
       });
       if (!managedCoverCandidate) {
@@ -1449,12 +1514,41 @@ async function pickManagedImageCandidateWithCreativeFallback(params: {
     province: Province | null;
     sourceName: string | null;
   };
+  traceContext?: {
+    newsId?: string | null;
+    title?: string | null;
+  };
 }): Promise<{ rawUrl: string; managedUrl: string } | null> {
-  const fromSource = await pickManagedImageCandidate(params.candidates, params.maxChecks ?? 6);
+  const rankedCandidates = rankImageCandidatesByStory(params.candidates, {
+    title: params.traceContext?.title ?? params.creativeFallback?.title ?? null,
+    excerpt: params.creativeFallback?.excerpt ?? null,
+  });
+  const fromSource = await pickManagedImageCandidate(rankedCandidates, params.maxChecks ?? 6);
   if (fromSource) {
+    const host = (() => {
+      try {
+        return new URL(fromSource.rawUrl).hostname;
+      } catch {
+        return "fuente";
+      }
+    })();
+    await logAgentActivity({
+      agent: "photographer",
+      level: "success",
+      title: "Portada seleccionada desde fuente",
+      detail: `${params.traceContext?.title ?? params.creativeFallback?.title ?? "Sin titulo"} · host ${host}`,
+      newsId: params.traceContext?.newsId ?? null,
+    });
     return fromSource;
   }
   if (!params.creativeFallback) {
+    await logAgentActivity({
+      agent: "photographer",
+      level: "warn",
+      title: "Sin portada valida",
+      detail: `${params.traceContext?.title ?? "Sin titulo"} · No hubo candidatas y no habia fallback creativo.`,
+      newsId: params.traceContext?.newsId ?? null,
+    });
     return null;
   }
   const creativeCandidates = await resolveCreativeAssetCandidates({
@@ -1465,12 +1559,45 @@ async function pickManagedImageCandidateWithCreativeFallback(params: {
     sourceName: params.creativeFallback.sourceName,
   });
   if (creativeCandidates.length === 0) {
+    await logAgentActivity({
+      agent: "photographer",
+      level: "warn",
+      title: "Fallback creativo sin resultados",
+      detail: `${params.creativeFallback.title} · No se encontraron activos coherentes en la busqueda creativa.`,
+      newsId: params.traceContext?.newsId ?? null,
+    });
     return null;
   }
-  return pickManagedImageCandidate(
+  const rankedCreative = rankImageCandidatesByStory(
     creativeCandidates.map((url) => ({ url, referer: null })),
-    8,
+    { title: params.creativeFallback.title, excerpt: params.creativeFallback.excerpt ?? null },
   );
+  const fromCreative = await pickManagedImageCandidate(rankedCreative, 8);
+  if (fromCreative) {
+    const host = (() => {
+      try {
+        return new URL(fromCreative.rawUrl).hostname;
+      } catch {
+        return "repositorio";
+      }
+    })();
+    await logAgentActivity({
+      agent: "photographer",
+      level: "info",
+      title: "Portada seleccionada via fallback creativo",
+      detail: `${params.creativeFallback.title} · host ${host}`,
+      newsId: params.traceContext?.newsId ?? null,
+    });
+  } else {
+    await logAgentActivity({
+      agent: "photographer",
+      level: "error",
+      title: "Portada rechazada por calidad",
+      detail: `${params.creativeFallback.title} · No paso validacion tecnica (peso/dimensiones).`,
+      newsId: params.traceContext?.newsId ?? null,
+    });
+  }
+  return fromCreative;
 }
 
 async function rewriteExistingNewsByCommand(operation: Extract<EditorialCommandOperation, { kind: "REWRITE_EXISTING" }>, campaignLine: string): Promise<{
@@ -1573,6 +1700,10 @@ async function rewriteExistingNewsByCommand(operation: Extract<EditorialCommandO
               return candidate && isProvince(candidate) ? candidate : null;
             })(),
           sourceName: processed.sourceName ?? row.sourceName ?? null,
+        },
+        traceContext: {
+          title: processed.title ?? row.title,
+          newsId: row.id,
         },
       });
       if (operation.requireImageUrl && !managedCoverCandidate) {
@@ -1766,6 +1897,24 @@ async function executeEditorialCommandPlan(plan: EditorialCommandPlan, commandSt
       const result = await createStoriesFromBatchState(state);
       const errorHint = result.errors.length > 0 ? ` &middot; alertas: ${result.errors.slice(0, 2).join(" | ")}` : "";
       resultLines.push(`Crear: ${result.createdCount}/${result.totalRequested} notas (${result.model})${errorHint}`);
+      await logAgentActivity({
+        agent: "investigator",
+        level: "info",
+        title: "Investigacion de agenda ejecutada",
+        detail: `Operacion CREATE_STORIES · objetivo ${result.totalRequested} · contexto ${operation.useResearchAgent ? "periodista" : "directo"}.`,
+      });
+      await logAgentActivity({
+        agent: "writer",
+        level: result.createdCount > 0 ? "success" : "warn",
+        title: "Borradores generados",
+        detail: `Modelo ${result.model} · creadas ${result.createdCount}/${result.totalRequested}${result.errors.length ? ` · alertas: ${result.errors.slice(0, 2).join(" | ")}` : ""}.`,
+      });
+      await logAgentActivity({
+        agent: "publisher",
+        level: "info",
+        title: "Resultado de publicacion web",
+        detail: `Estado objetivo ${state.publishStatus} · notas creadas ${result.createdCount}.`,
+      });
       continue;
     }
 
@@ -1787,6 +1936,18 @@ async function executeEditorialCommandPlan(plan: EditorialCommandPlan, commandSt
         const errorHint = result.errors.length > 0 ? ` &middot; alertas: ${result.errors.slice(0, 2).join(" | ")}` : "";
         const reviewHint = result.reviewCount > 0 ? `, ${result.reviewCount} en revision` : "";
         resultLines.push(`Internalizar: ${result.createdCount} creadas, ${result.updatedCount} actualizadas, ${result.deletedCount} eliminadas${reviewHint}${errorHint}`);
+        await logAgentActivity({
+          agent: "investigator",
+          level: "info",
+          title: "Internalizacion de externas",
+          detail: `Candidatas procesadas · creadas ${result.createdCount}, actualizadas ${result.updatedCount}, eliminadas ${result.deletedCount}.`,
+        });
+        await logAgentActivity({
+          agent: "editor",
+          level: result.reviewCount > 0 ? "warn" : "success",
+          title: "Resultado compliance",
+          detail: result.reviewCount > 0 ? `${result.reviewCount} pieza(s) quedaron en revision.` : "Sin bloqueos editoriales.",
+        });
       } catch (error) {
         const message = error instanceof Error ? error.message : "No se pudo internalizar la agenda externa.";
         const canFallback = message.includes("No se encontraron fuentes externas candidatas") || message.includes("No se pudo internalizar ninguna fuente externa");
@@ -1814,6 +1975,12 @@ async function executeEditorialCommandPlan(plan: EditorialCommandPlan, commandSt
         const fallback = await createStoriesFromBatchState(fallbackState);
         const errorHint = fallback.errors.length > 0 ? ` &middot; alertas: ${fallback.errors.slice(0, 2).join(" | ")}` : "";
         resultLines.push(`Internalizar: sin candidatas; fallback crear ${fallback.createdCount}/${fallback.totalRequested} notas (${fallback.model})${errorHint}`);
+        await logAgentActivity({
+          agent: "investigator",
+          level: "warn",
+          title: "Sin candidatas externas",
+          detail: `Fallback a creacion IA · ${fallback.createdCount}/${fallback.totalRequested} notas (${fallback.model}).`,
+        });
       }
       continue;
     }
@@ -1822,18 +1989,36 @@ async function executeEditorialCommandPlan(plan: EditorialCommandPlan, commandSt
       const result = await rewriteExistingNewsByCommand(operation, commandState.campaignLine);
       const errorHint = result.errors.length > 0 ? ` &middot; alertas: ${result.errors.slice(0, 2).join(" | ")}` : "";
       resultLines.push(`Reescritura: ${result.updatedCount} notas actualizadas${errorHint}`);
+      await logAgentActivity({
+        agent: "writer",
+        level: result.updatedCount > 0 ? "success" : "warn",
+        title: "Reescritura de piezas existentes",
+        detail: `${result.updatedCount} notas actualizadas${result.errors.length ? ` · alertas: ${result.errors.slice(0, 2).join(" | ")}` : ""}.`,
+      });
       continue;
     }
 
     if (operation.kind === "UPDATE_METADATA") {
       const result = await updateNewsMetadataByCommand(operation);
       resultLines.push(`Metadatos: ${result.updatedCount} notas ajustadas`);
+      await logAgentActivity({
+        agent: "editor",
+        level: "info",
+        title: "Metadatos editoriales ajustados",
+        detail: `${result.updatedCount} notas afectadas por comando.`,
+      });
       continue;
     }
 
     if (operation.kind === "DELETE_NEWS") {
       const result = await deleteNewsByCommand(operation);
       resultLines.push(`Borrado: ${result.deletedCount} notas eliminadas`);
+      await logAgentActivity({
+        agent: "editor",
+        level: "warn",
+        title: "Borrado editorial ejecutado",
+        detail: `${result.deletedCount} notas eliminadas por comando confirmado.`,
+      });
     }
   }
 
@@ -1889,9 +2074,23 @@ async function maybePublishLatestNewsToInstagram(params: {
         frontendBaseUrl: normalizedFrontendBaseUrl(),
       });
       published.push(result.permalink ? `${target.slug}: ${result.permalink}` : `${target.slug}: ${result.mediaId}`);
+      await logAgentActivity({
+        agent: "social",
+        level: "success",
+        title: "Post de Instagram publicado",
+        detail: `${target.title} · ${result.permalink ?? result.mediaId}`,
+        newsId: target.id,
+      });
     } catch (error) {
       const detail = error instanceof Error ? error.message : "fallo desconocido";
       failed.push(`${target.slug}: ${detail}`);
+      await logAgentActivity({
+        agent: "social",
+        level: "error",
+        title: "Fallo publicacion Instagram",
+        detail: `${target.title} · ${detail}`,
+        newsId: target.id,
+      });
     }
   }
 
@@ -1958,6 +2157,12 @@ async function runEditorialAutopilotCycle(triggerLabel: string): Promise<Autopil
         remainingToday: 0,
       }),
     });
+    await logAgentActivity({
+      agent: "autopilot",
+      level: "info",
+      title: "Ciclo omitido por cuota diaria",
+      detail: summary,
+    });
     return {
       executedAt: new Date().toISOString(),
       planSummary: summary,
@@ -1967,6 +2172,12 @@ async function runEditorialAutopilotCycle(triggerLabel: string): Promise<Autopil
   }
 
   const cycleStartedAt = new Date();
+  await logAgentActivity({
+    agent: "autopilot",
+    level: "info",
+    title: "Ciclo IA iniciado",
+    detail: `${triggerLabel} · ${currentBuenosAiresClock()} · ventana ${windowStart}:00-${windowEnd}:59`,
+  });
   const context = await buildAiNewsContext(prisma);
   const basePlan = applyAutopilotPolicyToPlan(
     await planEditorialCommandWithAi(
@@ -2047,6 +2258,12 @@ async function runEditorialAutopilotCycle(triggerLabel: string): Promise<Autopil
       remainingToday: remainingAfterCycle,
     }),
   });
+  await logAgentActivity({
+    agent: "autopilot",
+    level: "success",
+    title: "Ciclo IA completado",
+    detail: [result.planSummary, result.executionSummary, result.socialSummary].filter(Boolean).join(" | "),
+  });
 
   return result;
 }
@@ -2096,8 +2313,20 @@ async function runEditorialAutopilotHeartbeat(triggerLabel: string): Promise<voi
       message.includes("esta apagado");
     if (expectedSkip) {
       console.log(`[autopilot:${triggerLabel}] ${message}`);
+      await logAgentActivity({
+        agent: "autopilot",
+        level: "info",
+        title: "Autopiloto en espera",
+        detail: message,
+      });
     } else {
       console.error(`[autopilot:${triggerLabel}] ${message}`);
+      await logAgentActivity({
+        agent: "autopilot",
+        level: "error",
+        title: "Error de ciclo autopiloto",
+        detail: message,
+      });
     }
   } finally {
     autopilotHeartbeatRunning = false;
@@ -2758,6 +2987,37 @@ function renderDashboardActionIcon(name: "create" | "internalize" | "cleanup" | 
 
 function createEditorialChatId(prefix = "chat"): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function currentBuenosAiresClock(): string {
+  return new Date().toLocaleString("es-AR", {
+    hour12: false,
+    timeZone: "America/Argentina/Buenos_Aires",
+    dateStyle: "short",
+    timeStyle: "short",
+  });
+}
+
+async function logAgentActivity(params: {
+  agent: AgentActivityName;
+  title: string;
+  detail: string;
+  level?: "info" | "success" | "warn" | "error";
+  newsId?: string | null;
+}): Promise<void> {
+  try {
+    await appendAgentActivityLog(prisma, {
+      agent: params.agent,
+      title: params.title,
+      detail: params.detail,
+      level: params.level ?? "info",
+      newsId: params.newsId ?? null,
+      createdAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "error desconocido";
+    console.error(`[agent-log] ${params.agent}: ${message}`);
+  }
 }
 
 function formatEditorialChatMemory(history: EditorialCommandChatMessage[], logs: EditorialCommandLogEntry[]): string {
@@ -4872,6 +5132,7 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
       deployStatus,
       autopilotSettings,
       instagramSettings,
+      agentActivity,
     ] = await Promise.all([
       prisma.news.findMany({
         orderBy: [{ updatedAt: "desc" }],
@@ -4884,6 +5145,7 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
       buildDeployStatusPayload(),
       getEditorialAutopilotSettings(prisma),
       getInstagramPublishingSettings(prisma),
+      getAgentActivityLogs(prisma),
     ]);
     let instagramConnectionError: string | null = null;
     let instagramConnection: Awaited<ReturnType<typeof getInstagramConnectionSummary>> = {
@@ -4906,7 +5168,8 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
     const published = news.filter((item) => item.status === NewsStatus.PUBLISHED).length;
     const drafts = news.filter((item) => item.status === NewsStatus.DRAFT).length;
     const aiReject = news.filter((item) => item.aiDecision === "REJECT").length;
-    const aiReview = news.filter((item) => item.aiDecision === "REVIEW").length;
+    const reviewQueueItems = news.filter((item) => item.aiDecision === "REVIEW" || item.status === NewsStatus.DRAFT);
+    const aiReview = reviewQueueItems.length;
     const pollPublished = pollRows.filter((item) => item.status === PollStatus.PUBLISHED).length;
     const pollVotes = pollRows.reduce((acc, item) => acc + item.totalVotes, 0);
     const externalLinked = news.filter((item) => normalizeExternalKey(item.sourceUrl).length > 0).length;
@@ -4961,14 +5224,47 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
         </div>`;
       })
       .join("");
-    const reviewRows = news
-      .filter((item) => item.aiDecision === "REVIEW")
+    const reviewRows = reviewQueueItems
       .slice(0, 6)
       .map((item) => {
         const when = formatBuenosAiresDateTime(item.updatedAt);
         return `<div class="bo-soft-line">
           <strong>${currentErrorSafe(item.title)}</strong>
-          <span>${currentErrorSafe(item.aiReason ?? "Pendiente de revision editorial")} &middot; ${when}</span>
+          <span>${currentErrorSafe(item.aiReason ?? "Pendiente de revision editorial")} &middot; estado ${item.status} &middot; ${when}</span>
+        </div>`;
+      })
+      .join("");
+    const agentLabels: Record<AgentActivityName, string> = {
+      investigator: "Investigador",
+      writer: "Redactor",
+      photographer: "Fotografo",
+      editor: "Editor",
+      publisher: "Publicador web",
+      social: "CM Social",
+      autopilot: "Autopiloto",
+    };
+    const requestedAgentRaw = readString(request.query.agent).toLowerCase();
+    const requestedAgent: AgentActivityName =
+      requestedAgentRaw === "investigator" ||
+      requestedAgentRaw === "writer" ||
+      requestedAgentRaw === "photographer" ||
+      requestedAgentRaw === "editor" ||
+      requestedAgentRaw === "publisher" ||
+      requestedAgentRaw === "social" ||
+      requestedAgentRaw === "autopilot"
+        ? requestedAgentRaw
+        : "investigator";
+    const activityByAgent = agentActivity.filter((entry) => entry.agent === requestedAgent).slice(-10).reverse();
+    const activityRows = activityByAgent
+      .map((entry) => {
+        const levelClass =
+          entry.level === "error" ? "warning" : entry.level === "warn" ? "warning" : entry.level === "success" ? "success" : "";
+        return `<div class="log-entry ${levelClass}">
+          <div class="log-icon ${levelClass}">${entry.level === "success" ? "✓" : entry.level === "error" ? "!" : "•"}</div>
+          <div class="log-body">
+            <strong>${escapeHtml(entry.title)}</strong>
+            <span>${escapeHtml(entry.detail)} · ${escapeHtml(formatBuenosAiresDateTime(entry.createdAt))}</span>
+          </div>
         </div>`;
       })
       .join("");
@@ -5035,7 +5331,7 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
           </div>
         </div>
         <div class="agent-pipeline">
-          <div class="agent-card ${aiResearchSettings.enabled ? "is-ready" : "is-standby"}">
+          <a class="agent-card ${requestedAgent === "investigator" ? "is-active" : aiResearchSettings.enabled ? "is-ready" : "is-standby"}" href="/backoffice?agent=investigator#agent-activity-panel" style="text-decoration:none;">
             <div class="agent-card-top">
               <div class="agent-icon"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"></circle><path d="m20 20-3.5-3.5"></path></svg></div>
               <div class="agent-status-dot"></div>
@@ -5043,8 +5339,8 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
             <div class="agent-name">Investigador</div>
             <div class="agent-role">Raspa fuentes, analiza agenda, rankea por relevancia editorial</div>
             <div class="agent-stat"><strong>${externalLinked}</strong> fuentes activas</div>
-          </div>
-          <div class="agent-card ${aiResearchSettings.enabled ? "is-active" : "is-standby"}">
+          </a>
+          <a class="agent-card ${requestedAgent === "writer" ? "is-active" : aiResearchSettings.enabled ? "is-ready" : "is-standby"}" href="/backoffice?agent=writer#agent-activity-panel" style="text-decoration:none;">
             <div class="agent-card-top">
               <div class="agent-icon"><svg viewBox="0 0 24 24"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z"></path></svg></div>
               <div class="agent-status-dot"></div>
@@ -5052,8 +5348,8 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
             <div class="agent-name">Redactor</div>
             <div class="agent-role">Reescribe con lineamiento Pulso Pais, genera titulos y copete</div>
             <div class="agent-stat"><strong>${drafts}</strong> en borrador</div>
-          </div>
-          <div class="agent-card is-ready">
+          </a>
+          <a class="agent-card ${requestedAgent === "photographer" ? "is-active" : "is-ready"}" href="/backoffice?agent=photographer#agent-activity-panel" style="text-decoration:none;">
             <div class="agent-card-top">
               <div class="agent-icon"><svg viewBox="0 0 24 24"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"></path><circle cx="12" cy="13" r="3"></circle></svg></div>
               <div class="agent-status-dot"></div>
@@ -5061,8 +5357,8 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
             <div class="agent-name">Fotografo</div>
             <div class="agent-role">Selecciona y valida portada editorial, cropea y optimiza imagen</div>
             <div class="agent-stat"><strong>${published}</strong> con foto aprobada</div>
-          </div>
-          <div class="agent-card ${aiReview > 0 ? "is-warning" : "is-ready"}">
+          </a>
+          <a class="agent-card ${requestedAgent === "editor" ? "is-active" : aiReview > 0 ? "is-warning" : "is-ready"}" href="/backoffice?agent=editor#agent-activity-panel" style="text-decoration:none;">
             <div class="agent-card-top">
               <div class="agent-icon" style="background:#2a2520;"><svg viewBox="0 0 24 24"><path d="M9 12l2 2 4-4"></path><path d="M12 22C6.477 22 2 17.523 2 12S6.477 2 12 2s10 4.477 10 10-4.477 10-10 10z"></path></svg></div>
               <div class="agent-status-dot ${aiReview > 0 ? "is-warning" : ""}"></div>
@@ -5070,8 +5366,8 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
             <div class="agent-name">Editor</div>
             <div class="agent-role">Compliance editorial, revision de calidad, aprobacion o rechazo</div>
             <div class="agent-stat"><strong>${aiReview}</strong> en cola revision</div>
-          </div>
-          <div class="agent-card is-ready">
+          </a>
+          <a class="agent-card ${requestedAgent === "publisher" ? "is-active" : "is-ready"}" href="/backoffice?agent=publisher#agent-activity-panel" style="text-decoration:none;">
             <div class="agent-card-top">
               <div class="agent-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg></div>
               <div class="agent-status-dot"></div>
@@ -5079,8 +5375,8 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
             <div class="agent-name">Publicador web</div>
             <div class="agent-role">Promueve PUBLISHED, gestiona slug y SEO, actualiza portada</div>
             <div class="agent-stat"><strong>${published}</strong> publicadas hoy</div>
-          </div>
-          <div class="agent-card ${autopilotSettings.socialEnabled && instagramConfiguredCount > 0 ? "is-active" : "is-standby"}">
+          </a>
+          <a class="agent-card ${requestedAgent === "social" ? "is-active" : autopilotSettings.socialEnabled && instagramConfiguredCount > 0 ? "is-ready" : "is-standby"}" href="/backoffice?agent=social#agent-activity-panel" style="text-decoration:none;">
             <div class="agent-card-top">
               <div class="agent-icon" style="background:linear-gradient(135deg,#833ab4,#fd1d1d,#fcb045);"><svg viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"></path><line x1="17.5" y1="6.5" x2="17.51" y2="6.5"></line></svg></div>
               <div class="agent-status-dot"></div>
@@ -5088,7 +5384,7 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
             <div class="agent-name">CM Social</div>
                     <div class="agent-role">Adapta notas al tono de Instagram, decide queue social y publica piezas nativas</div>
             <div class="agent-stat"><strong>${instagramConfiguredCount}</strong> cuenta${instagramConfiguredCount !== 1 ? "s" : ""} IG</div>
-          </div>
+          </a>
         </div>
       </section>
 
@@ -5196,6 +5492,19 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
         <!-- Config autopiloto + Cola revision -->
         <div style="display:grid;gap:18px;align-content:start;">
 
+          <div id="agent-activity-panel" class="card" style="padding:20px;">
+            <div class="section-header">
+              <h3>Trazabilidad del agente: ${escapeHtml(agentLabels[requestedAgent])}</h3>
+              <div class="section-header-actions">
+                <a class="button" href="/backoffice?agent=${escapeHtml(requestedAgent)}#agent-activity-panel" style="font-size:11px;padding:7px 12px;min-height:auto;">Actualizar</a>
+              </div>
+            </div>
+            <p class="muted" style="margin-bottom:12px;">Ultimos movimientos para auditar decisiones del pipeline (fuentes, imagen, validacion y publicacion).</p>
+            <div class="log-feed">
+              ${activityRows || `<div class="log-entry"><div class="log-icon">•</div><div class="log-body"><strong>Sin movimientos recientes</strong><span>Este agente aun no registro eventos en la bitacora.</span></div></div>`}
+            </div>
+          </div>
+
           <!-- Autopilot Config -->
           <div id="autopilot-config" class="autopilot-card">
             <div class="autopilot-header">
@@ -5279,7 +5588,7 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
               <h3>Cola de revision <span style="background:${aiReview > 0 ? "#fff4d0" : "#f0f0f0"};color:${aiReview > 0 ? "#825f00" : "#888"};border-radius:999px;padding:2px 8px;font-size:11px;font-weight:700;">${aiReview}</span></h3>
               <a class="button" href="/backoffice/news/review" style="font-size:11px;padding:7px 12px;min-height:auto;">Ver todo</a>
             </div>
-            <p class="muted" style="margin-bottom:12px;">Piezas bloqueadas por el agente editor o compliance que requieren intervencion humana.</p>
+            <p class="muted" style="margin-bottom:12px;">Incluye notas con IA REVIEW y borradores en DRAFT para seguimiento editorial manual.</p>
             <div class="log-feed">
               ${reviewRows ? reviewRows.split('<div class="bo-soft-line">').slice(1).slice(0,4).map(row => {
                 const titleMatch = row.match(/<strong>(.*?)<\/strong>/);
@@ -5733,6 +6042,9 @@ app.post("/backoffice/news/batch", boGuard, async (request, response, next) => {
             section: finalSection,
             province: isProvince(finalProvince) ? finalProvince : null,
             sourceName: draft.sourceName ?? sourceItem?.sourceName ?? defaultSourceName,
+          },
+          traceContext: {
+            title: draft.title ?? fallbackTitle,
           },
         });
         if (!managedCoverCandidate) {
@@ -6436,7 +6748,9 @@ app.get("/backoffice/news/new", boGuard, async (request, response, next) => {
 app.get("/backoffice/news/review", boGuard, async (request, response, next) => {
   try {
     const rows = await prisma.news.findMany({
-      where: { aiDecision: "REVIEW" },
+      where: {
+        OR: [{ aiDecision: "REVIEW" }, { status: NewsStatus.DRAFT }],
+      },
       orderBy: [{ updatedAt: "desc" }],
       take: 300,
     });
@@ -6445,11 +6759,11 @@ app.get("/backoffice/news/review", boGuard, async (request, response, next) => {
         <div class="split-title">
           <div>
             <div class="bo-kicker">Revision editorial</div>
-            <h3 style="margin-top:10px;">Piezas en review</h3>
+            <h3 style="margin-top:10px;">Cola editorial pendiente</h3>
           </div>
           <a class="button" href="/backoffice/news/new?template=internalize">Volver a consola IA</a>
         </div>
-        <p class="muted">Esta cola concentra notas que el agente fotografo, compliance o la validacion editorial dejaron pendientes. Editalas, completales portada y luego publicalas.</p>
+        <p class="muted">Esta cola concentra notas con decision IA REVIEW y tambien borradores DRAFT que requieren intervencion humana. Editalas, completales portada y luego publicalas.</p>
       </div>
       ${renderNewsTable(rows, { frontendBaseUrl: normalizedFrontendBaseUrl() })}
     </div>`;
