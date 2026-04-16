@@ -13,12 +13,29 @@ import {
 import { buildManagedImageUrl } from "./mediaProxy";
 import type { NormalizedNewsInput } from "./types";
 
+function smartTrimExcerpt(raw: string, maxLength = 220): string {
+  const text = raw.replace(/\s+/g, " ").trim();
+  if (text.length <= maxLength) {
+    return text;
+  }
+
+  const hard = text.slice(0, maxLength);
+  const punctuationCut = Math.max(hard.lastIndexOf("."), hard.lastIndexOf(","), hard.lastIndexOf(";"), hard.lastIndexOf(":"));
+  const wordCut = hard.lastIndexOf(" ");
+  const cutIndex = Math.max(punctuationCut, wordCut);
+
+  if (cutIndex >= Math.floor(maxLength * 0.65)) {
+    return `${hard.slice(0, cutIndex).trimEnd()}...`;
+  }
+  return `${hard.trimEnd()}...`;
+}
+
 function trimExcerpt(rawExcerpt: string | null, body: string | null): string | null {
   if (rawExcerpt && rawExcerpt.length > 0) {
-    return rawExcerpt.slice(0, 220);
+    return smartTrimExcerpt(rawExcerpt, 220);
   }
   if (body && body.length > 0) {
-    return body.slice(0, 220);
+    return smartTrimExcerpt(body, 220);
   }
   return null;
 }
@@ -114,3 +131,4 @@ export async function ensureUniqueSlug(prisma: PrismaClient, baseSlug: string, e
     candidate = `${root}-${counter}`;
   }
 }
+
