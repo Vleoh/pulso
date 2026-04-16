@@ -4719,6 +4719,13 @@ app.post("/api/admin/ai/assist", apiGuard, async (request, response, next) => {
     const assistInput = buildEditorialAssistInput(request.body as Record<string, unknown>);
     const context = await buildAiNewsContext(prisma);
     const suggestion = await generateDraftWithAi(assistInput, context.contextText);
+    if (isContingencyModel(suggestion.model)) {
+      response.status(503).json({
+        error:
+          "IA no disponible (Gemini/Ollama). Se bloqueo el borrador de contingencia para evitar notas basura. Reintenta en 30-60s o usa 'Investigar y generar nota propia'.",
+      });
+      return;
+    }
     response.json({ suggestion, context: context.meta });
   } catch (error) {
     next(error);
@@ -4970,6 +4977,19 @@ app.post("/backoffice/ai/assist", boGuard, async (request, response, next) => {
     const assistInput = buildEditorialAssistInput(request.body as Record<string, unknown>);
     const context = await buildAiNewsContext(prisma);
     const suggestion = await generateDraftWithAi(assistInput, context.contextText);
+    if (isContingencyModel(suggestion.model)) {
+      await logAgentActivity({
+        agent: "writer",
+        level: "warn",
+        title: "Borrador de contingencia bloqueado",
+        detail: "Se bloqueo autocompletado de fallback por indisponibilidad temporal de proveedores IA.",
+      });
+      response.status(503).json({
+        error:
+          "IA no disponible ahora. Se bloqueo el borrador de contingencia para no autocompletar texto genérico. Reintenta en 30-60s o usa 'Investigar y generar nota propia'.",
+      });
+      return;
+    }
     const capturedImage = await ensureManagedImageCaptured(suggestion.imageUrl);
     response.json({
       suggestion: {
@@ -5037,6 +5057,13 @@ app.post("/backoffice/ai/ask", boGuard, async (request, response, next) => {
     const assistInput = buildEditorialAssistInput(request.body as Record<string, unknown>);
     const context = await buildAiNewsContext(prisma);
     const answer = await askEditorialWithAi(assistInput, context.contextText);
+    if (answer?.draft && isContingencyModel(answer.draft.model)) {
+      response.status(503).json({
+        error:
+          "IA no disponible ahora. La respuesta venia con draft de contingencia y fue bloqueada para evitar contenido de baja calidad.",
+      });
+      return;
+    }
     const capturedDraftImage = answer?.draft ? await ensureManagedImageCaptured(answer.draft.imageUrl) : null;
     response.json({
       answer: answer?.draft
