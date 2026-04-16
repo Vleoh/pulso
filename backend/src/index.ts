@@ -6,7 +6,17 @@ import cors from "cors";
 import express, { type NextFunction, type Request, type Response } from "express";
 import helmet from "helmet";
 import morgan from "morgan";
-import { type News, type Poll, type Prisma, NewsStatus, PollStatus, UserEmailCodePurpose, UserPlan } from "@prisma/client";
+import {
+  type News,
+  type Poll,
+  type Prisma,
+  type NewsSection,
+  type Province,
+  NewsStatus,
+  PollStatus,
+  UserEmailCodePurpose,
+  UserPlan,
+} from "@prisma/client";
 import { adminApiGuard, backofficeGuard, extractAdminToken, signAdminToken, verifyAdminToken } from "./auth";
 import {
   backofficeShell,
@@ -26,6 +36,7 @@ import { ensureUniqueSlug, normalizeNewsInput } from "./newsInput";
 import { dedupeByKey, resolveManagedFeedImage, toFeedItem } from "./feed";
 import { getExternalNews } from "./externalNews";
 import { getMarketData, getWeatherData } from "./signalData";
+import { resolveCreativeAssetCandidates } from "./assetCreative";
 import {
   buildManagedImageUrl,
   buildManagedVideoUrl,
@@ -808,10 +819,17 @@ async function postProcessResearchedSuggestion(
     .map((url) => applyResearchImageTransform(url, settings))
     .filter((url): url is string => Boolean(url));
   const leadReferer = leadSource?.sourceUrl ?? sources[0]?.sourceUrl ?? null;
-  const managedCoverCandidate = await pickManagedImageCandidate(
-    coverImageCandidates.map((url) => ({ url, referer: leadReferer })),
-    8,
-  );
+  const managedCoverCandidate = await pickManagedImageCandidateWithCreativeFallback({
+    candidates: coverImageCandidates.map((url) => ({ url, referer: leadReferer })),
+    maxChecks: 8,
+    creativeFallback: {
+      title: readString(suggestion.title) || "Agenda politica argentina",
+      excerpt: suggestion.excerpt ?? null,
+      section: suggestion.section && isNewsSection(suggestion.section) ? suggestion.section : null,
+      province: suggestion.province && isProvince(suggestion.province) ? suggestion.province : null,
+      sourceName: suggestion.sourceName ?? leadSource?.sourceName ?? null,
+    },
+  });
   if (!managedCoverCandidate) {
     throw new Error("El agente fotografo no encontro una portada editorial valida en la fuente. La pieza queda en revision.");
   }
@@ -874,8 +892,8 @@ async function postProcessResearchedSuggestion(
     body: finalBody,
     sourceName: finalSourceName,
     sourceUrl: settings.internalizeSourceLinks
-      ? null
-      : normalizeHttpUrl(suggestion.sourceUrl) || normalizeHttpUrl(leadSource?.sourceUrl) || normalizeHttpUrl(sources[0]?.sourceUrl) || null,
+      ? ""
+      : normalizeHttpUrl(suggestion.sourceUrl) || normalizeHttpUrl(leadSource?.sourceUrl) || normalizeHttpUrl(sources[0]?.sourceUrl) || "",
     notes: notes.slice(0, 8),
   };
 }
@@ -1035,10 +1053,17 @@ async function createStoriesFromBatchState(formState: BatchNewsFormState): Promi
         .map((url) => applyResearchImageTransform(url, aiResearchSettings))
         .filter((url): url is string => Boolean(url));
       const imageReferer = sourceItem?.sourceUrl ?? null;
-      const managedCoverCandidate = await pickManagedImageCandidate(
-        baseImageCandidates.map((url) => ({ url, referer: imageReferer })),
-        5,
-      );
+      const managedCoverCandidate = await pickManagedImageCandidateWithCreativeFallback({
+        candidates: baseImageCandidates.map((url) => ({ url, referer: imageReferer })),
+        maxChecks: 5,
+        creativeFallback: {
+          title: draft.title ?? fallbackTitle,
+          excerpt: draft.excerpt ?? fallbackExcerpt,
+          section: isNewsSection(finalSection) ? finalSection : null,
+          province: isProvince(finalProvince) ? finalProvince : null,
+          sourceName: draft.sourceName ?? sourceItem?.sourceName ?? formState.defaultSourceName,
+        },
+      });
       if (!managedCoverCandidate) {
         throw new Error("El agente fotografo no encontro una portada editorial valida para este item.");
       }
@@ -1414,6 +1439,40 @@ async function internalizeExternalNewsFromState(rewriteState: ExternalRewriteFor
   };
 }
 
+async function pickManagedImageCandidateWithCreativeFallback(params: {
+  candidates: ManagedImageCandidate[];
+  maxChecks?: number;
+  creativeFallback?: {
+    title: string;
+    excerpt: string | null;
+    section: NewsSection | null;
+    province: Province | null;
+    sourceName: string | null;
+  };
+}): Promise<{ rawUrl: string; managedUrl: string } | null> {
+  const fromSource = await pickManagedImageCandidate(params.candidates, params.maxChecks ?? 6);
+  if (fromSource) {
+    return fromSource;
+  }
+  if (!params.creativeFallback) {
+    return null;
+  }
+  const creativeCandidates = await resolveCreativeAssetCandidates({
+    title: params.creativeFallback.title,
+    excerpt: params.creativeFallback.excerpt,
+    section: params.creativeFallback.section,
+    province: params.creativeFallback.province,
+    sourceName: params.creativeFallback.sourceName,
+  });
+  if (creativeCandidates.length === 0) {
+    return null;
+  }
+  return pickManagedImageCandidate(
+    creativeCandidates.map((url) => ({ url, referer: null })),
+    8,
+  );
+}
+
 async function rewriteExistingNewsByCommand(operation: Extract<EditorialCommandOperation, { kind: "REWRITE_EXISTING" }>, campaignLine: string): Promise<{
   updatedCount: number;
   errors: string[];
@@ -1494,10 +1553,28 @@ async function rewriteExistingNewsByCommand(operation: Extract<EditorialCommandO
         4,
       );
       const coverReferer = researchLead?.sourceUrl ?? row.sourceUrl ?? null;
-      const managedCoverCandidate = await pickManagedImageCandidate(
-        baseCoverCandidates.map((url) => ({ url, referer: coverReferer })),
-        5,
-      );
+      const managedCoverCandidate = await pickManagedImageCandidateWithCreativeFallback({
+        candidates: baseCoverCandidates.map((url) => ({ url, referer: coverReferer })),
+        maxChecks: 5,
+        creativeFallback: {
+          title: processed.title ?? row.title,
+          excerpt: processed.excerpt ?? row.excerpt ?? null,
+          section: (() => {
+            const candidate =
+              (processed.section && isNewsSection(processed.section) ? processed.section : operation.sectionHint) ?? row.section;
+            return candidate && isNewsSection(candidate) ? candidate : null;
+          })(),
+          province:
+            (() => {
+              const candidate =
+                (processed.province && isProvince(processed.province) ? processed.province : operation.provinceHint) ??
+                row.province ??
+                null;
+              return candidate && isProvince(candidate) ? candidate : null;
+            })(),
+          sourceName: processed.sourceName ?? row.sourceName ?? null,
+        },
+      });
       if (operation.requireImageUrl && !managedCoverCandidate) {
         throw new Error("No se pudo asegurar una portada valida para la reescritura.");
       }
@@ -5647,9 +5724,21 @@ app.post("/backoffice/news/batch", boGuard, async (request, response, next) => {
         const baseImageCandidates = baseImageCandidatesRaw
           .map((url) => applyResearchImageTransform(url, aiResearchSettings))
           .filter((url): url is string => Boolean(url));
-        const reachableCover = await pickReachableImage(baseImageCandidates, 3);
-        const fallbackCover = applyResearchImageTransform(fallbackBatchImageByIndex(index), aiResearchSettings);
-        const finalImage = reachableCover ?? (fallbackCover && (await probeImageUrl(fallbackCover)) ? fallbackCover : "");
+        const managedCoverCandidate = await pickManagedImageCandidateWithCreativeFallback({
+          candidates: baseImageCandidates.map((url) => ({ url, referer: sourceItem?.sourceUrl ?? null })),
+          maxChecks: 5,
+          creativeFallback: {
+            title: draft.title ?? fallbackTitle,
+            excerpt: draft.excerpt ?? fallbackExcerpt,
+            section: finalSection,
+            province: isProvince(finalProvince) ? finalProvince : null,
+            sourceName: draft.sourceName ?? sourceItem?.sourceName ?? defaultSourceName,
+          },
+        });
+        if (!managedCoverCandidate) {
+          throw new Error("El agente fotografo no pudo asegurar una portada editorial para el item.");
+        }
+        const finalImage = managedCoverCandidate.rawUrl;
         const reachableVideo = await pickReachableVideo(
           uniqueNormalizedVideoUrls(sourceVideoCandidates.map((entry) => entry?.videoUrl ?? null), 3),
           3,
@@ -5658,10 +5747,7 @@ app.post("/backoffice/news/batch", boGuard, async (request, response, next) => {
           uniqueNormalizedImageUrls([sourceItem?.videoPosterUrl ?? null, finalImage], 3)[0] ?? null;
         const videoPoster =
           videoPosterSource ? (await ensureManagedImageCaptured(videoPosterSource)) ?? buildManagedImageUrl(videoPosterSource) : null;
-        const managedCover = await ensureManagedImageCaptured(finalImage);
-        if (!managedCover) {
-          throw new Error("El agente fotografo no pudo capturar la portada editorial del item.");
-        }
+        const managedCover = managedCoverCandidate.managedUrl;
 
         const finalSourceName = draft.sourceName ?? sourceItem?.sourceName ?? defaultSourceName;
         const finalSourceUrl =

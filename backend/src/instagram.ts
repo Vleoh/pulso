@@ -261,6 +261,24 @@ export function buildInstagramCaption(
   );
 }
 
+function buildInstagramAssetUrl(baseImageUrl: string, mode: "feed" | "story"): string {
+  const safeBase = normalizeHttpUrl(baseImageUrl);
+  if (!safeBase) {
+    return baseImageUrl;
+  }
+  const [w, h] = mode === "story" ? [1080, 1920] : [1080, 1350];
+  const params = new URLSearchParams({
+    url: safeBase,
+    w: String(w),
+    h: String(h),
+    fit: "cover",
+    output: "jpg",
+    q: "86",
+    n: "-1",
+  });
+  return `https://wsrv.nl/?${params.toString()}`;
+}
+
 export async function publishNewsToInstagram(params: {
   news: Pick<News, "id" | "title" | "excerpt" | "imageUrl" | "sourceName" | "tags" | "slug" | "section" | "kicker">;
   preferences: InstagramPublishingPreferences;
@@ -270,6 +288,7 @@ export async function publishNewsToInstagram(params: {
   if (!normalizedImage) {
     throw new Error("La noticia no tiene una portada publica valida para Instagram.");
   }
+  const instagramFeedImage = buildInstagramAssetUrl(normalizedImage, "feed");
   const effectiveAccountId = readString(params.preferences.accountId) || INSTAGRAM_IG_USER_ID;
   if (!effectiveAccountId) {
     throw new Error("Falta Instagram account id en la configuracion del backoffice.");
@@ -285,7 +304,7 @@ export async function publishNewsToInstagram(params: {
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
       access_token: token,
-      image_url: normalizedImage,
+      image_url: instagramFeedImage,
       caption,
     }).toString(),
   });
