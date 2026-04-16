@@ -4716,9 +4716,32 @@ app.post("/api/admin/media/cache/clear", apiGuard, async (_request, response, ne
 
 app.post("/api/admin/ai/assist", apiGuard, async (request, response, next) => {
   try {
-    const assistInput = buildEditorialAssistInput(request.body as Record<string, unknown>);
+    const raw = request.body as Record<string, unknown>;
+    const assistInput = buildEditorialAssistInput(raw);
     const context = await buildAiNewsContext(prisma);
-    const suggestion = await generateDraftWithAi(assistInput, context.contextText);
+    let suggestion = await generateDraftWithAi(assistInput, context.contextText);
+    if (isContingencyModel(suggestion.model)) {
+      const settings = await getAiResearchSettings(prisma);
+      if (settings.enabled) {
+        const research = await buildNewsResearchContext({
+          brief: assistInput.brief,
+          limit: settings.hotNewsLimit,
+          fetchArticleText: settings.fetchArticleText,
+          campaignLine: selectedCampaignLine(raw, settings.campaignLine),
+        });
+        const sourceList = sourceFeedToText(research.sources, 10);
+        const mergedContext = [
+          context.contextText,
+          "",
+          research.contextText,
+          sourceList ? `\nFUENTES INVESTIGADAS (referencia):\n${sourceList}` : "",
+        ]
+          .filter(Boolean)
+          .join("\n");
+        const secondTry = await generateDraftWithAi(assistInput, mergedContext);
+        suggestion = await postProcessResearchedSuggestion(secondTry, settings, research.lead, research.sources, assistInput.brief);
+      }
+    }
     if (isContingencyModel(suggestion.model)) {
       response.status(503).json({
         error:
@@ -4974,9 +4997,38 @@ const boGuard = backofficeGuard(ADMIN_JWT_SECRET, ADMIN_COOKIE_NAME);
 
 app.post("/backoffice/ai/assist", boGuard, async (request, response, next) => {
   try {
-    const assistInput = buildEditorialAssistInput(request.body as Record<string, unknown>);
+    const raw = request.body as Record<string, unknown>;
+    const assistInput = buildEditorialAssistInput(raw);
     const context = await buildAiNewsContext(prisma);
-    const suggestion = await generateDraftWithAi(assistInput, context.contextText);
+    let suggestion = await generateDraftWithAi(assistInput, context.contextText);
+    if (isContingencyModel(suggestion.model)) {
+      const settings = await getAiResearchSettings(prisma);
+      if (settings.enabled) {
+        const research = await buildNewsResearchContext({
+          brief: assistInput.brief,
+          limit: settings.hotNewsLimit,
+          fetchArticleText: settings.fetchArticleText,
+          campaignLine: selectedCampaignLine(raw, settings.campaignLine),
+        });
+        const sourceList = sourceFeedToText(research.sources, 10);
+        const mergedContext = [
+          context.contextText,
+          "",
+          research.contextText,
+          sourceList ? `\nFUENTES INVESTIGADAS (referencia):\n${sourceList}` : "",
+        ]
+          .filter(Boolean)
+          .join("\n");
+        const secondTry = await generateDraftWithAi(assistInput, mergedContext);
+        suggestion = await postProcessResearchedSuggestion(secondTry, settings, research.lead, research.sources, assistInput.brief);
+        await logAgentActivity({
+          agent: "writer",
+          level: "info",
+          title: "Fallback inteligente aplicado",
+          detail: "Generacion basica fallo; se uso segundo intento con modo periodista + fuentes.",
+        });
+      }
+    }
     if (isContingencyModel(suggestion.model)) {
       await logAgentActivity({
         agent: "writer",
