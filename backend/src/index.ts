@@ -26,7 +26,13 @@ import { ensureUniqueSlug, normalizeNewsInput } from "./newsInput";
 import { dedupeByKey, resolveManagedFeedImage, toFeedItem } from "./feed";
 import { getExternalNews } from "./externalNews";
 import { getMarketData, getWeatherData } from "./signalData";
-import { buildManagedImageUrl, buildManagedVideoUrl, ensureManagedImageCaptured, proxyManagedMediaRequest } from "./mediaProxy";
+import {
+  buildManagedImageUrl,
+  buildManagedVideoUrl,
+  clearManagedMediaCache,
+  ensureManagedImageCaptured,
+  proxyManagedMediaRequest,
+} from "./mediaProxy";
 import { PROVINCE_OPTIONS, SECTION_OPTIONS } from "./catalog";
 import {
   asNullable,
@@ -76,7 +82,7 @@ import {
   type EditorialCommandChatMessage,
   type EditorialCommandLogEntry,
 } from "./siteSettings";
-import { buildCroppedImageUrl, buildNewsResearchContext, sourceFeedToText } from "./newsResearchAgent";
+import { buildNewsResearchContext, sourceFeedToText } from "./newsResearchAgent";
 import {
   getInstagramConnectionSummary,
   publishNewsToInstagram,
@@ -314,10 +320,8 @@ function applyResearchImageTransform(
   if (!imageUrl) {
     return null;
   }
-  if (!settings.cropImage) {
-    return imageUrl;
-  }
-  return buildCroppedImageUrl(imageUrl, settings.cropWidth, settings.cropHeight);
+  void settings;
+  return imageUrl;
 }
 
 function fallbackResearchImage(seedText: string): string {
@@ -4364,6 +4368,15 @@ app.post("/api/admin/settings/theme", apiGuard, async (request, response, next) 
   }
 });
 
+app.post("/api/admin/media/cache/clear", apiGuard, async (_request, response, next) => {
+  try {
+    const result = await clearManagedMediaCache();
+    response.json({ ok: true, removedFiles: result.removedFiles });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/admin/ai/assist", apiGuard, async (request, response, next) => {
   try {
     const assistInput = buildEditorialAssistInput(request.body as Record<string, unknown>);
@@ -5245,6 +5258,9 @@ app.get("/backoffice", boGuard, async (request, response, next) => {
             </div>
             <div style="margin-top:12px;display:grid;gap:8px;">
               <a class="button" href="/backoffice#autopilot-config" style="font-size:11px;padding:8px 12px;min-height:auto;text-align:center;">Configurar social</a>
+              <form method="post" action="/backoffice/media/cache/clear">
+                <button class="button" type="submit" style="width:100%;font-size:11px;padding:8px 12px;min-height:auto;">Limpiar cache media</button>
+              </form>
             </div>
           </div>
 
@@ -5447,6 +5463,15 @@ app.post("/backoffice/settings/instagram", boGuard, async (request, response, ne
         `Instagram actualizado - estado:${settings.enabled ? "ON" : "OFF"} cuenta:${settings.accountId || "sin seleccionar"} max:${settings.maxPostsPerRun}`,
       )}`,
     );
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/backoffice/media/cache/clear", boGuard, async (_request, response, next) => {
+  try {
+    const result = await clearManagedMediaCache();
+    response.redirect(`/backoffice?ok=${encodeURIComponent(`Cache media limpiado (${result.removedFiles} archivos)`)}#autopilot-section`);
   } catch (error) {
     next(error);
   }

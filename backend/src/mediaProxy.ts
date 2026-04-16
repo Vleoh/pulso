@@ -15,6 +15,9 @@ const MEDIA_PROXY_SECRET = process.env.MEDIA_PROXY_SECRET ?? process.env.ADMIN_J
 const HOST_CACHE_TTL_MS = 60 * 60 * 1000;
 const IMAGE_CAPTURE_TIMEOUT_MS = 12_000;
 const MEDIA_CACHE_DIR = path.join(os.tmpdir(), "pulso-pais-media-cache");
+const MIN_EDITORIAL_IMAGE_BYTES = 45 * 1024;
+const MIN_EDITORIAL_IMAGE_WIDTH = 700;
+const MIN_EDITORIAL_IMAGE_HEIGHT = 394;
 const hostSafetyCache = new Map<string, { allowed: boolean; expiresAt: number }>();
 const mediaCaptureCache = new Map<string, Promise<CachedMediaRecord | null>>();
 let mediaCacheReady: Promise<void> | null = null;
@@ -25,6 +28,8 @@ type CachedMediaRecord = {
   contentType: string;
   size: number | null;
 };
+
+type ImageDimensions = { width: number; height: number } | null;
 
 type CaptureImageOptions = {
   referer?: string | null;
@@ -112,6 +117,111 @@ async function persistCapturedMedia(
     contentType,
     size: buffer.length,
   };
+}
+
+function detectPngDimensions(buffer: Buffer): ImageDimensions {
+  if (buffer.length < 24) {
+    return null;
+  }
+  const pngSignature = "89504e470d0a1a0a";
+  if (buffer.subarray(0, 8).toString("hex") !== pngSignature) {
+    return null;
+  }
+  const chunkType = buffer.subarray(12, 16).toString("ascii");
+  if (chunkType !== "IHDR") {
+    return null;
+  }
+  const width = buffer.readUInt32BE(16);
+  const height = buffer.readUInt32BE(20);
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return null;
+  }
+  return { width, height };
+}
+
+function detectJpegDimensions(buffer: Buffer): ImageDimensions {
+  if (buffer.length < 4 || buffer[0] !== 0xff || buffer[1] !== 0xd8) {
+    return null;
+  }
+  let offset = 2;
+  while (offset + 9 < buffer.length) {
+    if (buffer[offset] !== 0xff) {
+      offset += 1;
+      continue;
+    }
+    const marker = buffer[offset + 1];
+    const segmentLength = buffer.readUInt16BE(offset + 2);
+    if (!Number.isFinite(segmentLength) || segmentLength < 2) {
+      return null;
+    }
+    const isStartOfFrame =
+      marker === 0xc0 ||
+      marker === 0xc1 ||
+      marker === 0xc2 ||
+      marker === 0xc3 ||
+      marker === 0xc5 ||
+      marker === 0xc6 ||
+      marker === 0xc7 ||
+      marker === 0xc9 ||
+      marker === 0xca ||
+      marker === 0xcb ||
+      marker === 0xcd ||
+      marker === 0xce ||
+      marker === 0xcf;
+    if (isStartOfFrame) {
+      const height = buffer.readUInt16BE(offset + 5);
+      const width = buffer.readUInt16BE(offset + 7);
+      if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+        return null;
+      }
+      return { width, height };
+    }
+    offset += 2 + segmentLength;
+  }
+  return null;
+}
+
+function detectWebpDimensions(buffer: Buffer): ImageDimensions {
+  if (buffer.length < 30) {
+    return null;
+  }
+  if (buffer.subarray(0, 4).toString("ascii") !== "RIFF" || buffer.subarray(8, 12).toString("ascii") !== "WEBP") {
+    return null;
+  }
+  const chunkType = buffer.subarray(12, 16).toString("ascii");
+  if (chunkType === "VP8X") {
+    const width = 1 + buffer.readUIntLE(24, 3);
+    const height = 1 + buffer.readUIntLE(27, 3);
+    if (width > 0 && height > 0) {
+      return { width, height };
+    }
+  }
+  return null;
+}
+
+function detectImageDimensions(buffer: Buffer, contentType: string): ImageDimensions {
+  const normalizedType = contentType.toLowerCase();
+  if (normalizedType.includes("png")) {
+    return detectPngDimensions(buffer);
+  }
+  if (normalizedType.includes("jpeg") || normalizedType.includes("jpg")) {
+    return detectJpegDimensions(buffer);
+  }
+  if (normalizedType.includes("webp")) {
+    return detectWebpDimensions(buffer);
+  }
+  return detectPngDimensions(buffer) ?? detectJpegDimensions(buffer) ?? detectWebpDimensions(buffer);
+}
+
+function isEditorialImageQualityAcceptable(buffer: Buffer, contentType: string): boolean {
+  if (buffer.byteLength < MIN_EDITORIAL_IMAGE_BYTES) {
+    return false;
+  }
+  const dimensions = detectImageDimensions(buffer, contentType);
+  if (!dimensions) {
+    return true;
+  }
+  return dimensions.width >= MIN_EDITORIAL_IMAGE_WIDTH && dimensions.height >= MIN_EDITORIAL_IMAGE_HEIGHT;
 }
 
 function safeTimingEqual(left: string, right: string): boolean {
@@ -326,6 +436,9 @@ async function fetchAndCaptureImage(url: string, options?: CaptureImageOptions):
       if (buffer.byteLength > 20 * 1024 * 1024) {
         return null;
       }
+      if (!isEditorialImageQualityAcceptable(buffer, contentType)) {
+        return null;
+      }
 
       return persistCapturedMedia("image", normalized, buffer, contentType || "image/jpeg");
     } catch {
@@ -358,6 +471,27 @@ export async function ensureManagedImageCaptured(
   }
 
   return buildManagedImageUrl(normalized);
+}
+
+export async function clearManagedMediaCache(): Promise<{ removedFiles: number }> {
+  await ensureMediaCacheDir();
+  mediaCaptureCache.clear();
+  const entries = await fs.readdir(MEDIA_CACHE_DIR, { withFileTypes: true });
+  let removedFiles = 0;
+  await Promise.all(
+    entries.map(async (entry) => {
+      if (!entry.isFile()) {
+        return;
+      }
+      try {
+        await fs.unlink(path.join(MEDIA_CACHE_DIR, entry.name));
+        removedFiles += 1;
+      } catch {
+        return;
+      }
+    }),
+  );
+  return { removedFiles };
 }
 
 async function sendCachedMedia(response: Response, record: CachedMediaRecord, method: string): Promise<void> {

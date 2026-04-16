@@ -297,6 +297,14 @@ export function scoreImageCandidate(candidate: string): number {
     "default",
     "fallback",
     "unsplash.com",
+    "flyer",
+    "afiche",
+    "comunicado",
+    "placa",
+    "votacion",
+    "padron",
+    "escuela",
+    "pdf",
   ];
   const positiveSignals = [
     "og-image",

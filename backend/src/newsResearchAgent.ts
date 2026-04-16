@@ -62,6 +62,55 @@ function scoreByBrief(text: string, tokens: string[]): number {
   return tokens.reduce((acc, token) => (haystack.includes(token) ? acc + 1 : acc), 0);
 }
 
+function scoreArgentinaFocus(sourceText: string, sourceUrl: string): number {
+  const haystack = sourceText.toLowerCase();
+  let score = 0;
+  const positive = [
+    "argentina",
+    "buenos aires",
+    "caba",
+    "casa rosada",
+    "congreso",
+    "senado",
+    "diputados",
+    "gobernador",
+    "provincia",
+    "mendoza",
+    "cordoba",
+    "santa fe",
+    "la plata",
+  ];
+  const negative = [
+    "united states",
+    "usa",
+    "new york",
+    "washington",
+    "california",
+    "florida",
+    "white house",
+    "trump",
+  ];
+  for (const token of positive) {
+    if (haystack.includes(token)) {
+      score += 2;
+    }
+  }
+  for (const token of negative) {
+    if (haystack.includes(token)) {
+      score -= 2;
+    }
+  }
+  try {
+    const host = new URL(sourceUrl).hostname.toLowerCase();
+    if (host.endsWith(".ar") || host.includes("argentina")) {
+      score += 3;
+    }
+  } catch {
+    return score;
+  }
+  return score;
+}
+
 function ensureAbsoluteUrl(input: string): string {
   const normalized = input.trim();
   if (normalized.startsWith("http://") || normalized.startsWith("https://")) {
@@ -70,29 +119,10 @@ function ensureAbsoluteUrl(input: string): string {
   return `https://${normalized.replace(/^\/+/, "")}`;
 }
 
-function toWsrvSourceParam(input: string): string {
-  const absolute = ensureAbsoluteUrl(input);
-  try {
-    const parsed = new URL(absolute);
-    const hostAndPath = `${parsed.hostname}${parsed.pathname}${parsed.search}`;
-    return parsed.protocol === "https:" ? `ssl:${hostAndPath}` : hostAndPath;
-  } catch {
-    return absolute;
-  }
-}
-
 export function buildCroppedImageUrl(imageUrl: string, width: number, height: number): string {
-  const safeWidth = Math.max(480, Math.min(2400, Math.round(width)));
-  const safeHeight = Math.max(320, Math.min(1800, Math.round(height)));
-  const params = new URLSearchParams({
-    url: toWsrvSourceParam(imageUrl),
-    w: String(safeWidth),
-    h: String(safeHeight),
-    fit: "cover",
-    output: "jpg",
-    q: "82",
-  });
-  return `https://wsrv.nl/?${params.toString()}`;
+  void width;
+  void height;
+  return ensureAbsoluteUrl(imageUrl);
 }
 
 type RankedSource = {
@@ -104,6 +134,7 @@ async function buildRankedSources(options: NewsResearchOptions): Promise<RankedS
   const externalItems = await getExternalNews();
   const sliced = externalItems.slice(0, Math.max(5, Math.min(40, options.limit + 12)));
   const tokens = tokenizeBrief(options.brief);
+  const argentinaFocus = /\b(argentina|nacion|provincia|federal|caba|conurbano)\b/i.test(options.brief);
   const snapshotByUrl = new Map<string, ArticleSnapshot>();
 
   if (options.fetchArticleText) {
@@ -139,7 +170,10 @@ async function buildRankedSources(options: NewsResearchOptions): Promise<RankedS
     ]);
     const paragraphText = withSnapshot?.paragraphs.join(" || ") || "";
     const sourceText = `${title} ${excerpt ?? ""} ${paragraphText}`.trim();
-    const score = scoreByBrief(sourceText, tokens);
+    let score = scoreByBrief(sourceText, tokens);
+    if (argentinaFocus) {
+      score += scoreArgentinaFocus(sourceText, item.sourceUrl ?? "");
+    }
 
     ranked.push({
       source: {
